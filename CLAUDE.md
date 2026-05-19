@@ -156,6 +156,7 @@ LeadsHawk/
   - `opportunities(id, brand_id?, product_id?, company, industry, headline, source_url, source_title, source_published_at, confidence, status: 'open'|'qualified'|'disqualified'|'archived', background, use_case, angle, signal_summary, raw_signal, …)`
   - `dispatch_log(id, opportunity_id, target, payload, result, …)`
   - `seen_urls(url PRIMARY KEY, seen_at)` — dedupe across scans
+  - `scan_rules(id, kind: 'include'|'exclude', text, enabled, created_at)` — user-defined hard constraints injected into every scan prompt
 
 - **`settings.ts`** — Thin wrapper around `electron-store`. Persists:
   - `perplexityApiKey` (research + scan)
@@ -206,7 +207,13 @@ LeadsHawk/
   6. On any failure the product is set to `research_status = 'error'`.
 
 - **`scanner.ts`** — The core autonomous loop (uses **Perplexity**, no RSS).
-  Two passes:
+  Two passes, both of which receive a shared **guardrails block**
+  (`buildGuardrails()`) derived from enabled `scan_rules`:
+  - The block lists the user's `include` rules as ALL-must-pass and
+    `exclude` rules as ANY-blocks. It is told to outrank everything else
+    and to return an empty `opportunities` array if nothing satisfies the
+    rules. The block is prepended to the prompt's task section in both
+    passes.
 
   **Pass 1 — auto signals from products (primary).**
   - Iterate over every product where `research_status='ready'` and
@@ -291,13 +298,19 @@ directly.
   Now" panel, and a paginated history of `scan_runs` with click-through to
   view logs in a full-screen overlay.
 
-- **`pages/SignalConfig.tsx`** — Two sections:
+- **`pages/SignalConfig.tsx`** — Three sections:
   1. **Auto-derived signals (primary).** Lists every researched product
      with an enable/disable checkbox + an expand caret. Expanding shows
      the bulleted signal list captured by deep research. Toggling fires
      `products.setScanEnabled(id, bool)`. When no products are researched
      yet, shows a friendly warning pointing back to Brands & Products.
-  2. **Advanced — custom topics (collapsed by default).** Optional
+  2. **Scan guidance — include & exclude rules.** Two-column card
+     (Always include / Always exclude). Each rule is a free-text line,
+     persisted in `scan_rules`, with a per-rule enable checkbox + delete.
+     Rules are HARD CONSTRAINTS injected into every Perplexity prompt
+     (both auto-signal Pass 1 and custom-topic Pass 2). If no candidates
+     satisfy the rules, Perplexity is told to return an empty array.
+  3. **Advanced — custom topics (collapsed by default).** Optional
      free-form Perplexity search topics. Add with a single-form modal
      (`name` + `query`). These rows live in `signal_sources` and feed
      scanner Pass 2.

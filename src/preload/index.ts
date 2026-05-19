@@ -38,6 +38,13 @@ const api = {
     update: (id: number, p: any) => ipcRenderer.invoke('sources:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('sources:delete', id)
   },
+  rules: {
+    list: () => ipcRenderer.invoke('rules:list'),
+    create: (p: { kind: 'include' | 'exclude'; text: string }) =>
+      ipcRenderer.invoke('rules:create', p),
+    update: (id: number, p: any) => ipcRenderer.invoke('rules:update', id, p),
+    delete: (id: number) => ipcRenderer.invoke('rules:delete', id)
+  },
   scan: {
     run: () => ipcRenderer.invoke('scan:run'),
     runs: () => ipcRenderer.invoke('scan:runs'),

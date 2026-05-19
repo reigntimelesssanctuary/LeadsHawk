@@ -1,7 +1,31 @@
 import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
-import type { Brand, Product, SignalSource } from '@shared/types';
+import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
+
+function buildGuardrails(): string {
+  const db = getDb();
+  const rules = db
+    .prepare("SELECT * FROM scan_rules WHERE enabled = 1 ORDER BY kind, id")
+    .all() as ScanRule[];
+  if (rules.length === 0) return '';
+  const includes = rules.filter((r) => r.kind === 'include');
+  const excludes = rules.filter((r) => r.kind === 'exclude');
+  const parts: string[] = [];
+  parts.push('# User-defined scan rules (HARD CONSTRAINTS — apply to every candidate)');
+  if (includes.length) {
+    parts.push('\nOnly surface opportunities that satisfy ALL of these include rules:');
+    parts.push(includes.map((r) => `- ${r.text}`).join('\n'));
+  }
+  if (excludes.length) {
+    parts.push('\nDrop any opportunity that matches ANY of these exclude rules:');
+    parts.push(excludes.map((r) => `- ${r.text}`).join('\n'));
+  }
+  parts.push(
+    "\nIf a candidate violates an include rule, or matches an exclude rule, do not return it at all. These rules outrank everything else — if no candidates pass the rules, return an empty 'opportunities' array."
+  );
+  return parts.join('\n');
+}
 
 const SYSTEM = `You are a senior B2B sales-intelligence analyst with live web
 access. You will be given ONE specific product from our portfolio and the
@@ -113,6 +137,8 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
     `);
 
     const perProduct = scanQuotaPerProduct();
+    const guardrails = buildGuardrails();
+    if (guardrails) log(`Applying user-defined scan rules (${guardrails.split('\n').filter(l => l.startsWith('- ')).length} rule(s))`);
 
     // ─────────────────────────────────────────────────────────────
     // Pass 1 — auto signals from each researched product
@@ -139,6 +165,8 @@ ${product.signals}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
+
+${guardrails}
 
 # Task
 Search the live web. For each genuine sales opportunity you find that
@@ -200,6 +228,8 @@ ${topic}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
+
+${guardrails}
 
 # Task
 Search the live web for RECENT events matching this topic that represent a

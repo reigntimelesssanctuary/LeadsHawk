@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Modal } from '../components/Modal';
-import type { SignalSource, Product, Brand } from '../../../shared/types';
-import { Plus, Trash2, Sparkles, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
+import type { SignalSource, Product, Brand, ScanRule } from '../../../shared/types';
+import {
+  Plus, Trash2, Sparkles, ChevronDown, ChevronRight,
+  AlertCircle, CheckCircle2, Ban
+} from 'lucide-react';
 
 export function SignalConfig() {
   const [products, setProducts] = useState<Product[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [sources, setSources] = useState<SignalSource[]>([]);
+  const [rules, setRules] = useState<ScanRule[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -14,8 +18,11 @@ export function SignalConfig() {
     setProducts(await window.lh.products.list());
     setBrands(await window.lh.brands.list());
     setSources(await window.lh.sources.list());
+    setRules(await window.lh.rules.list());
   };
   useEffect(() => { refresh(); }, []);
+
+  const refreshRules = async () => setRules(await window.lh.rules.list());
 
   const toggleProduct = async (p: Product) => {
     await window.lh.products.setScanEnabled(p.id, p.scan_enabled ? false : true);
@@ -76,6 +83,8 @@ export function SignalConfig() {
           </div>
         )}
       </div>
+
+      <ScanGuidanceCard rules={rules} refresh={refreshRules} />
 
       <div className="card" style={{ padding: 20 }}>
         <button
@@ -139,6 +148,154 @@ export function SignalConfig() {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Custom Topic">
         <AddSourceForm onDone={async () => { setShowAdd(false); refresh(); }} />
       </Modal>
+    </div>
+  );
+}
+
+function ScanGuidanceCard({ rules, refresh }: { rules: ScanRule[]; refresh: () => void }) {
+  const includes = rules.filter((r) => r.kind === 'include');
+  const excludes = rules.filter((r) => r.kind === 'exclude');
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="h-section" style={{ marginBottom: 6 }}>
+        Scan guidance — include & exclude rules
+      </div>
+      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+        These rules apply as <b>hard constraints</b> on every scan. Use them to focus the scanner
+        (e.g. <i>only enterprise customers in North America</i>) or filter results out
+        (e.g. <i>exclude startups under $10M revenue</i>).
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <RuleColumn
+          kind="include"
+          icon={<CheckCircle2 size={16} style={{ color: '#065f46' }} />}
+          title="Always include"
+          accent="#065f46"
+          accentBg="#ecfdf5"
+          accentBorder="#a7f3d0"
+          placeholder="e.g. publicly traded companies only"
+          rules={includes}
+          refresh={refresh}
+        />
+        <RuleColumn
+          kind="exclude"
+          icon={<Ban size={16} style={{ color: '#991b1b' }} />}
+          title="Always exclude"
+          accent="#991b1b"
+          accentBg="#fef2f2"
+          accentBorder="#fecaca"
+          placeholder="e.g. consulting firms"
+          rules={excludes}
+          refresh={refresh}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RuleColumn({
+  kind, icon, title, accent, accentBg, accentBorder, placeholder, rules, refresh
+}: {
+  kind: 'include' | 'exclude';
+  icon: React.ReactNode;
+  title: string;
+  accent: string;
+  accentBg: string;
+  accentBorder: string;
+  placeholder: string;
+  rules: ScanRule[];
+  refresh: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await window.lh.rules.create({ kind, text: trimmed });
+      setText('');
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, color: accent, fontWeight: 600, fontSize: 14 }}>
+        {icon} {title}
+        <span style={{ marginLeft: 'auto', color: '#6b7280', fontWeight: 400, fontSize: 12 }}>
+          {rules.length} rule{rules.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+        {rules.length === 0 && (
+          <div style={{ color: '#9ca3af', fontSize: 13, fontStyle: 'italic', padding: '4px 0' }}>
+            No rules yet.
+          </div>
+        )}
+        {rules.map((r) => (
+          <div
+            key={r.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 10px',
+              borderRadius: 8,
+              background: r.enabled ? accentBg : '#f9fafb',
+              border: `1px solid ${r.enabled ? accentBorder : '#e5e7eb'}`,
+              opacity: r.enabled ? 1 : 0.6
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!r.enabled}
+              onChange={async () => {
+                await window.lh.rules.update(r.id, { enabled: r.enabled ? 0 : 1 });
+                refresh();
+              }}
+              title={r.enabled ? 'Active' : 'Paused'}
+            />
+            <div style={{ flex: 1, fontSize: 13, color: '#1f2937', lineHeight: 1.45 }}>{r.text}</div>
+            <button
+              onClick={async () => {
+                if (confirm('Delete this rule?')) {
+                  await window.lh.rules.delete(r.id);
+                  refresh();
+                }
+              }}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}
+              title="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          className="input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) add(); }}
+          placeholder={placeholder}
+          style={{ flex: 1 }}
+        />
+        <button
+          className="btn-ghost"
+          onClick={add}
+          disabled={!text.trim() || busy}
+          style={{ whiteSpace: 'nowrap' }}
+        >
+          <Plus size={14} style={{ display: 'inline', marginRight: 4, verticalAlign: '-2px' }} />
+          Add
+        </button>
+      </div>
     </div>
   );
 }

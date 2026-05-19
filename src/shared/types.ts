@@ -46,6 +46,14 @@ export type SignalSource = {
   created_at: string;
 };
 
+export type ScanRule = {
+  id: number;
+  kind: 'include' | 'exclude';
+  text: string;
+  enabled: number;
+  created_at: string;
+};
+
 export type ScanJob = {
   id: number;
   cron: string;

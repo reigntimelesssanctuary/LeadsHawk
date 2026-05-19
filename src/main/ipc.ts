@@ -9,7 +9,7 @@ import { restartScheduler } from './scheduler.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
 import type {
-  Brand, Product, KnowledgeItem, Opportunity, SignalSource, ScanRun, DashboardStats
+  Brand, Product, KnowledgeItem, Opportunity, SignalSource, ScanRun, ScanRule, DashboardStats
 } from '@shared/types';
 
 export function registerIpc() {
@@ -216,6 +216,27 @@ export function registerIpc() {
   });
   ipcMain.handle('sources:delete', (_e, id: number) => {
     db.prepare('DELETE FROM signal_sources WHERE id = ?').run(id);
+    return true;
+  });
+
+  // -------- Scan Rules (include / exclude guardrails) --------
+  ipcMain.handle('rules:list', () =>
+    db.prepare('SELECT * FROM scan_rules ORDER BY kind, id').all() as ScanRule[]
+  );
+  ipcMain.handle('rules:create', (_e, payload: { kind: 'include' | 'exclude'; text: string }) => {
+    const info = db.prepare(
+      'INSERT INTO scan_rules(kind, text, enabled) VALUES (?, ?, 1)'
+    ).run(payload.kind, payload.text);
+    return db.prepare('SELECT * FROM scan_rules WHERE id = ?').get(info.lastInsertRowid);
+  });
+  ipcMain.handle('rules:update', (_e, id: number, payload: Partial<ScanRule>) => {
+    db.prepare(
+      'UPDATE scan_rules SET text = COALESCE(?, text), enabled = COALESCE(?, enabled) WHERE id = ?'
+    ).run(payload.text ?? null, payload.enabled ?? null, id);
+    return db.prepare('SELECT * FROM scan_rules WHERE id = ?').get(id);
+  });
+  ipcMain.handle('rules:delete', (_e, id: number) => {
+    db.prepare('DELETE FROM scan_rules WHERE id = ?').run(id);
     return true;
   });
 
