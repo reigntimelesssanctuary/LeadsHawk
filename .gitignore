@@ -1,0 +1,16 @@
+node_modules/
+out/
+release/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+data/leadshawk.db
+data/leadshawk.db-journal
+data/leadshawk.db-wal
+data/leadshawk.db-shm
+data/logs/
+data/brands/*/uploads/
+build/icon.icns
+.vite/
