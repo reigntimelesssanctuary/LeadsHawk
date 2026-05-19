@@ -130,6 +130,12 @@ export function registerIpc() {
     return true;
   });
   ipcMain.handle('products:research', async (_e, id: number) => researchProduct(id));
+  ipcMain.handle('products:setScanEnabled', (_e, id: number, enabled: boolean) => {
+    db.prepare(
+      "UPDATE products SET scan_enabled = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(enabled ? 1 : 0, id);
+    return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+  });
 
   // -------- Knowledge --------
   ipcMain.handle('knowledge:list', (_e, brandId?: number) => {
@@ -255,16 +261,9 @@ export function registerIpc() {
 
 export function seedDefaults() {
   const db = getDb();
-  const count = (db.prepare('SELECT COUNT(*) AS c FROM signal_sources').get() as any).c as number;
-  if (count === 0) {
-    const insert = db.prepare(
-      "INSERT INTO signal_sources(name, kind, config, enabled) VALUES (?, ?, ?, 1)"
-    );
-    insert.run('Enterprise IT outages', 'google_news', JSON.stringify({ query: 'enterprise IT outage OR breach OR data center failure' }));
-    insert.run('CIO / CISO changes', 'google_news', JSON.stringify({ query: '"new CIO" OR "new CISO" OR appointed appointed CIO' }));
-    insert.run('Cisco issues', 'google_news', JSON.stringify({ query: 'Cisco vulnerability OR Cisco outage OR Cisco recall' }));
-    insert.run('Cloud migration announcements', 'google_news', JSON.stringify({ query: 'announces cloud migration OR datacenter consolidation' }));
-  }
+  // Signal sources are no longer auto-seeded — scans derive their signals
+  // directly from per-product research output. Power users can still add
+  // optional custom topics in Signal Config.
   const jobCount = (db.prepare('SELECT COUNT(*) AS c FROM scan_jobs').get() as any).c as number;
   if (jobCount === 0) {
     db.prepare("INSERT INTO scan_jobs(cron, enabled) VALUES ('0 */6 * * *', 1)").run();

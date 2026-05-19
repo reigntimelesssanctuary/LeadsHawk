@@ -47,6 +47,7 @@ function migrate(db: Database.Database) {
       signals TEXT,
       research_status TEXT NOT NULL DEFAULT 'pending',
       research_summary TEXT,
+      scan_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -131,4 +132,19 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
     CREATE INDEX IF NOT EXISTS idx_knowledge_brand ON knowledge_items(brand_id);
   `);
+
+  // Idempotent column additions for upgrade-in-place
+  addColumnIfMissing(db, 'products', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: string,
+  decl: string
+) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
 }

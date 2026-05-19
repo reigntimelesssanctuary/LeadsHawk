@@ -21,7 +21,9 @@ const api = {
     create: (p: any) => ipcRenderer.invoke('products:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('products:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('products:delete', id),
-    research: (id: number) => ipcRenderer.invoke('products:research', id)
+    research: (id: number) => ipcRenderer.invoke('products:research', id),
+    setScanEnabled: (id: number, enabled: boolean) =>
+      ipcRenderer.invoke('products:setScanEnabled', id, enabled)
   },
   knowledge: {
     list: (brandId?: number) => ipcRenderer.invoke('knowledge:list', brandId),

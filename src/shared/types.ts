@@ -20,6 +20,7 @@ export type Product = {
   signals: string | null;
   research_status: 'pending' | 'researching' | 'ready' | 'error';
   research_summary: string | null;
+  scan_enabled: number; // 0 | 1 — when 1, autonomous scans include this product
   created_at: string;
   updated_at: string;
 };

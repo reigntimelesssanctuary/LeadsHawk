@@ -21,8 +21,12 @@ The pipeline is:
    competitors, differentiators, signals to watch, narrative summary). Brand
    summaries roll up from products.
 3. **Autonomous scanning** — on a cron schedule (default every 6h), LeadsHawk
-   pulls news/RSS items from configurable sources (Google News queries + raw
-   RSS feeds).
+   iterates over each researched, scan-enabled product and asks Perplexity
+   to find recent real-world events that match **that product's own
+   auto-derived signals** (the `signals` bullets produced by deep research).
+   The user does not configure signals manually — the app determines them
+   from product understanding. Optional power-user "custom topics" can be
+   added in Signal Config → Advanced.
 4. **Qualification** — each signal is sent to Claude with the full portfolio
    context. The model decides if it's a real buying opportunity, picks the
    matching brand+product, and produces background, use case, sales angle, and
@@ -143,7 +147,8 @@ LeadsHawk/
 
   **Schema:**
   - `brands(id, name UNIQUE, description, positioning, competitive_summary, …)`
-  - `products(id, brand_id→brands, name, description, category, use_cases, competitors, differentiators, signals, research_status, research_summary, …)`
+  - `products(id, brand_id→brands, name, description, category, use_cases, competitors, differentiators, signals, research_status, research_summary, scan_enabled, …)`
+    — `scan_enabled` (default `1`) toggles whether autonomous scans run for this product. Added via idempotent `addColumnIfMissing` in `db.ts` so old DBs upgrade in place.
   - `knowledge_items(id, brand_id, product_id?, kind: 'file'|'link'|'note', title, source, content, status, …)`
   - `signal_sources(id, name, kind: 'google_news'|'rss'|'query', config JSON, enabled, …)`
   - `scan_jobs(id, cron, enabled, last_run_at, last_status, last_results, …)`
@@ -200,21 +205,33 @@ LeadsHawk/
      the brand summary is a nice-to-have, not a hard requirement.
   6. On any failure the product is set to `research_status = 'error'`.
 
-- **`scanner.ts`** — The core autonomous loop (uses **Perplexity**, no RSS):
-  - For each enabled `signal_sources` row, treat its `name` / `config.query`
-    as a **topic of investigation** (the `kind` column is now ignored).
-  - For each topic, call Perplexity (`sonar-pro` by default) with the full
-    portfolio context, `search_recency_filter` set from `settings.scanRecency`,
-    and a JSON schema requiring an array of opportunities. Perplexity does
-    live web search and returns the candidates directly with source URLs.
-  - For each returned candidate: dedupe via `seen_urls`, enforce
-    `minConfidence`, match brand/product names case-insensitively against
-    the actual portfolio, and insert as an `opportunities` row with status
-    `'open'`.
-  - Records a `scan_runs` row with full logs, updates `scan_jobs.last_*`.
-  - **No more `fetchSignals` / `qualifyAndStore` two-stage pipeline.**
-    Perplexity collapses discovery + qualification into one call per
-    source.
+- **`scanner.ts`** — The core autonomous loop (uses **Perplexity**, no RSS).
+  Two passes:
+
+  **Pass 1 — auto signals from products (primary).**
+  - Iterate over every product where `research_status='ready'` and
+    `scan_enabled=1` and `signals` is non-empty.
+  - For each such product, send Perplexity a tightly-scoped prompt that
+    includes only **that product's** context: brand, name, category,
+    description, use cases, differentiators, and the bulleted signals to
+    watch for.
+  - Perplexity returns candidates with a `matched_signal` field (which
+    specific bullet the opportunity matches), `source_url`, `confidence`,
+    etc.
+  - Per-product quota: `max(3, min(10, ceil(maxItemsPerScan / 3)))` so a
+    portfolio of N products gets ~N×5 candidates per scan, not unbounded.
+
+  **Pass 2 — optional custom topics (advanced).**
+  - For each enabled `signal_sources` row, send Perplexity the full
+    portfolio + the topic string and ask the model to also pick which
+    brand/product matches (since custom topics aren't tied to a product
+    upfront).
+  - This pass only runs if the user has added any custom topics in
+    Signal Config → Advanced. There are no auto-seeded sources anymore.
+
+  Both passes share the same `insertCandidates()` helper which dedupes via
+  `seen_urls`, enforces `minConfidence`, and inserts into `opportunities`
+  with status `'open'`.
 
 - **`scheduler.ts`** — `startScheduler()` reads cron + enabled flag from
   settings and registers a `node-cron` task. `restartScheduler()` is
@@ -274,8 +291,16 @@ directly.
   Now" panel, and a paginated history of `scan_runs` with click-through to
   view logs in a full-screen overlay.
 
-- **`pages/SignalConfig.tsx`** — Table of signal sources with enable
-  toggles. Modal adds either a Google News query source or a raw RSS URL.
+- **`pages/SignalConfig.tsx`** — Two sections:
+  1. **Auto-derived signals (primary).** Lists every researched product
+     with an enable/disable checkbox + an expand caret. Expanding shows
+     the bulleted signal list captured by deep research. Toggling fires
+     `products.setScanEnabled(id, bool)`. When no products are researched
+     yet, shows a friendly warning pointing back to Brands & Products.
+  2. **Advanced — custom topics (collapsed by default).** Optional
+     free-form Perplexity search topics. Add with a single-form modal
+     (`name` + `query`). These rows live in `signal_sources` and feed
+     scanner Pass 2.
 
 - **`pages/BrandsProducts.tsx`** — Two-pane layout. Left: 240px brand list.
   Right: the selected brand's panel containing (a) editable brand metadata
@@ -407,11 +432,13 @@ produce x64, change `"arch": ["arm64"]` to `["arm64", "x64"]` in the
 | Feature | API | Default model | Why |
 |---|---|---|---|
 | Product *Run research* | **Perplexity** | `sonar-deep-research` | Multi-step, live web search; cites sources |
-| Autonomous scan jobs | **Perplexity** | `sonar-pro` | Live news search + qualification in one call |
+| Autonomous scan jobs | **Perplexity** | `sonar-pro` | One call per researched product, anchored to that product's own auto-derived signals (no manual signal configuration required) |
 | Brand competitive summary roll-up | **Perplexity** | `sonar-deep-research` | Shares context with research |
 | Sales brief (*Generate brief*) | **Anthropic Claude** | `claude-opus-4-7` | Pure writing task, no research needed |
 
 User asked (2026-05-20) to swap scans + research from Claude to Perplexity. Brief generation stayed on Claude because it wasn't part of that ask.
+
+Later same day, user asked to make signals fully autonomous — the app derives signals from product research instead of requiring manual configuration. Scanner now iterates over researched products and uses each product's `signals` field as the search anchor for that product's scan pass.
 
 ## 8. Conventions worth keeping
 
@@ -467,11 +494,13 @@ These came directly from the original request:
 
 ## 10. Known limitations / good next steps
 
-- **`signal_sources.kind` is now informational.** The old `google_news`/`rss`
-  distinction no longer drives behavior — every source is interpreted as a
-  Perplexity research topic. The UI in `SignalConfig.tsx` still asks for the
-  kind for backward compatibility, but a future cleanup could simplify it
-  to "topic" + optional "domain filter".
+- **`signal_sources` is now optional.** Scans primarily use per-product
+  auto-derived signals (from `products.signals`, written by deep research).
+  The `signal_sources` table only feeds the secondary "Advanced — custom
+  topics" pass. Nothing is auto-seeded into it anymore.
+- **`signal_sources.kind` is informational.** New custom topics created in
+  the UI use kind `'query'`. The old `google_news`/`rss` distinction no
+  longer drives behavior.
 - **`rss-parser` is dead code** since the scanner rewrite. Safe to remove
   from `package.json` if you're trimming deps.
 - **DOCX/PPTX extraction is best-effort.** `yauzl` is loaded dynamically and
