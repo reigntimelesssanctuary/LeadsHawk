@@ -46,8 +46,9 @@ the news sources the user configures.
 | Icons | `lucide-react` |
 | Database | `better-sqlite3` (synchronous, stored under `app.getPath('userData')/data/leadshawk.db`) |
 | Settings | `electron-store` (`settings.json` in userData) |
-| LLM | `@anthropic-ai/sdk` |
-| News | `rss-parser` (Google News RSS + arbitrary RSS) + simple `fetch` for page enrichment |
+| LLM (research + scan) | **Perplexity API** (`sonar-deep-research`, `sonar-pro`) — direct `fetch` calls, no SDK |
+| LLM (sales brief) | `@anthropic-ai/sdk` (Claude) |
+| News discovery | Perplexity's built-in live web search (no separate RSS fetch). Legacy `rss-parser` is still installed but unused; the signal-source `kind` field is now informational only. |
 | Document parsing | `pdf-parse` (PDF), inline XML extraction for PPTX/DOCX via `yauzl` (optional), `node-html-parser` (HTML/URL) |
 | Scheduling | `node-cron` |
 | Build | `electron-vite` (separate main / preload / renderer Vite builds) |
@@ -151,16 +152,30 @@ LeadsHawk/
   - `dispatch_log(id, opportunity_id, target, payload, result, …)`
   - `seen_urls(url PRIMARY KEY, seen_at)` — dedupe across scans
 
-- **`settings.ts`** — Thin wrapper around `electron-store`. Persists
-  `anthropicApiKey`, `model`, `scanCron`, `scanEnabled`, `minConfidence`,
-  `maxItemsPerScan`. Defaults to model `claude-opus-4-7`, cron
-  `0 */6 * * *` (every 6h), `minConfidence: 0.55`, `maxItemsPerScan: 30`,
-  `scanEnabled: false` (user must opt in).
+- **`settings.ts`** — Thin wrapper around `electron-store`. Persists:
+  - `perplexityApiKey` (research + scan)
+  - `perplexityResearchModel` (default `sonar-deep-research`)
+  - `perplexityScanModel` (default `sonar-pro`)
+  - `scanRecency` (default `week`)
+  - `anthropicApiKey` + `model` (Claude, used only for sales-brief
+    generation in `dispatch.ts`; default model `claude-opus-4-7`)
+  - `scanCron` (default `0 */6 * * *`), `scanEnabled` (default `false` —
+    user must opt in)
+  - `minConfidence` (default `0.55`), `maxItemsPerScan` (default `30`)
 
-- **`llm.ts`** — Constructs the Anthropic client from the stored API key.
-  Throws a friendly error if no key is set. Exposes `complete()` and
-  `completeJson<T>()`. The JSON variant strips code fences and falls back
-  to extracting the outer `{}`/`[]` slice if the model adds prose.
+- **`llm.ts`** — Anthropic (Claude) client. **Now used only by `dispatch.ts`
+  for sales-brief generation.** Exposes `complete()` and `completeJson<T>()`.
+
+- **`perplexity.ts`** — Perplexity API client. No SDK dependency — just
+  `fetch` against `https://api.perplexity.ai/chat/completions`. Supports:
+  - `model` selection (default `sonar-pro`)
+  - `searchRecency` (`day` / `week` / `month` / `year`)
+  - `jsonSchema` → wraps the call with `response_format: json_schema` for
+    structured output
+  - `searchDomainFilter` (max 10 domains)
+  - Returns `{ text, json, citations, usage, raw }`.
+  - `tryParseJson<T>()` strips `<think>` blocks (from reasoning models) and
+    code fences, then falls back to outer brace extraction.
 
 - **`knowledge.ts`** —
   - `extractFromFile(path)`: PDF→`pdf-parse`; TXT/MD→raw read;
@@ -171,27 +186,35 @@ LeadsHawk/
     `<script>/<style>/<nav>/<footer>/<header>/<svg>/<form>`, prefers
     `<main>` or `<article>` content. Caps output at 50k chars.
 
-- **`research.ts`** — `researchProduct(productId)`:
+- **`research.ts`** — `researchProduct(productId)` (uses **Perplexity**):
   1. Marks product `research_status = 'researching'`.
-  2. Pulls up to 30 most recent indexed knowledge items for the brand.
-  3. Sends a structured prompt to Claude asking for JSON with
-     `description, category, use_cases, competitors, differentiators,
-     signals, research_summary`.
-  4. Persists the dossier on the product, marks it `ready`.
-  5. Rolls up a 150-word brand-level `competitive_summary`.
+  2. Pulls up to 20 most recent indexed knowledge items for the brand.
+  3. Calls Perplexity with `sonar-deep-research` (default) and a JSON
+     schema requiring `description, category, use_cases, competitors,
+     differentiators, signals, research_summary`. Perplexity does its own
+     multi-step web research and synthesizes it with the internal
+     knowledge.
+  4. Persists the dossier, marks `ready`.
+  5. Calls Perplexity again for a tight 150-word brand-level
+     `competitive_summary`. If this secondary call fails it's swallowed —
+     the brand summary is a nice-to-have, not a hard requirement.
+  6. On any failure the product is set to `research_status = 'error'`.
 
-- **`scanner.ts`** — The core autonomous loop:
-  - `fetchSignals(log)` iterates enabled sources, resolves each to an RSS
-    URL (Google News query URLs are constructed from `cfg.query`), parses
-    via `rss-parser`, dedupes against `seen_urls`, and returns raw signals.
-  - `qualifyAndStore(signal)` enriches the snippet by fetching the page,
-    builds a portfolio brief from all brands & products, and asks Claude
-    for a JSON verdict: `{is_opportunity, confidence, company, industry,
-    matched_brand, matched_product, background, use_case, angle,
-    signal_summary}`. Items above `minConfidence` are inserted as
-    `opportunities` rows with status `'open'`.
-  - `runScan()` wraps both, records a `scan_runs` row, logs every step,
-    and updates `scan_jobs.last_*`.
+- **`scanner.ts`** — The core autonomous loop (uses **Perplexity**, no RSS):
+  - For each enabled `signal_sources` row, treat its `name` / `config.query`
+    as a **topic of investigation** (the `kind` column is now ignored).
+  - For each topic, call Perplexity (`sonar-pro` by default) with the full
+    portfolio context, `search_recency_filter` set from `settings.scanRecency`,
+    and a JSON schema requiring an array of opportunities. Perplexity does
+    live web search and returns the candidates directly with source URLs.
+  - For each returned candidate: dedupe via `seen_urls`, enforce
+    `minConfidence`, match brand/product names case-insensitively against
+    the actual portfolio, and insert as an `opportunities` row with status
+    `'open'`.
+  - Records a `scan_runs` row with full logs, updates `scan_jobs.last_*`.
+  - **No more `fetchSignals` / `qualifyAndStore` two-stage pipeline.**
+    Perplexity collapses discovery + qualification into one call per
+    source.
 
 - **`scheduler.ts`** — `startScheduler()` reads cron + enabled flag from
   settings and registers a `node-cron` task. `restartScheduler()` is
@@ -266,9 +289,14 @@ directly.
 - **`pages/Archive.tsx`** — Filtered view of `disqualified` / `archived` /
   all closed opportunities.
 
-- **`pages/Settings.tsx`** — API key (password field), model picker
-  (Opus 4.7 / Sonnet 4.6 / Haiku 4.5), minimum confidence number, max
-  signals per scan number.
+- **`pages/Settings.tsx`** — Three cards:
+  1. **Perplexity API** — API key + research-model picker
+     (`sonar-deep-research` / `sonar-reasoning-pro` / `sonar-pro`) + scan-model
+     picker (`sonar-pro` / `sonar-reasoning-pro` / `sonar`) + recency window
+     (day/week/month).
+  2. **Anthropic API** — API key + model picker (Opus / Sonnet / Haiku),
+     used only by *Generate brief*.
+  3. **Scanner tuning** — minimum confidence, max opportunities per source.
 
 - **`pages/OpportunityDetail.tsx`** — Header card with company name,
   industry, summary, brand/product/status/confidence chips, and three
@@ -374,6 +402,17 @@ produce x64, change `"arch": ["arm64"]` to `["arm64", "x64"]` in the
 
 ---
 
+## 7a. Which LLM does what
+
+| Feature | API | Default model | Why |
+|---|---|---|---|
+| Product *Run research* | **Perplexity** | `sonar-deep-research` | Multi-step, live web search; cites sources |
+| Autonomous scan jobs | **Perplexity** | `sonar-pro` | Live news search + qualification in one call |
+| Brand competitive summary roll-up | **Perplexity** | `sonar-deep-research` | Shares context with research |
+| Sales brief (*Generate brief*) | **Anthropic Claude** | `claude-opus-4-7` | Pure writing task, no research needed |
+
+User asked (2026-05-20) to swap scans + research from Claude to Perplexity. Brief generation stayed on Claude because it wasn't part of that ask.
+
 ## 8. Conventions worth keeping
 
 - **Synchronous SQLite.** `better-sqlite3` is sync; do *not* await its calls.
@@ -387,11 +426,16 @@ produce x64, change `"arch": ["arm64"]` to `["arm64", "x64"]` in the
 - **External links** must go through `window.lh.openExternal(url)` which
   calls `shell.openExternal`. Never use `<a target="_blank">` — Electron's
   CSP and `setWindowOpenHandler` both block it.
-- **LLM JSON responses go through `completeJson()`** so prose/code-fence
-  noise from the model doesn't break parsing.
-- **Dedupe before qualifying.** The `seen_urls` table is the dedupe gate
-  inside `fetchSignals` — every new URL gets inserted before it ever
-  reaches the LLM, so re-runs cost nothing on already-seen items.
+- **Use JSON schemas on Perplexity calls** (`jsonSchema` option in
+  `completePerplexity()`) wherever the result needs to be parsed. The schema
+  is enforced by Perplexity's `response_format: json_schema` and makes the
+  output far more reliable than free-form prompting. Fall back to
+  `tryParseJson` only for non-schema text returns.
+- **Dedupe at the candidate level.** Perplexity returns opportunities with
+  `source_url`s. The `seen_urls` table is consulted *after* Perplexity
+  responds (we can't pre-filter what Perplexity will discover), and the URL
+  is recorded before inserting the opportunity. Re-running a scan on the
+  same topic will re-call Perplexity but won't double-insert opportunities.
 - **Default to "open".** Newly qualified opportunities are always
   `status='open'` until the user explicitly Qualifies / Disqualifies /
   Archives. The Dashboard only shows `status='open'`.
@@ -423,6 +467,13 @@ These came directly from the original request:
 
 ## 10. Known limitations / good next steps
 
+- **`signal_sources.kind` is now informational.** The old `google_news`/`rss`
+  distinction no longer drives behavior — every source is interpreted as a
+  Perplexity research topic. The UI in `SignalConfig.tsx` still asks for the
+  kind for backward compatibility, but a future cleanup could simplify it
+  to "topic" + optional "domain filter".
+- **`rss-parser` is dead code** since the scanner rewrite. Safe to remove
+  from `package.json` if you're trimming deps.
 - **DOCX/PPTX extraction is best-effort.** `yauzl` is loaded dynamically and
   is not in `package.json`, so today these files fall back to a placeholder.
   Add `yauzl` to dependencies to fully enable them.

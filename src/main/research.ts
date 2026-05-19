@@ -1,18 +1,50 @@
 import { getDb } from './db.js';
-import { complete, completeJson } from './llm.js';
+import { completePerplexity } from './perplexity.js';
+import { getSettings } from './settings.js';
 import type { Product, Brand, KnowledgeItem } from '@shared/types';
 
-const SYSTEM = `You are an expert B2B competitive intelligence analyst.
-Your job is to deeply understand products and brands well enough to identify
-when a prospective customer's situation creates a buying opportunity.
+const SYSTEM = `You are a senior B2B competitive-intelligence analyst conducting
+deep web research on a specific product and its brand. You have live search;
+USE IT. Pull from analyst reports, vendor docs, customer reviews (G2, Gartner
+Peer Insights, TrustRadius), news, security disclosures, and forum discussions.
 
-When researching, always think about:
+Your deliverable is a sharp dossier a sales team can act on:
 - The job-to-be-done the product solves
-- Concrete trigger events / situations that create buying intent (failures,
+- Concrete trigger events / situations that create buying intent (outages,
   incidents, executive changes, regulatory pressure, growth milestones, etc.)
 - The honest competitive landscape (direct, indirect, status-quo)
-- The product's clearest differentiators and weaknesses
-- The "signals" a sales team should watch for in news and the open web.`;
+- The product's clearest differentiators and its weaknesses
+- Specific signals a sales team should watch for in news and the open web
+
+Be specific. Cite real competitor names, real customers when known, real
+events. Avoid generic marketing language.`;
+
+type ResearchOutput = {
+  description: string;
+  category: string;
+  use_cases: string;
+  competitors: string;
+  differentiators: string;
+  signals: string;
+  research_summary: string;
+};
+
+const RESEARCH_SCHEMA = {
+  type: 'object',
+  required: [
+    'description', 'category', 'use_cases', 'competitors',
+    'differentiators', 'signals', 'research_summary'
+  ],
+  properties: {
+    description: { type: 'string', description: '1-paragraph crisp description of the product' },
+    category: { type: 'string', description: 'Short market category, e.g. SD-WAN, EDR, observability' },
+    use_cases: { type: 'string', description: 'Markdown bulleted list of high-fit customer situations (lines starting with -)' },
+    competitors: { type: 'string', description: 'Markdown bulleted list. Each line: "Competitor — short positioning"' },
+    differentiators: { type: 'string', description: 'Markdown bulleted list of this product\'s unique angles vs competitors' },
+    signals: { type: 'string', description: 'Markdown bulleted list of concrete news/event signals that indicate a buying opportunity' },
+    research_summary: { type: 'string', description: '300-500 word holistic narrative tying the above together' }
+  }
+};
 
 export async function researchProduct(productId: number): Promise<Product> {
   const db = getDb();
@@ -22,24 +54,25 @@ export async function researchProduct(productId: number): Promise<Product> {
 
   db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('researching', productId);
 
-  const knowledge = db
-    .prepare(
-      `SELECT * FROM knowledge_items
-       WHERE (brand_id = ? OR brand_id IS NULL)
-         AND status = 'indexed'
-       ORDER BY created_at DESC LIMIT 30`
-    )
-    .all(brand.id) as KnowledgeItem[];
+  try {
+    const knowledge = db
+      .prepare(
+        `SELECT * FROM knowledge_items
+         WHERE (brand_id = ? OR brand_id IS NULL)
+           AND status = 'indexed'
+         ORDER BY created_at DESC LIMIT 20`
+      )
+      .all(brand.id) as KnowledgeItem[];
 
-  const knowledgeBlob = knowledge
-    .map(
-      (k) =>
-        `### ${k.title}\nSource: ${k.source}\n${(k.content || '').slice(0, 6000)}`
-    )
-    .join('\n\n')
-    .slice(0, 60_000);
+    const knowledgeBlob = knowledge
+      .map(
+        (k) =>
+          `### ${k.title}\nSource: ${k.source}\n${(k.content || '').slice(0, 4000)}`
+      )
+      .join('\n\n')
+      .slice(0, 40_000);
 
-  const prompt = `# Brand
+    const prompt = `# Brand
 Name: ${brand.name}
 Existing description: ${brand.description || '(none)'}
 
@@ -48,65 +81,78 @@ Name: ${product.name}
 Existing description: ${product.description || '(none)'}
 Existing category: ${product.category || '(unknown)'}
 
-# Knowledge base excerpts
-${knowledgeBlob || '(no uploaded knowledge yet — use your own deep general knowledge of this domain)'}
+# Internal knowledge-base excerpts
+${knowledgeBlob || '(no internal knowledge — rely on live web research)'}
 
 # Task
-Produce a competitive-intelligence dossier for this product. Return JSON with these keys:
-{
-  "description": "1-paragraph crisp description",
-  "category": "short market category",
-  "use_cases": "bulleted list of high-fit customer situations (markdown -)",
-  "competitors": "bulleted list, each line: Competitor — short positioning",
-  "differentiators": "bulleted list of this product's unique angles vs competitors",
-  "signals": "bulleted list of concrete news/event signals (e.g. 'reports of vendor X outage', 'CISO change in regulated industry', etc.) that indicate a buying opportunity",
-  "research_summary": "200-400 word holistic narrative tying the above together. Plain prose."
-}`;
+Conduct deep web research on this product and brand. Synthesize external
+sources with the internal excerpts above into a single dossier. Return the
+result as JSON matching the schema you've been given.`;
 
-  const data = await completeJson<{
-    description: string;
-    category: string;
-    use_cases: string;
-    competitors: string;
-    differentiators: string;
-    signals: string;
-    research_summary: string;
-  }>(SYSTEM, prompt, { maxTokens: 3500 });
+    const { perplexityResearchModel } = getSettings();
 
-  db.prepare(
-    `UPDATE products SET
-       description = COALESCE(NULLIF(?, ''), description),
-       category = COALESCE(NULLIF(?, ''), category),
-       use_cases = ?,
-       competitors = ?,
-       differentiators = ?,
-       signals = ?,
-       research_summary = ?,
-       research_status = 'ready',
-       updated_at = datetime('now')
-     WHERE id = ?`
-  ).run(
-    data.description,
-    data.category,
-    data.use_cases,
-    data.competitors,
-    data.differentiators,
-    data.signals,
-    data.research_summary,
-    productId
-  );
+    const { json } = await completePerplexity<ResearchOutput>(SYSTEM, prompt, {
+      model: perplexityResearchModel || 'sonar-deep-research',
+      maxTokens: 6000,
+      temperature: 0.15,
+      jsonSchema: RESEARCH_SCHEMA
+    });
 
-  // Roll the brand competitive_summary up too
-  const brandSummary = await complete(
-    SYSTEM,
-    `Given this brand "${brand.name}" and its current product portfolio in our DB, write a tight 150-word competitive summary for the BRAND itself (positioning, where it wins, where it's vulnerable).`,
-    { maxTokens: 600 }
-  );
-  db.prepare(
-    'UPDATE brands SET competitive_summary = ?, updated_at = datetime(\'now\') WHERE id = ?'
-  ).run(brandSummary, brand.id);
+    if (!json) {
+      throw new Error('Perplexity returned an unparseable response. Try again or pick a different research model in Settings.');
+    }
 
-  return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
+    db.prepare(
+      `UPDATE products SET
+         description = COALESCE(NULLIF(?, ''), description),
+         category = COALESCE(NULLIF(?, ''), category),
+         use_cases = ?,
+         competitors = ?,
+         differentiators = ?,
+         signals = ?,
+         research_summary = ?,
+         research_status = 'ready',
+         updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(
+      json.description,
+      json.category,
+      json.use_cases,
+      json.competitors,
+      json.differentiators,
+      json.signals,
+      json.research_summary,
+      productId
+    );
+
+    // Roll up a brand-level competitive summary using Perplexity too
+    const brandPrompt = `Brand: ${brand.name}
+Existing brand description: ${brand.description || '(none)'}
+
+Based on live research and the freshly-researched product "${product.name}"
+in this brand's portfolio, write a tight 150-word competitive summary for the
+BRAND itself — its positioning, where it wins, where it's vulnerable. No
+fluff. Plain prose, no markdown headings.`;
+    try {
+      const { text: brandSummary } = await completePerplexity(SYSTEM, brandPrompt, {
+        model: perplexityResearchModel || 'sonar-deep-research',
+        maxTokens: 700,
+        temperature: 0.2
+      });
+      if (brandSummary) {
+        db.prepare(
+          "UPDATE brands SET competitive_summary = ?, updated_at = datetime('now') WHERE id = ?"
+        ).run(brandSummary, brand.id);
+      }
+    } catch {
+      // brand summary is a nice-to-have, don't fail the whole research
+    }
+
+    return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
+  } catch (e) {
+    db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('error', productId);
+    throw e;
+  }
 }
 
 export async function indexKnowledge(itemId: number): Promise<void> {
@@ -115,7 +161,6 @@ export async function indexKnowledge(itemId: number): Promise<void> {
     .prepare('SELECT * FROM knowledge_items WHERE id = ?')
     .get(itemId) as KnowledgeItem | undefined;
   if (!item) return;
-  // Already indexed if content present
   if (item.content && item.content.length > 200) {
     db.prepare("UPDATE knowledge_items SET status = 'indexed' WHERE id = ?").run(itemId);
   }

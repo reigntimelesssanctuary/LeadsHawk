@@ -95,8 +95,12 @@ export type DashboardStats = {
 };
 
 export type Settings = {
-  anthropicApiKey: string;
-  model: string;
+  anthropicApiKey: string;          // used for sales-brief generation only
+  model: string;                    // Claude model for sales-brief
+  perplexityApiKey: string;         // used for product research + autonomous scans
+  perplexityResearchModel: string;  // model for "Run research" — recommend sonar-deep-research
+  perplexityScanModel: string;      // model for scan jobs — recommend sonar-pro
+  scanRecency: 'day' | 'week' | 'month';
   scanCron: string;
   scanEnabled: boolean;
   minConfidence: number;

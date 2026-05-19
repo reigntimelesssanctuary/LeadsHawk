@@ -1,235 +1,238 @@
-import Parser from 'rss-parser';
 import { getDb } from './db.js';
-import { complete, completeJson } from './llm.js';
-import { fetchUrl } from './knowledge.js';
+import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import type { Brand, Product, SignalSource, Opportunity } from '@shared/types';
 
-const parser = new Parser({
-  timeout: 20_000,
-  headers: { 'user-agent': 'LeadsHawk/1.0 (+local app)' }
-});
+const SYSTEM = `You are a senior B2B sales intelligence analyst with live web
+access. You will be given a portfolio of our brands and products, plus a
+topic / area of interest. You must surface RECENT (within the specified time
+window) real-world events — news, incidents, announcements, leadership
+changes — that represent credible B2B sales opportunities for our products.
 
-const SYSTEM_QUALIFY = `You are a senior B2B sales strategist for a vendor.
-You read a news item and decide if it represents a real buying opportunity for
-one of OUR products. Be skeptical: most news is NOT an opportunity. Only flag
-items where the company's situation creates a credible reason to buy.
+You must be honest and skeptical. Most news is NOT an opportunity. Only flag
+items where a real company's actual situation creates a credible reason to
+buy one of OUR specific products.
 
-You must return strictly valid JSON.`;
+For each genuine opportunity, return a structured record with the prospect
+company, the matched brand/product, the situation, the recommended sales
+angle, and a confidence score. Always include the source URL.
 
-type QualifyResult = {
-  is_opportunity: boolean;
-  confidence: number;
+Respond ONLY with JSON matching the schema you've been given. No prose.`;
+
+type PplxOpportunity = {
   company: string;
   industry: string;
   matched_brand: string | null;
   matched_product: string | null;
+  source_url: string;
+  source_title: string;
+  source_published_at: string | null;
+  headline: string;
   background: string;
   use_case: string;
   angle: string;
   signal_summary: string;
+  confidence: number;
+};
+
+const OPPS_SCHEMA = {
+  type: 'object',
+  required: ['opportunities'],
+  properties: {
+    opportunities: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: [
+          'company', 'industry', 'matched_brand', 'matched_product',
+          'source_url', 'source_title', 'headline',
+          'background', 'use_case', 'angle', 'signal_summary', 'confidence'
+        ],
+        properties: {
+          company: { type: 'string' },
+          industry: { type: 'string' },
+          matched_brand: { type: ['string', 'null'] },
+          matched_product: { type: ['string', 'null'] },
+          source_url: { type: 'string' },
+          source_title: { type: 'string' },
+          source_published_at: { type: ['string', 'null'] },
+          headline: { type: 'string' },
+          background: { type: 'string' },
+          use_case: { type: 'string' },
+          angle: { type: 'string' },
+          signal_summary: { type: 'string' },
+          confidence: { type: 'number' }
+        }
+      }
+    }
+  }
 };
 
 export type ScanLog = (line: string) => void;
 
-export async function fetchSignals(log: ScanLog): Promise<RawSignal[]> {
-  const db = getDb();
-  const sources = db
-    .prepare("SELECT * FROM signal_sources WHERE enabled = 1")
-    .all() as SignalSource[];
-
-  const seenStmt = db.prepare('SELECT 1 FROM seen_urls WHERE url = ?');
-  const insertSeen = db.prepare(
-    "INSERT OR IGNORE INTO seen_urls(url) VALUES (?)"
-  );
-
-  const all: RawSignal[] = [];
-  for (const src of sources) {
-    try {
-      log(`Fetching: ${src.name} (${src.kind})`);
-      const feedUrl = resolveFeedUrl(src);
-      const feed = await parser.parseURL(feedUrl);
-      for (const item of feed.items.slice(0, 25)) {
-        const url = (item.link || '').split('&ved=')[0];
-        if (!url) continue;
-        if (seenStmt.get(url)) continue;
-        insertSeen.run(url);
-        all.push({
-          title: item.title || '(untitled)',
-          url,
-          published: item.isoDate || item.pubDate || null,
-          source: src.name,
-          snippet: (item.contentSnippet || item.content || '').slice(0, 1000)
-        });
-      }
-    } catch (e: any) {
-      log(`  ! Source error (${src.name}): ${e.message || e}`);
-    }
-  }
-  return all;
-}
-
-export type RawSignal = {
-  title: string;
-  url: string;
-  published: string | null;
-  source: string;
-  snippet: string;
-};
-
-function resolveFeedUrl(src: SignalSource): string {
-  const cfg = JSON.parse(src.config || '{}');
-  if (src.kind === 'rss') return cfg.url;
-  if (src.kind === 'google_news' || src.kind === 'query') {
-    const q = encodeURIComponent(cfg.query || src.name);
-    return `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
-  }
-  return cfg.url;
-}
-
-export async function qualifyAndStore(signal: RawSignal, log: ScanLog): Promise<Opportunity | null> {
-  const db = getDb();
-  const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
-  const products = db.prepare('SELECT * FROM products').all() as Product[];
-  if (brands.length === 0 || products.length === 0) {
-    log('  - skipping qualify: no brands/products defined');
-    return null;
-  }
-
-  // Hydrate signal body
-  let body = signal.snippet;
+function describeSource(s: SignalSource): string {
   try {
-    const fetched = await fetchUrl(signal.url);
-    body = fetched.content.slice(0, 8000);
+    const cfg = JSON.parse(s.config || '{}');
+    if (cfg.query) return `${s.name} — ${cfg.query}`;
+    if (cfg.url) return `${s.name} — ${cfg.url}`;
+    return s.name;
   } catch {
-    // keep snippet
+    return s.name;
   }
+}
 
-  const portfolio = brands
+function buildPortfolio(brands: Brand[], products: Product[]): string {
+  return brands
     .map((b) => {
       const ps = products.filter((p) => p.brand_id === b.id);
       return `## ${b.name}
 ${b.competitive_summary || b.description || ''}
+
 Products:
 ${ps
   .map(
     (p) =>
-      `  - ${p.name} [${p.category || ''}] :: ${
-        p.description || ''
-      }\n    Use cases: ${(p.use_cases || '').replace(/\n/g, ' ')}\n    Signals to watch: ${(
-        p.signals || ''
-      ).replace(/\n/g, ' ')}`
+      `  - "${p.name}" [${p.category || 'uncategorized'}] :: ${p.description || ''}
+    Use cases: ${(p.use_cases || '').replace(/\n+/g, ' ')}
+    Signals to watch: ${(p.signals || '').replace(/\n+/g, ' ')}`
   )
   .join('\n')}`;
     })
     .join('\n\n')
-    .slice(0, 30_000);
-
-  const settings = getSettings();
-  const prompt = `# Our portfolio
-${portfolio}
-
-# News signal
-Title: ${signal.title}
-URL: ${signal.url}
-Published: ${signal.published || 'unknown'}
-Body:
-${body}
-
-# Task
-Decide if this signal is a real B2B sales opportunity for one of OUR products.
-Be honest: if it doesn't fit, return is_opportunity=false.
-
-Return JSON shape:
-{
-  "is_opportunity": boolean,
-  "confidence": 0..1,
-  "company": "the company that would be the prospect",
-  "industry": "their industry",
-  "matched_brand": "EXACT brand name from our portfolio, or null",
-  "matched_product": "EXACT product name from our portfolio, or null",
-  "background": "2-3 sentence description of what's happening at the prospect",
-  "use_case": "1-paragraph: WHY our matched product fits this situation",
-  "angle": "1-paragraph: the specific sales angle / talking points to lead with",
-  "signal_summary": "one tight sentence summarising the opportunity"
-}
-
-If is_opportunity is false, you may leave matched_* null and other fields short.`;
-
-  let result: QualifyResult;
-  try {
-    result = await completeJson<QualifyResult>(SYSTEM_QUALIFY, prompt, {
-      maxTokens: 1800
-    });
-  } catch (e: any) {
-    log(`  ! qualify error: ${e.message || e}`);
-    return null;
-  }
-
-  if (!result.is_opportunity) return null;
-  if ((result.confidence ?? 0) < settings.minConfidence) {
-    log(`  - skipping low confidence (${result.confidence.toFixed(2)}): ${signal.title}`);
-    return null;
-  }
-
-  const matchedBrand = brands.find(
-    (b) => b.name.toLowerCase() === (result.matched_brand || '').toLowerCase()
-  );
-  const matchedProduct = products.find(
-    (p) =>
-      p.name.toLowerCase() === (result.matched_product || '').toLowerCase() &&
-      (!matchedBrand || p.brand_id === matchedBrand.id)
-  );
-
-  const insert = db.prepare(`
-    INSERT INTO opportunities(
-      brand_id, product_id, company, industry, headline, source_url, source_title,
-      source_published_at, confidence, status, background, use_case, angle,
-      signal_summary, raw_signal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
-  `);
-  const info = insert.run(
-    matchedBrand?.id ?? null,
-    matchedProduct?.id ?? null,
-    result.company,
-    result.industry,
-    signal.title,
-    signal.url,
-    signal.source,
-    signal.published,
-    result.confidence,
-    result.background,
-    result.use_case,
-    result.angle,
-    result.signal_summary,
-    JSON.stringify({ snippet: signal.snippet, body: body.slice(0, 4000) })
-  );
-  log(`  ✓ opportunity created: ${result.company} (${result.confidence.toFixed(2)})`);
-  return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(info.lastInsertRowid) as Opportunity;
+    .slice(0, 28_000);
 }
 
 export async function runScan(): Promise<{ runId: number; created: number; scanned: number }> {
   const db = getDb();
-  const startStmt = db.prepare(
-    "INSERT INTO scan_runs(status) VALUES ('running')"
-  );
+  const startStmt = db.prepare("INSERT INTO scan_runs(status) VALUES ('running')");
   const runId = Number(startStmt.run().lastInsertRowid);
   const logLines: string[] = [];
   const log: ScanLog = (line) => {
     logLines.push(`[${new Date().toISOString()}] ${line}`);
   };
+
   let created = 0;
   let scanned = 0;
   try {
-    const signals = await fetchSignals(log);
-    log(`Fetched ${signals.length} new signals`);
     const settings = getSettings();
-    for (const sig of signals.slice(0, settings.maxItemsPerScan)) {
-      scanned++;
-      log(`Qualifying: ${sig.title}`);
-      const opp = await qualifyAndStore(sig, log);
-      if (opp) created++;
+    if (!settings.perplexityApiKey) {
+      throw new Error('Perplexity API key not configured. Open Settings and paste your key.');
     }
+
+    const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
+    const products = db.prepare('SELECT * FROM products').all() as Product[];
+    if (brands.length === 0 || products.length === 0) {
+      throw new Error('Add at least one brand and product before scanning.');
+    }
+    const portfolio = buildPortfolio(brands, products);
+
+    const sources = db
+      .prepare('SELECT * FROM signal_sources WHERE enabled = 1')
+      .all() as SignalSource[];
+    if (sources.length === 0) {
+      throw new Error('No enabled signal sources. Add at least one in Signal Config.');
+    }
+
+    const seenStmt = db.prepare('SELECT 1 FROM seen_urls WHERE url = ?');
+    const insertSeen = db.prepare('INSERT OR IGNORE INTO seen_urls(url) VALUES (?)');
+    const insertOpp = db.prepare(`
+      INSERT INTO opportunities(
+        brand_id, product_id, company, industry, headline, source_url, source_title,
+        source_published_at, confidence, status, background, use_case, angle,
+        signal_summary, raw_signal
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+    `);
+
+    for (const src of sources) {
+      log(`Source: ${describeSource(src)}`);
+      const cfg = (() => { try { return JSON.parse(src.config || '{}'); } catch { return {}; } })();
+      const topic = cfg.query || cfg.url || src.name;
+
+      const prompt = `# Our portfolio
+${portfolio}
+
+# Topic to investigate
+${topic}
+
+# Time window
+Only consider events from the last ${settings.scanRecency} (no older).
+
+# Task
+Search the web for RECENT real-world events that match the topic AND
+represent a credible B2B sales opportunity for one of OUR specific products.
+Be specific — only flag named companies in concrete situations with a real
+fit to our portfolio. Skip generic industry trend pieces.
+
+Limit to at most ${Math.max(1, Math.min(15, settings.maxItemsPerScan))} of
+the highest-quality opportunities. Use only the brand/product names that
+appear in our portfolio (exact match, case-insensitive). Apply confidence
+0..1; be honest — most cells should be 0.4–0.7 unless the fit is obvious.`;
+
+      let json: { opportunities: PplxOpportunity[] } | null = null;
+      try {
+        const r = await completePerplexity<{ opportunities: PplxOpportunity[] }>(
+          SYSTEM,
+          prompt,
+          {
+            model: settings.perplexityScanModel || 'sonar-pro',
+            maxTokens: 4500,
+            temperature: 0.2,
+            searchRecency: settings.scanRecency,
+            jsonSchema: OPPS_SCHEMA
+          }
+        );
+        json = r.json;
+        if (!json) {
+          log(`  ! unparseable response, ${r.text.length} chars of text`);
+          continue;
+        }
+        log(`  → ${json.opportunities?.length ?? 0} candidate(s) returned`);
+      } catch (e: any) {
+        log(`  ! Perplexity error: ${e.message || e}`);
+        continue;
+      }
+
+      for (const cand of json.opportunities || []) {
+        scanned++;
+        const url = (cand.source_url || '').trim();
+        if (!url) { log('  - skip: no source_url'); continue; }
+        if (seenStmt.get(url)) { log(`  - skip (seen): ${cand.company}`); continue; }
+        if ((cand.confidence ?? 0) < settings.minConfidence) {
+          log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${cand.company}`);
+          continue;
+        }
+        insertSeen.run(url);
+
+        const matchedBrand = brands.find(
+          (b) => b.name.toLowerCase() === (cand.matched_brand || '').toLowerCase()
+        );
+        const matchedProduct = products.find(
+          (p) =>
+            p.name.toLowerCase() === (cand.matched_product || '').toLowerCase() &&
+            (!matchedBrand || p.brand_id === matchedBrand.id)
+        );
+
+        insertOpp.run(
+          matchedBrand?.id ?? null,
+          matchedProduct?.id ?? null,
+          cand.company,
+          cand.industry,
+          cand.headline,
+          url,
+          cand.source_title || src.name,
+          cand.source_published_at || null,
+          cand.confidence,
+          cand.background,
+          cand.use_case,
+          cand.angle,
+          cand.signal_summary,
+          JSON.stringify({ source: src.name, topic })
+        );
+        created++;
+        log(`  ✓ ${cand.company} (${(cand.confidence ?? 0).toFixed(2)}) → ${matchedBrand?.name || '?'} / ${matchedProduct?.name || '?'}`);
+      }
+    }
+
     db.prepare(
       `UPDATE scan_runs SET finished_at = datetime('now'), status = 'completed',
        items_scanned = ?, opportunities_created = ?, log = ? WHERE id = ?`
@@ -242,7 +245,7 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
     ).run(scanned, created, logLines.join('\n'), runId);
     throw e;
   }
-  // Bookkeeping on the (singleton) scan_jobs row
+
   db.prepare(
     `UPDATE scan_jobs SET last_run_at = datetime('now'), last_status = 'completed', last_results = ?`
   ).run(created);
