@@ -13,7 +13,9 @@ const api = {
     get: (id: number) => ipcRenderer.invoke('brands:get', id),
     create: (p: any) => ipcRenderer.invoke('brands:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('brands:update', id, p),
-    delete: (id: number) => ipcRenderer.invoke('brands:delete', id)
+    delete: (id: number) => ipcRenderer.invoke('brands:delete', id),
+    setScanEnabled: (id: number, enabled: boolean) =>
+      ipcRenderer.invoke('brands:setScanEnabled', id, enabled)
   },
   products: {
     list: (brandId?: number) => ipcRenderer.invoke('products:list', brandId),
@@ -39,8 +41,8 @@ const api = {
     delete: (id: number) => ipcRenderer.invoke('sources:delete', id)
   },
   rules: {
-    list: () => ipcRenderer.invoke('rules:list'),
-    create: (p: { kind: 'include' | 'exclude'; text: string }) =>
+    list: (productId: number) => ipcRenderer.invoke('rules:list', productId),
+    create: (p: { productId: number; kind: 'include' | 'exclude'; text: string }) =>
       ipcRenderer.invoke('rules:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('rules:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('rules:delete', id)
@@ -55,6 +57,7 @@ const api = {
     get: (id: number) => ipcRenderer.invoke('opps:get', id),
     setStatus: (id: number, status: string) =>
       ipcRenderer.invoke('opps:setStatus', id, status),
+    delete: (id: number) => ipcRenderer.invoke('opps:delete', id),
     brief: (id: number) => ipcRenderer.invoke('opps:brief', id),
     dispatch: (id: number, target: string, payload: string) =>
       ipcRenderer.invoke('opps:dispatch', id, target, payload)

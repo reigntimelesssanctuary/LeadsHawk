@@ -146,7 +146,8 @@ LeadsHawk/
   (`CREATE TABLE IF NOT EXISTS`).
 
   **Schema:**
-  - `brands(id, name UNIQUE, description, positioning, competitive_summary, …)`
+  - `brands(id, name UNIQUE, description, positioning, competitive_summary, scan_enabled, …)`
+    — `scan_enabled` (default `1`): when `0`, ALL of the brand's products are excluded from scans regardless of their own toggle.
   - `products(id, brand_id→brands, name, description, category, use_cases, competitors, differentiators, signals, research_status, research_summary, scan_enabled, …)`
     — `scan_enabled` (default `1`) toggles whether autonomous scans run for this product. Added via idempotent `addColumnIfMissing` in `db.ts` so old DBs upgrade in place.
   - `knowledge_items(id, brand_id, product_id?, kind: 'file'|'link'|'note', title, source, content, status, …)`
@@ -156,7 +157,7 @@ LeadsHawk/
   - `opportunities(id, brand_id?, product_id?, company, industry, headline, source_url, source_title, source_published_at, confidence, status: 'open'|'qualified'|'disqualified'|'archived', background, use_case, angle, signal_summary, raw_signal, …)`
   - `dispatch_log(id, opportunity_id, target, payload, result, …)`
   - `seen_urls(url PRIMARY KEY, seen_at)` — dedupe across scans
-  - `scan_rules(id, kind: 'include'|'exclude', text, enabled, created_at)` — user-defined hard constraints injected into every scan prompt
+  - `scan_rules(id, product_id, kind: 'include'|'exclude', text, enabled, created_at)` — per-product user-defined hard constraints injected into that product's scan prompt. `product_id` added via `addColumnIfMissing`; rows are deleted when their product is deleted (manual cleanup in `products:delete`).
 
 - **`settings.ts`** — Thin wrapper around `electron-store`. Persists:
   - `perplexityApiKey` (research + scan)
@@ -207,17 +208,19 @@ LeadsHawk/
   6. On any failure the product is set to `research_status = 'error'`.
 
 - **`scanner.ts`** — The core autonomous loop (uses **Perplexity**, no RSS).
-  Two passes, both of which receive a shared **guardrails block**
-  (`buildGuardrails()`) derived from enabled `scan_rules`:
-  - The block lists the user's `include` rules as ALL-must-pass and
-    `exclude` rules as ANY-blocks. It is told to outrank everything else
-    and to return an empty `opportunities` array if nothing satisfies the
-    rules. The block is prepended to the prompt's task section in both
-    passes.
+  `buildGuardrails(productId)` reads that product's enabled `scan_rules`
+  and formats a block: `include` rules as ALL-must-pass, `exclude` rules
+  as ANY-blocks. The block is told to outrank everything else and to
+  return an empty `opportunities` array if nothing satisfies the rules.
+  It's prepended to each product's Pass-1 prompt. Pass 2 (custom topics)
+  gets no guardrails.
 
   **Pass 1 — auto signals from products (primary).**
-  - Iterate over every product where `research_status='ready'` and
-    `scan_enabled=1` and `signals` is non-empty.
+  - Iterate over every product where `research_status='ready'`,
+    `scan_enabled=1`, its brand's `scan_enabled=1`, and `signals` is
+    non-empty.
+  - `buildGuardrails(productId)` pulls that product's own enabled
+    `scan_rules` and injects them as hard constraints into the prompt.
   - For each such product, send Perplexity a tightly-scoped prompt that
     includes only **that product's** context: brand, name, category,
     description, use cases, differentiators, and the bulleted signals to
@@ -235,6 +238,8 @@ LeadsHawk/
     upfront).
   - This pass only runs if the user has added any custom topics in
     Signal Config → Advanced. There are no auto-seeded sources anymore.
+  - Custom topics get **no** include/exclude guardrails — those rules are
+    per-product and a custom topic isn't bound to one product.
 
   Both passes share the same `insertCandidates()` helper which dedupes via
   `seen_urls`, enforces `minConfidence`, and inserts into `opportunities`
@@ -291,35 +296,41 @@ directly.
   four stat cards in a row, the "Last Scan" panel with the **Run Scan Now**
   purple button, then the "Open Opportunities" table. Each row resolves its
   brand and product names asynchronously via `window.lh.brands.get` /
-  `products.get`.
+  `products.get`. The Actions column has **View / Source / Delete** — Delete
+  confirms, calls `opps.delete(id)` (which also clears `dispatch_log` rows),
+  and refreshes.
 
 - **`pages/ScanJobs.tsx`** — Schedule editor (cron + enable toggle +
   presets: Every hour / 6h / Twice daily / Daily 9am), manual "Run Scan
   Now" panel, and a paginated history of `scan_runs` with click-through to
   view logs in a full-screen overlay.
 
-- **`pages/SignalConfig.tsx`** — Three sections:
+- **`pages/SignalConfig.tsx`** — Two sections:
   1. **Auto-derived signals (primary).** Lists every researched product
      with an enable/disable checkbox + an expand caret. Expanding shows
-     the bulleted signal list captured by deep research. Toggling fires
-     `products.setScanEnabled(id, bool)`. When no products are researched
-     yet, shows a friendly warning pointing back to Brands & Products.
-  2. **Scan guidance — include & exclude rules.** Two-column card
-     (Always include / Always exclude). Each rule is a free-text line,
-     persisted in `scan_rules`, with a per-rule enable checkbox + delete.
-     Rules are HARD CONSTRAINTS injected into every Perplexity prompt
-     (both auto-signal Pass 1 and custom-topic Pass 2). If no candidates
-     satisfy the rules, Perplexity is told to return an empty array.
-  3. **Advanced — custom topics (collapsed by default).** Optional
+     (a) the bulleted signal list captured by deep research and
+     (b) a **per-product "Scan guidance"** sub-panel — two columns
+     (Always include / Always exclude) of free-text rules persisted in
+     `scan_rules` scoped to that product. Each rule has an enable
+     checkbox + delete. These are HARD CONSTRAINTS injected into that
+     product's scan prompt.
+  2. **Advanced — custom topics (collapsed by default).** Optional
      free-form Perplexity search topics. Add with a single-form modal
      (`name` + `query`). These rows live in `signal_sources` and feed
      scanner Pass 2.
 
 - **`pages/BrandsProducts.tsx`** — Two-pane layout. Left: 240px brand list.
   Right: the selected brand's panel containing (a) editable brand metadata
-  + competitive summary, (b) products list with per-product "Run research"
-  buttons and collapsible dossier details, (c) the knowledge base with
-  *Upload Files / Add Link / Add Note* buttons.
+  + competitive summary + an **"Include in scans" Switch** for the brand,
+  (b) products list, each product card with a **"Scan" Switch** (disabled
+  when the brand is excluded), per-product "Run research" button, and
+  collapsible dossier details, (c) the knowledge base with
+  *Upload Files / Add Link / Add Note* buttons. The brand/product scan
+  toggles write `brands.scan_enabled` / `products.scan_enabled` and are the
+  same fields surfaced as checkboxes on the Signal Config page.
+
+- **`components/Switch.tsx`** — Small purple pill toggle. Props:
+  `checked`, `onChange(bool)`, optional `label`, optional `disabled`.
 
 - **`pages/BrandDispatch.tsx`** — Table of `status='qualified'`
   opportunities, ready for outreach.

@@ -10,7 +10,6 @@ export function SignalConfig() {
   const [products, setProducts] = useState<Product[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [sources, setSources] = useState<SignalSource[]>([]);
-  const [rules, setRules] = useState<ScanRule[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -18,11 +17,8 @@ export function SignalConfig() {
     setProducts(await window.lh.products.list());
     setBrands(await window.lh.brands.list());
     setSources(await window.lh.sources.list());
-    setRules(await window.lh.rules.list());
   };
   useEffect(() => { refresh(); }, []);
-
-  const refreshRules = async () => setRules(await window.lh.rules.list());
 
   const toggleProduct = async (p: Product) => {
     await window.lh.products.setScanEnabled(p.id, p.scan_enabled ? false : true);
@@ -43,7 +39,7 @@ export function SignalConfig() {
         <div className="h-page">Signal Config</div>
         <div style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
           LeadsHawk scans the web for the buying signals it learned from your product research.
-          Toggle individual products on or off below.
+          Expand a product to see its signals and set include / exclude rules.
         </div>
       </div>
 
@@ -83,8 +79,6 @@ export function SignalConfig() {
           </div>
         )}
       </div>
-
-      <ScanGuidanceCard rules={rules} refresh={refreshRules} />
 
       <div className="card" style={{ padding: 20 }}>
         <button
@@ -152,160 +146,19 @@ export function SignalConfig() {
   );
 }
 
-function ScanGuidanceCard({ rules, refresh }: { rules: ScanRule[]; refresh: () => void }) {
-  const includes = rules.filter((r) => r.kind === 'include');
-  const excludes = rules.filter((r) => r.kind === 'exclude');
-  return (
-    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-      <div className="h-section" style={{ marginBottom: 6 }}>
-        Scan guidance — include & exclude rules
-      </div>
-      <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
-        These rules apply as <b>hard constraints</b> on every scan. Use them to focus the scanner
-        (e.g. <i>only enterprise customers in North America</i>) or filter results out
-        (e.g. <i>exclude startups under $10M revenue</i>).
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <RuleColumn
-          kind="include"
-          icon={<CheckCircle2 size={16} style={{ color: '#065f46' }} />}
-          title="Always include"
-          accent="#065f46"
-          accentBg="#ecfdf5"
-          accentBorder="#a7f3d0"
-          placeholder="e.g. publicly traded companies only"
-          rules={includes}
-          refresh={refresh}
-        />
-        <RuleColumn
-          kind="exclude"
-          icon={<Ban size={16} style={{ color: '#991b1b' }} />}
-          title="Always exclude"
-          accent="#991b1b"
-          accentBg="#fef2f2"
-          accentBorder="#fecaca"
-          placeholder="e.g. consulting firms"
-          rules={excludes}
-          refresh={refresh}
-        />
-      </div>
-    </div>
-  );
-}
-
-function RuleColumn({
-  kind, icon, title, accent, accentBg, accentBorder, placeholder, rules, refresh
-}: {
-  kind: 'include' | 'exclude';
-  icon: React.ReactNode;
-  title: string;
-  accent: string;
-  accentBg: string;
-  accentBorder: string;
-  placeholder: string;
-  rules: ScanRule[];
-  refresh: () => void;
-}) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const add = async () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    try {
-      await window.lh.rules.create({ kind, text: trimmed });
-      setText('');
-      refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, color: accent, fontWeight: 600, fontSize: 14 }}>
-        {icon} {title}
-        <span style={{ marginLeft: 'auto', color: '#6b7280', fontWeight: 400, fontSize: 12 }}>
-          {rules.length} rule{rules.length === 1 ? '' : 's'}
-        </span>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
-        {rules.length === 0 && (
-          <div style={{ color: '#9ca3af', fontSize: 13, fontStyle: 'italic', padding: '4px 0' }}>
-            No rules yet.
-          </div>
-        )}
-        {rules.map((r) => (
-          <div
-            key={r.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '8px 10px',
-              borderRadius: 8,
-              background: r.enabled ? accentBg : '#f9fafb',
-              border: `1px solid ${r.enabled ? accentBorder : '#e5e7eb'}`,
-              opacity: r.enabled ? 1 : 0.6
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={!!r.enabled}
-              onChange={async () => {
-                await window.lh.rules.update(r.id, { enabled: r.enabled ? 0 : 1 });
-                refresh();
-              }}
-              title={r.enabled ? 'Active' : 'Paused'}
-            />
-            <div style={{ flex: 1, fontSize: 13, color: '#1f2937', lineHeight: 1.45 }}>{r.text}</div>
-            <button
-              onClick={async () => {
-                if (confirm('Delete this rule?')) {
-                  await window.lh.rules.delete(r.id);
-                  refresh();
-                }
-              }}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}
-              title="Delete"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input
-          className="input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) add(); }}
-          placeholder={placeholder}
-          style={{ flex: 1 }}
-        />
-        <button
-          className="btn-ghost"
-          onClick={add}
-          disabled={!text.trim() || busy}
-          style={{ whiteSpace: 'nowrap' }}
-        >
-          <Plus size={14} style={{ display: 'inline', marginRight: 4, verticalAlign: '-2px' }} />
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function ProductSignals({
   product, brandName, onToggle
 }: { product: Product; brandName: string; onToggle: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [rules, setRules] = useState<ScanRule[]>([]);
   const signalLines = parseBullets(product.signals || '');
   const enabled = product.scan_enabled === 1;
+
+  const loadRules = async () => setRules(await window.lh.rules.list(product.id));
+  useEffect(() => { if (expanded) loadRules(); }, [expanded]);
+
+  const includes = rules.filter((r) => r.kind === 'include');
+  const excludes = rules.filter((r) => r.kind === 'exclude');
 
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14, background: enabled ? 'white' : '#fafafa' }}>
@@ -334,8 +187,10 @@ function ProductSignals({
           </div>
         </button>
       </div>
+
       {expanded && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
+          <div className="label" style={{ marginBottom: 6 }}>Signals to watch for</div>
           {signalLines.length === 0 ? (
             <div style={{ color: '#6b7280', fontSize: 13 }}>No signals captured. Try re-running research.</div>
           ) : (
@@ -345,11 +200,152 @@ function ProductSignals({
               ))}
             </ul>
           )}
-          <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-            To edit these signals, go to <b>Brands & Products</b> → re-run research, or update the product's research dossier directly.
+          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+            To change these signals, go to <b>Brands & Products</b> and re-run research.
+          </div>
+
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #e5e7eb' }}>
+            <div className="label" style={{ marginBottom: 4 }}>Scan guidance for this product</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+              Hard constraints applied whenever LeadsHawk scans for <b>{product.name}</b>.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <RuleColumn
+                productId={product.id}
+                kind="include"
+                icon={<CheckCircle2 size={15} style={{ color: '#065f46' }} />}
+                title="Always include"
+                accent="#065f46"
+                accentBg="#ecfdf5"
+                accentBorder="#a7f3d0"
+                placeholder="e.g. publicly traded companies only"
+                rules={includes}
+                refresh={loadRules}
+              />
+              <RuleColumn
+                productId={product.id}
+                kind="exclude"
+                icon={<Ban size={15} style={{ color: '#991b1b' }} />}
+                title="Always exclude"
+                accent="#991b1b"
+                accentBg="#fef2f2"
+                accentBorder="#fecaca"
+                placeholder="e.g. consulting firms"
+                rules={excludes}
+                refresh={loadRules}
+              />
+            </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function RuleColumn({
+  productId, kind, icon, title, accent, accentBg, accentBorder, placeholder, rules, refresh
+}: {
+  productId: number;
+  kind: 'include' | 'exclude';
+  icon: React.ReactNode;
+  title: string;
+  accent: string;
+  accentBg: string;
+  accentBorder: string;
+  placeholder: string;
+  rules: ScanRule[];
+  refresh: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await window.lh.rules.create({ productId, kind, text: trimmed });
+      setText('');
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, color: accent, fontWeight: 600, fontSize: 13 }}>
+        {icon} {title}
+        <span style={{ marginLeft: 'auto', color: '#6b7280', fontWeight: 400, fontSize: 12 }}>
+          {rules.length}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+        {rules.length === 0 && (
+          <div style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic', padding: '2px 0' }}>
+            No rules yet.
+          </div>
+        )}
+        {rules.map((r) => (
+          <div
+            key={r.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '7px 9px',
+              borderRadius: 8,
+              background: r.enabled ? accentBg : '#f9fafb',
+              border: `1px solid ${r.enabled ? accentBorder : '#e5e7eb'}`,
+              opacity: r.enabled ? 1 : 0.6
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!r.enabled}
+              onChange={async () => {
+                await window.lh.rules.update(r.id, { enabled: r.enabled ? 0 : 1 });
+                refresh();
+              }}
+              title={r.enabled ? 'Active' : 'Paused'}
+            />
+            <div style={{ flex: 1, fontSize: 13, color: '#1f2937', lineHeight: 1.4 }}>{r.text}</div>
+            <button
+              onClick={async () => {
+                if (confirm('Delete this rule?')) {
+                  await window.lh.rules.delete(r.id);
+                  refresh();
+                }
+              }}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2 }}
+              title="Delete"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          className="input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) add(); }}
+          placeholder={placeholder}
+          style={{ flex: 1, fontSize: 13 }}
+        />
+        <button
+          className="btn-ghost"
+          onClick={add}
+          disabled={!text.trim() || busy}
+          style={{ whiteSpace: 'nowrap' }}
+        >
+          <Plus size={14} style={{ display: 'inline', marginRight: 4, verticalAlign: '-2px' }} />
+          Add
+        </button>
+      </div>
     </div>
   );
 }

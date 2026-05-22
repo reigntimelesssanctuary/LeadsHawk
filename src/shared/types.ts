@@ -4,6 +4,7 @@ export type Brand = {
   description: string | null;
   positioning: string | null;
   competitive_summary: string | null;
+  scan_enabled: number; // 0 | 1 — when 0, all of this brand's products are excluded from scans
   created_at: string;
   updated_at: string;
 };
@@ -48,6 +49,7 @@ export type SignalSource = {
 
 export type ScanRule = {
   id: number;
+  product_id: number;
   kind: 'include' | 'exclude';
   text: string;
   enabled: number;

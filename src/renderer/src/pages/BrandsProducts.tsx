@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
 import { Modal } from '../components/Modal';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw } from 'lucide-react';
+import { Switch } from '../components/Switch';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2 } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
 export function BrandsProducts() {
@@ -142,8 +143,20 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
             <div className="h-section">{brand.name}</div>
             <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{brand.description || 'No description yet.'}</div>
           </div>
-          <button className="btn-danger" onClick={deleteBrand}>Delete</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <Switch
+              checked={brand.scan_enabled === 1}
+              label="Include in scans"
+              onChange={async (v) => { await window.lh.brands.setScanEnabled(brand.id, v); onChanged(); }}
+            />
+            <button className="btn-danger" onClick={deleteBrand}>Delete</button>
+          </div>
         </div>
+        {brand.scan_enabled !== 1 && (
+          <div style={{ marginTop: 14, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, color: '#991b1b' }}>
+            This brand is excluded from job scans — none of its products will be scanned, regardless of their individual toggles.
+          </div>
+        )}
         {brand.competitive_summary && (
           <div style={{ marginTop: 16, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937' }}>
             <div className="label" style={{ marginBottom: 6 }}>Competitive Summary</div>
@@ -162,13 +175,19 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
         {products.length === 0 && <div style={{ color: '#6b7280', fontSize: 13 }}>No products yet.</div>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {products.map((p) => (
-            <div key={p.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14 }}>
+            <div key={p.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14, background: p.scan_enabled === 1 ? 'white' : '#fafafa' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600 }}>{p.name}{p.category ? <span style={{ color: '#6b7280', fontWeight: 400 }}> — {p.category}</span> : null}</div>
                   <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{p.description || 'No description.'}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <Switch
+                    checked={p.scan_enabled === 1 && brand.scan_enabled === 1}
+                    disabled={brand.scan_enabled !== 1}
+                    label="Scan"
+                    onChange={async (v) => { await window.lh.products.setScanEnabled(p.id, v); refresh(); }}
+                  />
                   <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id}>
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}

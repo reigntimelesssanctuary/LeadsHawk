@@ -84,7 +84,17 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                 </tr>
               ) : (
                 opps.map((o) => (
-                  <OppRow key={o.id} opp={o} onOpen={() => onOpenOpp(o.id)} />
+                  <OppRow
+                    key={o.id}
+                    opp={o}
+                    onOpen={() => onOpenOpp(o.id)}
+                    onDelete={async () => {
+                      if (confirm(`Delete the opportunity for ${o.company}? This cannot be undone.`)) {
+                        await window.lh.opps.delete(o.id);
+                        await refresh();
+                      }
+                    }}
+                  />
                 ))
               )}
             </tbody>
@@ -95,7 +105,9 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   );
 }
 
-function OppRow({ opp, onOpen }: { opp: Opportunity; onOpen: () => void }) {
+function OppRow({
+  opp, onOpen, onDelete
+}: { opp: Opportunity; onOpen: () => void; onDelete: () => void }) {
   const [brandName, setBrandName] = useState<string>('—');
   const [productName, setProductName] = useState<string>('—');
   useEffect(() => {
@@ -121,9 +133,10 @@ function OppRow({ opp, onOpen }: { opp: Opportunity; onOpen: () => void }) {
         <span className="chip chip-muted">{Math.round((opp.confidence || 0) * 100)}%</span>
       </td>
       <td style={{ maxWidth: 360 }}>{opp.signal_summary}</td>
-      <td>
+      <td style={{ whiteSpace: 'nowrap' }}>
         <button className="btn-ghost" onClick={onOpen}>View</button>{' '}
-        <button className="btn-ghost" onClick={() => openExternal(opp.source_url)}>Source</button>
+        <button className="btn-ghost" onClick={() => openExternal(opp.source_url)}>Source</button>{' '}
+        <button className="btn-danger" onClick={onDelete}>Delete</button>
       </td>
     </tr>
   );

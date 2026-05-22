@@ -80,6 +80,12 @@ export function registerIpc() {
     db.prepare('DELETE FROM brands WHERE id = ?').run(id);
     return true;
   });
+  ipcMain.handle('brands:setScanEnabled', (_e, id: number, enabled: boolean) => {
+    db.prepare(
+      "UPDATE brands SET scan_enabled = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(enabled ? 1 : 0, id);
+    return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
+  });
 
   // -------- Products --------
   ipcMain.handle('products:list', (_e, brandId?: number) => {
@@ -126,6 +132,7 @@ export function registerIpc() {
     return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   });
   ipcMain.handle('products:delete', (_e, id: number) => {
+    db.prepare('DELETE FROM scan_rules WHERE product_id = ?').run(id);
     db.prepare('DELETE FROM products WHERE id = ?').run(id);
     return true;
   });
@@ -219,14 +226,16 @@ export function registerIpc() {
     return true;
   });
 
-  // -------- Scan Rules (include / exclude guardrails) --------
-  ipcMain.handle('rules:list', () =>
-    db.prepare('SELECT * FROM scan_rules ORDER BY kind, id').all() as ScanRule[]
+  // -------- Scan Rules (per-product include / exclude guardrails) --------
+  ipcMain.handle('rules:list', (_e, productId: number) =>
+    db
+      .prepare('SELECT * FROM scan_rules WHERE product_id = ? ORDER BY kind, id')
+      .all(productId) as ScanRule[]
   );
-  ipcMain.handle('rules:create', (_e, payload: { kind: 'include' | 'exclude'; text: string }) => {
+  ipcMain.handle('rules:create', (_e, payload: { productId: number; kind: 'include' | 'exclude'; text: string }) => {
     const info = db.prepare(
-      'INSERT INTO scan_rules(kind, text, enabled) VALUES (?, ?, 1)'
-    ).run(payload.kind, payload.text);
+      'INSERT INTO scan_rules(product_id, kind, text, enabled) VALUES (?, ?, ?, 1)'
+    ).run(payload.productId, payload.kind, payload.text);
     return db.prepare('SELECT * FROM scan_rules WHERE id = ?').get(info.lastInsertRowid);
   });
   ipcMain.handle('rules:update', (_e, id: number, payload: Partial<ScanRule>) => {
@@ -267,6 +276,11 @@ export function registerIpc() {
   ipcMain.handle('opps:setStatus', (_e, id: number, status: string) => {
     db.prepare('UPDATE opportunities SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
     return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id);
+  });
+  ipcMain.handle('opps:delete', (_e, id: number) => {
+    db.prepare('DELETE FROM dispatch_log WHERE opportunity_id = ?').run(id);
+    db.prepare('DELETE FROM opportunities WHERE id = ?').run(id);
+    return true;
   });
   ipcMain.handle('opps:brief', async (_e, id: number) => buildBrief(id));
   ipcMain.handle('opps:dispatch', async (_e, id: number, target: string, payload: string) => {

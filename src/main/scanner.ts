@@ -3,11 +3,11 @@ import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
-function buildGuardrails(): string {
+function buildGuardrails(productId: number): string {
   const db = getDb();
   const rules = db
-    .prepare("SELECT * FROM scan_rules WHERE enabled = 1 ORDER BY kind, id")
-    .all() as ScanRule[];
+    .prepare("SELECT * FROM scan_rules WHERE product_id = ? AND enabled = 1 ORDER BY kind, id")
+    .all(productId) as ScanRule[];
   if (rules.length === 0) return '';
   const includes = rules.filter((r) => r.kind === 'include');
   const excludes = rules.filter((r) => r.kind === 'exclude');
@@ -116,13 +116,21 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
 
     const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
     const allProducts = db.prepare('SELECT * FROM products').all() as Product[];
+    const enabledBrandIds = new Set(
+      brands.filter((b) => b.scan_enabled === 1).map((b) => b.id)
+    );
     const scanProducts = allProducts.filter(
-      (p) => p.research_status === 'ready' && p.scan_enabled === 1 && p.signals && p.signals.trim().length > 0
+      (p) =>
+        p.research_status === 'ready' &&
+        p.scan_enabled === 1 &&
+        enabledBrandIds.has(p.brand_id) &&
+        p.signals &&
+        p.signals.trim().length > 0
     );
 
     if (scanProducts.length === 0) {
       throw new Error(
-        'No products are ready to scan. Run research on at least one product and make sure it has scanning enabled.'
+        'No products are ready to scan. Run research on at least one product, and make sure both the product and its brand are included in scans (Brands & Products tab).'
       );
     }
 
@@ -137,8 +145,6 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
     `);
 
     const perProduct = scanQuotaPerProduct();
-    const guardrails = buildGuardrails();
-    if (guardrails) log(`Applying user-defined scan rules (${guardrails.split('\n').filter(l => l.startsWith('- ')).length} rule(s))`);
 
     // ─────────────────────────────────────────────────────────────
     // Pass 1 — auto signals from each researched product
@@ -147,6 +153,12 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
       const brand = brands.find((b) => b.id === product.brand_id);
       if (!brand) continue;
       log(`Product scan: ${brand.name} / ${product.name}`);
+
+      const guardrails = buildGuardrails(product.id);
+      if (guardrails) {
+        const ruleCount = guardrails.split('\n').filter((l) => l.startsWith('- ')).length;
+        log(`  applying ${ruleCount} include/exclude rule(s) for this product`);
+      }
 
       const prompt = `# Product to find opportunities for
 Brand: ${brand.name}
@@ -228,8 +240,6 @@ ${topic}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
-
-${guardrails}
 
 # Task
 Search the live web for RECENT events matching this topic that represent a

@@ -31,6 +31,7 @@ function migrate(db: Database.Database) {
       description TEXT,
       positioning TEXT,
       competitive_summary TEXT,
+      scan_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -130,6 +131,7 @@ function migrate(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS scan_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER,
       kind TEXT NOT NULL,
       text TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -143,6 +145,8 @@ function migrate(db: Database.Database) {
 
   // Idempotent column additions for upgrade-in-place
   addColumnIfMissing(db, 'products', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'brands', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing(db, 'scan_rules', 'product_id', 'INTEGER');
 }
 
 function addColumnIfMissing(
