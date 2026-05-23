@@ -180,6 +180,23 @@ function migrate(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_items_status ON signal_items(status);
     CREATE INDEX IF NOT EXISTS idx_items_fetched ON signal_items(fetched_at);
+    CREATE INDEX IF NOT EXISTS idx_items_source ON signal_items(source_id);
+
+    -- v1.2 -----------------------------------------------------
+    -- Every external LLM call is logged here. Used by the Spend dashboard.
+    CREATE TABLE IF NOT EXISTS api_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,           -- 'perplexity' | 'anthropic'
+      model TEXT NOT NULL,
+      stage TEXT NOT NULL,              -- LlmStage values from pricing.ts
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      related_id INTEGER,                -- opportunity_id, item_id, product_id, etc.
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_calls_created ON api_calls(created_at);
+    CREATE INDEX IF NOT EXISTS idx_api_calls_stage   ON api_calls(stage);
   `);
 
   // Idempotent column additions for upgrade-in-place
@@ -187,6 +204,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'brands', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
   addColumnIfMissing(db, 'scan_rules', 'product_id', 'INTEGER');
   addColumnIfMissing(db, 'products', 'signal_embeddings', 'TEXT'); // JSON [{text, embedding[]}]
+  // v1.2: optional one-line user explanation on Disqualify.
+  addColumnIfMissing(db, 'opportunities', 'disqualify_reason', 'TEXT');
 }
 
 function addColumnIfMissing(

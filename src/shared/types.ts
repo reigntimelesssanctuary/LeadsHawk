@@ -93,8 +93,30 @@ export type Opportunity = {
   angle: string | null;
   signal_summary: string | null;
   raw_signal: string | null;
+  disqualify_reason: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type SpendSummary = {
+  today: number;
+  last7d: number;
+  last30d: number;
+  byStage: Array<{ stage: string; calls: number; cost: number }>;
+  byModel: Array<{ model: string; calls: number; cost: number }>;
+};
+
+export type SourceHealth = {
+  id: number;
+  name: string;
+  enabled: number;
+  last_polled_at: string | null;
+  last_status: string | null;
+  poll_interval_seconds: number;
+  ingested7d: number;
+  candidates7d: number;
+  strong7d: number;
+  qualified7d: number;
 };
 
 export type DashboardStats = {

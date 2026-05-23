@@ -115,7 +115,9 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
       model: settings.perplexityScanModel || 'sonar-pro',
       maxTokens: 2500,
       temperature: 0.2,
-      jsonSchema: SCHEMA
+      jsonSchema: SCHEMA,
+      stage: 'qualify',
+      relatedId: item.id
     });
   } catch (e: any) {
     return { kind: 'rejected', reason: `perplexity error: ${e?.message || e}` };

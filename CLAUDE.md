@@ -545,6 +545,13 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.2.0 (2026-05-23):** Spend & Health release. Four architect-flagged improvements ship together:
+
+1. **Spend tracking.** New `api_calls` table logs every external LLM call (provider, model, stage, tokens, estimated USD). Pricing constants live in `src/main/pricing.ts` and are easy to update. Logging is fail-open via `src/main/spend.ts → recordApiCall()`. `completePerplexity` (`perplexity.ts`), `complete` (`llm.ts`), and the direct Anthropic call in `monitor/triage.ts` all take an optional `stage` + `relatedId` and log automatically. Every existing caller is tagged: `research` / `brand_summary` / `refresh_signals` / `manual_scan` / `triage` / `qualify` / `brief`. Settings has a new top "Spend" card (today / 7d / 30d totals + breakdown by stage). Live Monitor header has a "$X.XX today" badge.
+2. **Refresh-signals.** `refreshProductSignals(id)` in `research.ts` re-derives just the buying-signal list using `sonar-pro` + a 1500-token schema (~10× cheaper than full deep research), then re-embeds. UI button appears on every researched product card.
+3. **Source health.** `monitor:sources:health` IPC returns per-source 7d funnel counts (ingested / candidates / strong / opportunities) joined from `signal_items`. Live Monitor's Sources table now has four right-aligned numeric columns + a "low yield" badge when a feed has ≥20 ingested but 0 qualified in 7d. Added `idx_items_source` index.
+4. **Disqualify reason.** New `opportunities.disqualify_reason` column. OpportunityDetail's Disqualify button now opens a native prompt for an optional one-liner; if set, it's shown in a red banner on the detail page. Stored for v1.3's learning loop. New `opps:disqualify(id, reason?)` IPC; the existing `opps:setStatus` is untouched (used by Qualify/Archive).
+
 ## 8. Conventions worth keeping
 
 - **Synchronous SQLite.** `better-sqlite3` is sync; do *not* await its calls.

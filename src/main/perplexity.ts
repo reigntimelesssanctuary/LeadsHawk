@@ -1,4 +1,6 @@
 import { getSettings } from './settings.js';
+import { recordApiCall } from './spend.js';
+import type { LlmStage } from './pricing.js';
 
 const PPLX_URL = 'https://api.perplexity.ai/chat/completions';
 
@@ -13,6 +15,10 @@ export type PplxOptions = {
   jsonSchema?: Record<string, any>;
   /** Domain allowlist for search (max 10) */
   searchDomainFilter?: string[];
+  /** Telemetry: which pipeline stage spent this token budget. */
+  stage?: LlmStage;
+  /** Telemetry: opportunity_id / item_id / product_id this call relates to. */
+  relatedId?: number | null;
 };
 
 export type PplxResponse<T = unknown> = {
@@ -86,11 +92,22 @@ export async function completePerplexity<T = unknown>(
     json = tryParseJson<T>(text);
   }
 
+  // Telemetry: log spend for this call (fail-open).
+  const usage = data?.usage ?? null;
+  recordApiCall({
+    provider: 'perplexity',
+    model: body.model,
+    stage: opts.stage ?? 'unknown',
+    inputTokens: Number(usage?.prompt_tokens ?? 0),
+    outputTokens: Number(usage?.completion_tokens ?? 0),
+    relatedId: opts.relatedId ?? null
+  });
+
   return {
     text,
     json,
     citations,
-    usage: data?.usage ?? null,
+    usage,
     raw: data
   };
 }

@@ -38,7 +38,7 @@ Produce:
 ## Recommended approach
 ## Talking points (3-5 bullets)
 ## Draft outreach email (subject + 120 words max)`;
-  return complete(SYSTEM, prompt, { maxTokens: 1400 });
+  return complete(SYSTEM, prompt, { maxTokens: 1400, stage: 'brief', relatedId: opportunityId });
 }
 
 export function recordDispatch(opportunityId: number, target: string, payload: string) {

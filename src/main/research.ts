@@ -105,7 +105,9 @@ result as JSON matching the schema you've been given.`;
       model: perplexityResearchModel || 'sonar-deep-research',
       maxTokens: 6000,
       temperature: 0.15,
-      jsonSchema: RESEARCH_SCHEMA
+      jsonSchema: RESEARCH_SCHEMA,
+      stage: 'research',
+      relatedId: productId
     });
 
     if (!json) {
@@ -152,7 +154,9 @@ fluff. Plain prose, no markdown headings.`;
       const { text: brandSummary } = await completePerplexity(SYSTEM, brandPrompt, {
         model: perplexityResearchModel || 'sonar-deep-research',
         maxTokens: 700,
-        temperature: 0.2
+        temperature: 0.2,
+        stage: 'brand_summary',
+        relatedId: brand.id
       });
       if (brandSummary) {
         db.prepare(
@@ -168,6 +172,90 @@ fluff. Plain prose, no markdown headings.`;
     db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('error', productId);
     throw e;
   }
+}
+
+/**
+ * Lightweight signals-only refresh. Reuses the existing dossier as context
+ * instead of doing fresh deep web research, so it runs on the cheaper
+ * `sonar-pro` model with a much smaller token budget (~10x cheaper than
+ * researchProduct). Re-embeds the new signals afterwards so the live
+ * monitor's pre-filter sees them immediately.
+ *
+ * Use this when you've tweaked the product description / category and want
+ * the buying-signal list re-derived without paying for full re-research.
+ */
+export async function refreshProductSignals(productId: number): Promise<Product> {
+  const db = getDb();
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product | undefined;
+  if (!product) throw new Error('Product not found');
+  if (product.research_status !== 'ready') {
+    throw new Error('Run full research first before refreshing signals.');
+  }
+  const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(product.brand_id) as Brand;
+
+  const SIGNALS_SCHEMA = {
+    type: 'object',
+    required: ['signals'],
+    properties: {
+      signals: {
+        type: 'string',
+        description:
+          "Markdown bulleted list of concrete news/event signals (lines starting with '- ') that indicate a buying opportunity for this product."
+      }
+    }
+  };
+
+  const prompt = `# Brand
+${brand.name} — ${brand.description || ''}
+
+# Product
+Name: ${product.name}
+Category: ${product.category || ''}
+Description: ${product.description || ''}
+
+# Existing dossier context
+Use cases:
+${product.use_cases || '(none)'}
+
+Differentiators:
+${product.differentiators || '(none)'}
+
+Existing signals (for reference — refresh them, don't just copy):
+${product.signals || '(none)'}
+
+# Task
+Re-derive a fresh list of buying-signal bullets for this product. Lean on
+live web search to incorporate anything that's changed in the market over
+the last few weeks. Return JSON matching the schema.`;
+
+  const { perplexityScanModel } = getSettings();
+  const { json } = await completePerplexity<{ signals: string }>(
+    'You are a senior B2B competitive-intelligence analyst. You produce sharp, concrete buying-signal lists.',
+    prompt,
+    {
+      model: perplexityScanModel || 'sonar-pro',
+      maxTokens: 1500,
+      temperature: 0.2,
+      jsonSchema: SIGNALS_SCHEMA,
+      stage: 'refresh_signals',
+      relatedId: productId
+    }
+  );
+
+  if (!json || !json.signals) {
+    throw new Error('Perplexity returned an unparseable response. Try again.');
+  }
+
+  db.prepare(
+    "UPDATE products SET signals = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(json.signals, productId);
+
+  // Re-embed for the live monitor pre-filter.
+  await embedSignalsForProduct(productId).catch((e) => {
+    console.warn('[refreshProductSignals] embedding failed:', e?.message || e);
+  });
+
+  return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
 }
 
 export async function indexKnowledge(itemId: number): Promise<void> {

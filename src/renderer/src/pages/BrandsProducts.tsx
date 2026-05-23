@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
 import { Modal } from '../components/Modal';
 import { Switch } from '../components/Switch';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2 } from 'lucide-react';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
 export function BrandsProducts() {
@@ -144,6 +144,13 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
     finally { setBusy(null); }
   };
 
+  const refreshSignals = async (productId: number) => {
+    setBusy('refresh-' + productId);
+    try { await window.lh.products.refreshSignals(productId); await refresh(); onChanged(); }
+    catch (e: any) { alert(e.message); }
+    finally { setBusy(null); }
+  };
+
   const deleteBrand = async () => {
     if (!confirm(`Delete brand "${brand.name}" and all its products & knowledge?`)) return;
     await window.lh.brands.delete(brand.id);
@@ -203,10 +210,21 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                     label="Scan"
                     onChange={async (v) => { await window.lh.products.setScanEnabled(p.id, v); refresh(); }}
                   />
-                  <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id}>
+                  <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id || busy === 'refresh-' + p.id}>
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}
                   </button>
+                  {p.research_status === 'ready' && (
+                    <button
+                      className="btn-ghost"
+                      onClick={() => refreshSignals(p.id)}
+                      disabled={busy === 'refresh-' + p.id || busy === 'research-' + p.id}
+                      title="Quick update: keeps the dossier, only re-derives buying signals (~10x cheaper than full research)."
+                    >
+                      <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} />
+                      {busy === 'refresh-' + p.id ? 'Refreshing…' : 'Refresh signals'}
+                    </button>
+                  )}
                   <button className="btn-danger" onClick={async () => {
                     if (confirm(`Delete ${p.name}?`)) { await window.lh.products.delete(p.id); refresh(); }
                   }}><Trash2 size={13} /></button>

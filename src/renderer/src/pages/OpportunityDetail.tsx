@@ -25,6 +25,16 @@ export function OpportunityDetail({ id, onClose }: { id: number; onClose: () => 
     refresh();
   };
 
+  const disqualify = async () => {
+    const reason = window.prompt(
+      'Optional — why disqualify this lead?\n(Leave blank to just mark it; a one-liner helps LeadsHawk learn what to filter out next time.)',
+      ''
+    );
+    if (reason === null) return; // user pressed Cancel
+    await window.lh.opps.disqualify(id, reason);
+    refresh();
+  };
+
   const generateBrief = async () => {
     setGenerating(true);
     try {
@@ -54,12 +64,17 @@ export function OpportunityDetail({ id, onClose }: { id: number; onClose: () => 
               <span className={`chip chip-${opp.status}`}>{opp.status}</span>
               <span className="chip chip-muted">{Math.round((opp.confidence || 0) * 100)}% confidence</span>
             </div>
+            {opp.status === 'disqualified' && opp.disqualify_reason && (
+              <div style={{ marginTop: 12, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, color: '#991b1b' }}>
+                <span style={{ fontWeight: 600 }}>Disqualified:</span> {opp.disqualify_reason}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn-ghost" onClick={() => setStatus('qualified')}>
               <CheckCircle2 size={14} style={{ display: 'inline', marginRight: 4 }} /> Qualify
             </button>
-            <button className="btn-ghost" onClick={() => setStatus('disqualified')}>
+            <button className="btn-ghost" onClick={disqualify}>
               <XCircle size={14} style={{ display: 'inline', marginRight: 4 }} /> Disqualify
             </button>
             <button className="btn-ghost" onClick={() => setStatus('archived')}>

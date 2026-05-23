@@ -196,7 +196,9 @@ specific signal (from the list above) that this opportunity matches.`;
             maxTokens: 4500,
             temperature: 0.2,
             searchRecency: settings.scanRecency,
-            jsonSchema: OPPS_SCHEMA
+            jsonSchema: OPPS_SCHEMA,
+            stage: 'manual_scan',
+            relatedId: product.id
           }
         );
         json = r.json;
@@ -258,7 +260,9 @@ brand/product names that appear in our portfolio.`;
             maxTokens: 4500,
             temperature: 0.2,
             searchRecency: settings.scanRecency,
-            jsonSchema: OPPS_SCHEMA_CUSTOM
+            jsonSchema: OPPS_SCHEMA_CUSTOM,
+            stage: 'manual_scan',
+            relatedId: src.id
           });
           const opps = r.json?.opportunities || [];
           log(`  → ${opps.length} candidate(s) returned`);

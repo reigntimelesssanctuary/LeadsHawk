@@ -2,14 +2,15 @@ import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
 import { getDb, dataDir } from './db.js';
 import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
-import { researchProduct } from './research.js';
+import { researchProduct, refreshProductSignals } from './research.js';
 import { runScan } from './scanner.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
+import { getSpendSummary } from './spend.js';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning
 } from './monitor/index.js';
-import type { MonitorSource, SignalItem } from '@shared/types';
+import type { MonitorSource, SignalItem, SourceHealth } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
 import type {
@@ -153,6 +154,7 @@ export function registerIpc() {
     return true;
   });
   ipcMain.handle('products:research', async (_e, id: number) => researchProduct(id));
+  ipcMain.handle('products:refreshSignals', async (_e, id: number) => refreshProductSignals(id));
   ipcMain.handle('products:setScanEnabled', (_e, id: number, enabled: boolean) => {
     db.prepare(
       "UPDATE products SET scan_enabled = ?, updated_at = datetime('now') WHERE id = ?"
@@ -293,6 +295,16 @@ export function registerIpc() {
     db.prepare('UPDATE opportunities SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
     return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id);
   });
+  ipcMain.handle('opps:disqualify', (_e, id: number, reason?: string | null) => {
+    db.prepare(
+      `UPDATE opportunities
+       SET status = 'disqualified',
+           disqualify_reason = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`
+    ).run((reason ?? '').trim() || null, id);
+    return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id);
+  });
   ipcMain.handle('opps:delete', (_e, id: number) => {
     db.prepare('DELETE FROM dispatch_log WHERE opportunity_id = ?').run(id);
     db.prepare('DELETE FROM opportunities WHERE id = ?').run(id);
@@ -365,6 +377,25 @@ export function registerIpc() {
     db.prepare('DELETE FROM monitor_sources WHERE id = ?').run(id);
     return true;
   });
+  ipcMain.handle('monitor:sources:health', (): SourceHealth[] => {
+    // Per-source 7-day funnel: ingested → passed prefilter (candidate or further)
+    // → triaged strong → became opportunity. Joins through signal_items.
+    return db.prepare(`
+      SELECT
+        s.id, s.name, s.enabled, s.last_polled_at, s.last_status, s.poll_interval_seconds,
+        COALESCE(SUM(CASE WHEN i.fetched_at >= datetime('now','-7 days') THEN 1 ELSE 0 END), 0) AS ingested7d,
+        COALESCE(SUM(CASE WHEN i.fetched_at >= datetime('now','-7 days') AND i.status NOT IN ('filtered','new','embedded') THEN 1 ELSE 0 END), 0) AS candidates7d,
+        COALESCE(SUM(CASE WHEN i.fetched_at >= datetime('now','-7 days') AND i.status IN ('triaged_strong','qualified') THEN 1 ELSE 0 END), 0) AS strong7d,
+        COALESCE(SUM(CASE WHEN i.fetched_at >= datetime('now','-7 days') AND i.status = 'qualified' THEN 1 ELSE 0 END), 0) AS qualified7d
+      FROM monitor_sources s
+      LEFT JOIN signal_items i ON i.source_id = s.id
+      GROUP BY s.id
+      ORDER BY qualified7d DESC, strong7d DESC, ingested7d DESC
+    `).all() as SourceHealth[];
+  });
+
+  // -------- Spend --------
+  ipcMain.handle('spend:summary', () => getSpendSummary());
 }
 
 export function seedDefaults() {

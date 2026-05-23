@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSettings } from './settings.js';
+import { recordApiCall } from './spend.js';
+import type { LlmStage } from './pricing.js';
 
 export function getClient(): Anthropic {
   const { anthropicApiKey } = getSettings();
@@ -9,19 +11,35 @@ export function getClient(): Anthropic {
   return new Anthropic({ apiKey: anthropicApiKey });
 }
 
+type CompleteOpts = {
+  maxTokens?: number;
+  temperature?: number;
+  stage?: LlmStage;
+  relatedId?: number | null;
+};
+
 export async function complete(
   system: string,
   prompt: string,
-  opts: { maxTokens?: number; temperature?: number } = {}
+  opts: CompleteOpts = {}
 ): Promise<string> {
   const client = getClient();
   const { model } = getSettings();
+  const modelId = model || 'claude-opus-4-7';
   const resp = await client.messages.create({
-    model: model || 'claude-opus-4-7',
+    model: modelId,
     max_tokens: opts.maxTokens ?? 2000,
     temperature: opts.temperature ?? 0.2,
     system,
     messages: [{ role: 'user', content: prompt }]
+  });
+  recordApiCall({
+    provider: 'anthropic',
+    model: modelId,
+    stage: opts.stage ?? 'unknown',
+    inputTokens: Number((resp as any).usage?.input_tokens ?? 0),
+    outputTokens: Number((resp as any).usage?.output_tokens ?? 0),
+    relatedId: opts.relatedId ?? null
   });
   const parts = resp.content
     .filter((b: any) => b.type === 'text')
@@ -32,7 +50,7 @@ export async function complete(
 export async function completeJson<T = any>(
   system: string,
   prompt: string,
-  opts: { maxTokens?: number; temperature?: number } = {}
+  opts: CompleteOpts = {}
 ): Promise<T> {
   const raw = await complete(
     system + '\n\nAlways respond with strictly valid JSON only, no prose, no code fences.',

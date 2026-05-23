@@ -24,6 +24,7 @@ const api = {
     update: (id: number, p: any) => ipcRenderer.invoke('products:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('products:delete', id),
     research: (id: number) => ipcRenderer.invoke('products:research', id),
+    refreshSignals: (id: number) => ipcRenderer.invoke('products:refreshSignals', id),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('products:setScanEnabled', id, enabled)
   },
@@ -60,11 +61,16 @@ const api = {
     get: (id: number) => ipcRenderer.invoke('opps:get', id),
     setStatus: (id: number, status: string) =>
       ipcRenderer.invoke('opps:setStatus', id, status),
+    disqualify: (id: number, reason?: string | null) =>
+      ipcRenderer.invoke('opps:disqualify', id, reason ?? null),
     delete: (id: number) => ipcRenderer.invoke('opps:delete', id),
     deleteMany: (ids: number[]) => ipcRenderer.invoke('opps:deleteMany', ids),
     brief: (id: number) => ipcRenderer.invoke('opps:brief', id),
     dispatch: (id: number, target: string, payload: string) =>
       ipcRenderer.invoke('opps:dispatch', id, target, payload)
+  },
+  spend: {
+    summary: () => ipcRenderer.invoke('spend:summary')
   },
   openExternal: (url: string) => ipcRenderer.invoke('openExternal', url),
   monitor: {
@@ -77,7 +83,8 @@ const api = {
     sources: () => ipcRenderer.invoke('monitor:sources'),
     sourceCreate: (p: any) => ipcRenderer.invoke('monitor:sources:create', p),
     sourceUpdate: (id: number, p: any) => ipcRenderer.invoke('monitor:sources:update', id, p),
-    sourceDelete: (id: number) => ipcRenderer.invoke('monitor:sources:delete', id)
+    sourceDelete: (id: number) => ipcRenderer.invoke('monitor:sources:delete', id),
+    sourcesHealth: () => ipcRenderer.invoke('monitor:sources:health')
   },
   onNavigate: (cb: (data: { kind: string; id: number }) => void) => {
     ipcRenderer.on('navigate', (_e, data) => cb(data));

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSettings } from '../settings.js';
 import { getDb } from '../db.js';
+import { recordApiCall } from '../spend.js';
 import type { Brand, Product, SignalItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales analyst. You will be given ONE news /
@@ -30,13 +31,14 @@ function client(): Anthropic {
 }
 
 export async function triageItem(
-  item: Pick<SignalItem, 'title' | 'snippet' | 'url' | 'best_match_similarity'>,
+  item: Pick<SignalItem, 'id' | 'title' | 'snippet' | 'url' | 'best_match_similarity'>,
   product: Product,
   brand: Brand,
   matchedSignal: string
 ): Promise<TriageDecision> {
   const { triageModel } = getSettings();
   const c = client();
+  const modelId = triageModel || 'claude-sonnet-4-6';
 
   const prompt = `# Our product
 Brand: ${brand.name}
@@ -71,11 +73,19 @@ and concrete. "weak" means topical but a stretch. "rejected" means clearly
 unrelated or noise.`;
 
   const resp = await c.messages.create({
-    model: triageModel || 'claude-sonnet-4-6',
+    model: modelId,
     max_tokens: 250,
     temperature: 0.1,
     system: SYSTEM,
     messages: [{ role: 'user', content: prompt }]
+  });
+  recordApiCall({
+    provider: 'anthropic',
+    model: modelId,
+    stage: 'triage',
+    inputTokens: Number((resp as any).usage?.input_tokens ?? 0),
+    outputTokens: Number((resp as any).usage?.output_tokens ?? 0),
+    relatedId: (item as any).id ?? null
   });
   const text = resp.content
     .filter((b: any) => b.type === 'text')
