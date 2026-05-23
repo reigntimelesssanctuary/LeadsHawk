@@ -82,7 +82,7 @@ export function Settings() {
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Anthropic API</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          Used only by the <i>Generate brief</i> button on the Opportunity Detail page.
+          Used by the <i>Generate brief</i> button and by the Live Monitor's triage stage.
         </div>
         <label className="label">API Key</label>
         <input
@@ -93,12 +93,55 @@ export function Settings() {
           placeholder="sk-ant-…"
         />
         <div style={{ height: 12 }} />
-        <label className="label">Model</label>
+        <label className="label">Brief-generation model</label>
         <select className="select" value={s.model} onChange={(e) => setS({ ...s, model: e.target.value })}>
           <option value="claude-opus-4-7">claude-opus-4-7 (most capable)</option>
           <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
           <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
         </select>
+        <div style={{ height: 12 }} />
+        <label className="label">Live-monitor triage model</label>
+        <select className="select" value={s.triageModel} onChange={(e) => setS({ ...s, triageModel: e.target.value })}>
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (recommended)</option>
+          <option value="claude-opus-4-7">claude-opus-4-7 (more deliberate, costlier)</option>
+          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (cheapest, slightly noisier)</option>
+        </select>
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+          Used for the cheap yes/no triage on each candidate item before deep qualification.
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <div className="h-card" style={{ marginBottom: 6 }}>Live Monitor</div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          24/7 monitoring runs an ingestion → embedding filter → Claude triage → Perplexity qualify funnel. The on/off toggle lives on the Live Monitor page; tuning lives here.
+        </div>
+        <label className="label">Embedding similarity threshold</label>
+        <input
+          className="input"
+          type="number" step="0.05" min="0" max="1"
+          value={s.embedSimilarityThreshold}
+          onChange={(e) => setS({ ...s, embedSimilarityThreshold: Number(e.target.value) })}
+        />
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+          Items must score above this against at least one product signal to advance past the free local pre-filter. Lower = wider net, higher LLM cost.
+        </div>
+        <div style={{ height: 16 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={s.notifyOnNewOpportunity}
+            onChange={(e) => setS({ ...s, notifyOnNewOpportunity: e.target.checked })}
+          /> macOS notifications on new opportunities
+        </label>
+        <div style={{ height: 12 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={s.openAtLogin}
+            onChange={(e) => setS({ ...s, openAtLogin: e.target.checked })}
+          /> Start LeadsHawk automatically when you log in (recommended for 24/7 monitoring)
+        </label>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>

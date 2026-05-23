@@ -6,6 +6,30 @@ design choices baked in, and the user's collaboration preferences.
 
 ---
 
+## 0. v1.1 — Live Monitor architecture (added 2026-05-23)
+
+LeadsHawk now has a **4-stage funnel** that runs 24/7 instead of (or alongside) the cron-based scan. The funnel pushes expensive LLM calls to the very end so monitoring can scale without burning API credits:
+
+```
+[Sources]  →  [Pre-filter]      →  [Triage LLM]              →  [Deep qualify]
+ RSS/Atom     local embeddings    Claude Sonnet 4.6           Perplexity sonar-pro
+ free         free, on-device     ~$0.0001 per candidate      ~$0.02 per strong item
+```
+
+- **Stage 1 — Ingest** (`src/main/monitor/ingest.ts`): RSS/Atom poller with adaptive cadence + ETag / If-Modified-Since. Per-source poll intervals, exponential backoff on consecutive empty polls (up to 8×). Default seeded sources: TechCrunch Enterprise, Reuters Tech, The Register Networking, Dark Reading, three Google News queries (outages, CIO/CISO appointments, vulnerabilities), and SEC EDGAR 8-K. All raw items land in `signal_items` with status `'new'`.
+- **Stage 2 — Embed + filter** (`src/main/monitor/embed.ts`): `@huggingface/transformers` running `Xenova/all-MiniLM-L6-v2` (384-dim, ~22 MB) **on-device, free**. We pre-compute one embedding per signal bullet per product (`products.signal_embeddings` JSON column) at research time. Items are embedded on arrival, scored against every researched product's vector set via cosine similarity, and the best match is recorded. Items above `embedSimilarityThreshold` become `'candidate'`; below become `'filtered'`.
+- **Stage 3 — Triage** (`src/main/monitor/triage.ts`): Claude **Sonnet 4.6** call per candidate, scoped to the matched product. Returns `{decision: rejected|weak|strong, confidence, reason}`. Strong → continue; weak / rejected → tagged and stopped.
+- **Stage 4 — Qualify** (`src/main/monitor/qualify.ts`): Perplexity `sonar-pro` deep dive per `triaged_strong` item. Honors per-product `scan_rules`. Creates an `opportunities` row on success and fires a macOS native notification.
+
+Orchestrator (`src/main/monitor/index.ts`):
+- `startMonitor()` / `stopMonitor()` driven by `settings.liveMonitoringEnabled`.
+- Two interval timers: 60s for the source poll cycle, 30s for the pipeline cycle.
+- Pipeline processes up to 5 items per stage per cycle to avoid spiking CPU / API.
+- `getMonitorStatus()` returns funnel counts (last-24h) plus embedder readiness state.
+- Survives window-close on macOS (window-all-closed no longer quits); fully quits only via `app.quit()`.
+
+**Run loop:** when the app starts, if `settings.liveMonitoringEnabled` is true the monitor auto-resumes. Settings has an "Open at login" toggle that calls `app.setLoginItemSettings({ openAtLogin, openAsHidden: true })` so the user can have true 24/7 coverage as long as their Mac is on.
+
 ## 1. What LeadsHawk is
 
 A **Mac-native desktop app** that autonomously hunts corporate B2B sales
@@ -50,9 +74,13 @@ the news sources the user configures.
 | Icons | `lucide-react` |
 | Database | `better-sqlite3` (synchronous, stored under `app.getPath('userData')/data/leadshawk.db`) |
 | Settings | `electron-store` (`settings.json` in userData) |
-| LLM (research + scan) | **Perplexity API** (`sonar-deep-research`, `sonar-pro`) — direct `fetch` calls, no SDK |
-| LLM (sales brief) | `@anthropic-ai/sdk` (Claude) |
-| News discovery | Perplexity's built-in live web search (no separate RSS fetch). Legacy `rss-parser` is still installed but unused; the signal-source `kind` field is now informational only. |
+| LLM (research) | **Perplexity** `sonar-deep-research` |
+| LLM (cron scans + live-monitor deep qualify) | **Perplexity** `sonar-pro` |
+| LLM (live-monitor triage) | **Anthropic** `claude-sonnet-4-6` (per-candidate yes/no/strong) |
+| LLM (sales brief) | **Anthropic** Claude (default Opus 4.7) |
+| Embeddings (live-monitor pre-filter) | **`@huggingface/transformers`** running `all-MiniLM-L6-v2` on-device — no API |
+| News discovery (live monitor) | `rss-parser` over RSS/Atom + Google News RSS, with ETag/If-Modified-Since |
+| News discovery (cron scans) | Perplexity's built-in live web search |
 | Document parsing | `pdf-parse` (PDF), inline XML extraction for PPTX/DOCX via `yauzl` (optional), `node-html-parser` (HTML/URL) |
 | Scheduling | `node-cron` |
 | Build | `electron-vite` (separate main / preload / renderer Vite builds) |
@@ -90,16 +118,23 @@ LeadsHawk/
     ├── shared/
     │   └── types.ts               ← TypeScript types shared between main & renderer
     ├── main/                      ← Electron main process (Node)
-    │   ├── index.ts               ← App entry: creates BrowserWindow, wires IPC, starts scheduler
-    │   ├── db.ts                  ← SQLite open + migrations
+    │   ├── index.ts               ← App entry: BrowserWindow, IPC, scheduler, live monitor auto-resume
+    │   ├── db.ts                  ← SQLite open + migrations (incl. signal_items, monitor_sources, products.signal_embeddings)
     │   ├── settings.ts            ← electron-store wrapper for user settings
-    │   ├── llm.ts                 ← Anthropic client wrapper + completeJson() helper
+    │   ├── llm.ts                 ← Anthropic client wrapper (sales brief)
+    │   ├── perplexity.ts          ← Perplexity client (research + cron scans + deep qualify)
     │   ├── knowledge.ts           ← File extraction (PDF/PPTX/DOCX/TXT/HTML) + URL fetch+strip
-    │   ├── research.ts            ← Product research pipeline (calls LLM, persists dossier)
-    │   ├── scanner.ts             ← News fetch → URL dedupe → LLM qualify → store opportunity
+    │   ├── research.ts            ← Product research pipeline; triggers signal_embeddings refresh
+    │   ├── scanner.ts             ← Cron-based scan pipeline (Perplexity, per-product)
     │   ├── scheduler.ts           ← node-cron wrapper. Reads scanCron + scanEnabled from settings
     │   ├── dispatch.ts            ← Sales brief generator + dispatch log
-    │   └── ipc.ts                 ← All ipcMain.handle() endpoints + seedDefaults()
+    │   ├── ipc.ts                 ← All ipcMain.handle() endpoints + seedDefaults()
+    │   └── monitor/               ← v1.1 Live Monitor — the 4-stage funnel
+    │       ├── index.ts           ← orchestrator (start/stop, poll + pipeline timers, notifications)
+    │       ├── ingest.ts          ← adaptive RSS/Atom poller + default source seeding
+    │       ├── embed.ts           ← @huggingface/transformers wrapper + product signal vectors
+    │       ├── triage.ts          ← Claude Sonnet 4.6 yes/no/strong per candidate
+    │       └── qualify.ts         ← Perplexity sonar-pro deep dive per strong candidate
     ├── preload/
     │   └── index.ts               ← contextBridge exposing the `window.lh` API to the renderer
     └── renderer/                  ← React app (Vite root = this folder)
@@ -114,9 +149,11 @@ LeadsHawk/
             ├── components/
             │   ├── Sidebar.tsx    ← Dark sidebar with logo, nav, version footer
             │   ├── StatCard.tsx   ← Dashboard stat tile (label, big number, chip)
+            │   ├── Switch.tsx     ← Purple pill toggle (used in BrandsProducts, LiveMonitor)
             │   └── Modal.tsx      ← Generic modal dialog
             └── pages/
                 ├── Dashboard.tsx
+                ├── LiveMonitor.tsx ← v1.1 — on/off toggle, funnel counts, items, sources
                 ├── ScanJobs.tsx
                 ├── SignalConfig.tsx
                 ├── BrandDispatch.tsx

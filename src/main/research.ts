@@ -1,6 +1,7 @@
 import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
+import { embedSignalsForProduct } from './monitor/embed.js';
 import type { Product, Brand, KnowledgeItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B competitive-intelligence analyst conducting
@@ -124,6 +125,11 @@ result as JSON matching the schema you've been given.`;
       json.research_summary,
       productId
     );
+
+    // Fire-and-forget: recompute signal embeddings for live monitor use.
+    embedSignalsForProduct(productId).catch((e) => {
+      console.warn('[research] signal embedding failed for product', productId, e?.message || e);
+    });
 
     // Roll up a brand-level competitive summary using Perplexity too
     const brandPrompt = `Brand: ${brand.name}

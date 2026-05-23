@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Sidebar, Page } from './components/Sidebar';
 import { Dashboard } from './pages/Dashboard';
+import { LiveMonitor } from './pages/LiveMonitor';
 import { ScanJobs } from './pages/ScanJobs';
 import { SignalConfig } from './pages/SignalConfig';
 import { BrandDispatch } from './pages/BrandDispatch';
@@ -13,6 +14,15 @@ export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
   const [oppId, setOppId] = useState<number | null>(null);
 
+  // Native notification clicks ask us to deep-link into an opportunity.
+  useEffect(() => {
+    window.lh.onNavigate?.((data) => {
+      if (data.kind === 'opportunity' && typeof data.id === 'number') {
+        setOppId(data.id);
+      }
+    });
+  }, []);
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <Sidebar active={page} onNav={(p) => { setPage(p); setOppId(null); }} />
@@ -24,6 +34,7 @@ export default function App() {
           ) : (
             <>
               {page === 'dashboard' && <Dashboard onOpenOpp={(id) => setOppId(id)} />}
+              {page === 'monitor' && <LiveMonitor onOpenOpp={(id) => setOppId(id)} />}
               {page === 'scans' && <ScanJobs />}
               {page === 'signals' && <SignalConfig />}
               {page === 'dispatch' && <BrandDispatch onOpenOpp={(id) => setOppId(id)} />}

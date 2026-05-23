@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, BrowserWindow } from 'electron';
+import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
 import { getDb, dataDir } from './db.js';
 import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
@@ -6,6 +6,10 @@ import { researchProduct } from './research.js';
 import { runScan } from './scanner.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
+import {
+  startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning
+} from './monitor/index.js';
+import type { MonitorSource, SignalItem } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
 import type {
@@ -20,6 +24,18 @@ export function registerIpc() {
   ipcMain.handle('settings:update', (_e, patch) => {
     const s = updateSettings(patch);
     restartScheduler();
+    // React to live-monitoring toggle changes
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'liveMonitoringEnabled')) {
+      if (s.liveMonitoringEnabled) startMonitor();
+      else stopMonitor();
+    }
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'openAtLogin')) {
+      try {
+        app.setLoginItemSettings({ openAtLogin: !!s.openAtLogin, openAsHidden: true });
+      } catch (e) {
+        console.warn('setLoginItemSettings failed:', e);
+      }
+    }
     return s;
   });
 
@@ -290,6 +306,51 @@ export function registerIpc() {
 
   ipcMain.handle('openExternal', (_e, url: string) => {
     shell.openExternal(url);
+    return true;
+  });
+
+  // -------- Live Monitor --------
+  ipcMain.handle('monitor:status', () => getMonitorStatus());
+  ipcMain.handle('monitor:start', async () => { await startMonitor(); return getMonitorStatus(); });
+  ipcMain.handle('monitor:stop', () => { stopMonitor(); return getMonitorStatus(); });
+  ipcMain.handle('monitor:running', () => monitorRunning());
+  ipcMain.handle('monitor:log', () => getMonitorLog());
+  ipcMain.handle('monitor:items', (_e, limit?: number) =>
+    db
+      .prepare('SELECT * FROM signal_items ORDER BY fetched_at DESC LIMIT ?')
+      .all(limit ?? 100) as SignalItem[]
+  );
+  ipcMain.handle('monitor:sources', () =>
+    db.prepare('SELECT * FROM monitor_sources ORDER BY id').all() as MonitorSource[]
+  );
+  ipcMain.handle('monitor:sources:create', (_e, p: Partial<MonitorSource>) => {
+    const info = db.prepare(
+      `INSERT INTO monitor_sources(name, kind, url, config, enabled, poll_interval_seconds)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      p.name,
+      p.kind || 'rss',
+      p.url || '',
+      p.config ?? null,
+      p.enabled ?? 1,
+      p.poll_interval_seconds ?? 900
+    );
+    return db.prepare('SELECT * FROM monitor_sources WHERE id = ?').get(info.lastInsertRowid);
+  });
+  ipcMain.handle('monitor:sources:update', (_e, id: number, p: Partial<MonitorSource>) => {
+    db.prepare(
+      `UPDATE monitor_sources SET
+         name = COALESCE(?, name),
+         url = COALESCE(?, url),
+         enabled = COALESCE(?, enabled),
+         poll_interval_seconds = COALESCE(?, poll_interval_seconds),
+         config = COALESCE(?, config)
+       WHERE id = ?`
+    ).run(p.name ?? null, p.url ?? null, p.enabled ?? null, p.poll_interval_seconds ?? null, p.config ?? null, id);
+    return db.prepare('SELECT * FROM monitor_sources WHERE id = ?').get(id);
+  });
+  ipcMain.handle('monitor:sources:delete', (_e, id: number) => {
+    db.prepare('DELETE FROM monitor_sources WHERE id = ?').run(id);
     return true;
   });
 }

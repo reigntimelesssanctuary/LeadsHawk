@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { registerIpc, seedDefaults } from './ipc.js';
 import { startScheduler } from './scheduler.js';
+import { startMonitor, stopMonitor } from './monitor/index.js';
+import { getSettings } from './settings.js';
 import { getDb } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +46,10 @@ app.whenReady().then(() => {
   registerIpc();
   seedDefaults();
   startScheduler();
+  // Resume live monitor if the user had it on
+  if (getSettings().liveMonitoringEnabled) {
+    startMonitor().catch((e) => console.warn('monitor autostart failed:', e?.message || e));
+  }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -51,5 +57,14 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // On macOS, keep running in the background so the monitor stays alive
+  // even when the user closes the window. They can fully quit via the menu.
+  if (process.platform !== 'darwin') {
+    stopMonitor();
+    app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  stopMonitor();
 });

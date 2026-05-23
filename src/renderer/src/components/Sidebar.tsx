@@ -1,9 +1,9 @@
 import {
-  LayoutGrid, Clock, Filter, Send, Boxes, Archive, Settings as SettingsIcon
+  LayoutGrid, Clock, Filter, Send, Boxes, Archive, Settings as SettingsIcon, Radio
 } from 'lucide-react';
 
 export type Page =
-  | 'dashboard' | 'scans' | 'signals' | 'dispatch'
+  | 'dashboard' | 'monitor' | 'scans' | 'signals' | 'dispatch'
   | 'brands' | 'archive' | 'settings';
 
 export function Sidebar({
@@ -11,6 +11,7 @@ export function Sidebar({
 }: { active: Page; onNav: (p: Page) => void }) {
   const items: { id: Page; label: string; icon: any }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid },
+    { id: 'monitor', label: 'Live Monitor', icon: Radio },
     { id: 'scans', label: 'Scan Jobs', icon: Clock },
     { id: 'signals', label: 'Signal Config', icon: Filter },
     { id: 'dispatch', label: 'Brand Dispatch', icon: Send },

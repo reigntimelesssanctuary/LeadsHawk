@@ -141,12 +141,52 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_opps_status ON opportunities(status);
     CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
     CREATE INDEX IF NOT EXISTS idx_knowledge_brand ON knowledge_items(brand_id);
+
+    -- Live Monitor (v1.1) -------------------------------------
+    CREATE TABLE IF NOT EXISTS monitor_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'rss',
+      url TEXT NOT NULL,
+      config TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 900,
+      last_polled_at TEXT,
+      last_etag TEXT,
+      last_modified TEXT,
+      last_status TEXT,
+      last_error TEXT,
+      consecutive_empty_polls INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id INTEGER REFERENCES monitor_sources(id) ON DELETE SET NULL,
+      url TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      snippet TEXT,
+      content TEXT,
+      published_at TEXT,
+      fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+      status TEXT NOT NULL DEFAULT 'new',
+      best_match_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+      best_match_similarity REAL,
+      triage_result TEXT,
+      triage_confidence REAL,
+      opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE SET NULL,
+      error TEXT,
+      processed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_items_status ON signal_items(status);
+    CREATE INDEX IF NOT EXISTS idx_items_fetched ON signal_items(fetched_at);
   `);
 
   // Idempotent column additions for upgrade-in-place
   addColumnIfMissing(db, 'products', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
   addColumnIfMissing(db, 'brands', 'scan_enabled', 'INTEGER NOT NULL DEFAULT 1');
   addColumnIfMissing(db, 'scan_rules', 'product_id', 'INTEGER');
+  addColumnIfMissing(db, 'products', 'signal_embeddings', 'TEXT'); // JSON [{text, embedding[]}]
 }
 
 function addColumnIfMissing(

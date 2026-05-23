@@ -62,7 +62,22 @@ const api = {
     dispatch: (id: number, target: string, payload: string) =>
       ipcRenderer.invoke('opps:dispatch', id, target, payload)
   },
-  openExternal: (url: string) => ipcRenderer.invoke('openExternal', url)
+  openExternal: (url: string) => ipcRenderer.invoke('openExternal', url),
+  monitor: {
+    status: () => ipcRenderer.invoke('monitor:status'),
+    start: () => ipcRenderer.invoke('monitor:start'),
+    stop: () => ipcRenderer.invoke('monitor:stop'),
+    running: () => ipcRenderer.invoke('monitor:running'),
+    log: () => ipcRenderer.invoke('monitor:log'),
+    items: (limit?: number) => ipcRenderer.invoke('monitor:items', limit),
+    sources: () => ipcRenderer.invoke('monitor:sources'),
+    sourceCreate: (p: any) => ipcRenderer.invoke('monitor:sources:create', p),
+    sourceUpdate: (id: number, p: any) => ipcRenderer.invoke('monitor:sources:update', id, p),
+    sourceDelete: (id: number) => ipcRenderer.invoke('monitor:sources:delete', id)
+  },
+  onNavigate: (cb: (data: { kind: string; id: number }) => void) => {
+    ipcRenderer.on('navigate', (_e, data) => cb(data));
+  }
 };
 
 contextBridge.exposeInMainWorld('lh', api);

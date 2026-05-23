@@ -106,14 +106,80 @@ export type DashboardStats = {
 };
 
 export type Settings = {
-  anthropicApiKey: string;          // used for sales-brief generation only
+  anthropicApiKey: string;          // sales-brief generation + live-monitor triage
   model: string;                    // Claude model for sales-brief
-  perplexityApiKey: string;         // used for product research + autonomous scans
-  perplexityResearchModel: string;  // model for "Run research" — recommend sonar-deep-research
-  perplexityScanModel: string;      // model for scan jobs — recommend sonar-pro
+  triageModel: string;              // Claude model for live-monitor triage stage (default sonnet 4.6)
+  perplexityApiKey: string;         // research + scans + live-monitor deep qualify
+  perplexityResearchModel: string;
+  perplexityScanModel: string;
   scanRecency: 'day' | 'week' | 'month';
   scanCron: string;
   scanEnabled: boolean;
   minConfidence: number;
   maxItemsPerScan: number;
+  // Live monitor
+  liveMonitoringEnabled: boolean;
+  embedSimilarityThreshold: number;     // 0..1, default 0.55
+  notifyOnNewOpportunity: boolean;      // macOS notifications
+  openAtLogin: boolean;                  // start LeadsHawk when user logs in
+};
+
+export type MonitorSource = {
+  id: number;
+  name: string;
+  kind: 'rss' | 'google_news' | 'atom';
+  url: string;
+  config: string | null;
+  enabled: number;
+  poll_interval_seconds: number;
+  last_polled_at: string | null;
+  last_etag: string | null;
+  last_modified: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  consecutive_empty_polls: number;
+  created_at: string;
+};
+
+export type SignalItem = {
+  id: number;
+  source_id: number | null;
+  url: string;
+  title: string;
+  snippet: string | null;
+  content: string | null;
+  published_at: string | null;
+  fetched_at: string;
+  status:
+    | 'new'
+    | 'embedded'
+    | 'candidate'
+    | 'filtered'
+    | 'triaged_strong'
+    | 'triaged_weak'
+    | 'triaged_rejected'
+    | 'qualified'
+    | 'error';
+  best_match_product_id: number | null;
+  best_match_similarity: number | null;
+  triage_result: string | null;
+  triage_confidence: number | null;
+  opportunity_id: number | null;
+  error: string | null;
+  processed_at: string | null;
+};
+
+export type MonitorStatus = {
+  running: boolean;
+  sources: number;
+  enabledSources: number;
+  embedderReady: boolean;
+  embedderState: 'idle' | 'loading' | 'ready' | 'error';
+  embedderError: string | null;
+  last24h: {
+    ingested: number;
+    candidates: number;
+    triagedStrong: number;
+    qualified: number;
+  };
 };
