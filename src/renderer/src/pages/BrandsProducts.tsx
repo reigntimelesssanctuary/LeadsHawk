@@ -102,12 +102,18 @@ function AddBrandForm({ onDone }: { onDone: (b: Brand) => void }) {
   );
 }
 
+// noteTarget / linkTarget convention:
+//   false      → modal closed
+//   null       → modal open at brand-level
+//   <number>   → modal open at product-level (this product id)
+type ModalTarget = false | null | number;
+
 function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
   const [showAddProduct, setShowAddProduct] = useState(false);
-  const [showAddNote, setShowAddNote] = useState(false);
-  const [showAddLink, setShowAddLink] = useState(false);
+  const [noteTarget, setNoteTarget] = useState<ModalTarget>(false);
+  const [linkTarget, setLinkTarget] = useState<ModalTarget>(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = async () => {
@@ -116,11 +122,20 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
   };
   useEffect(() => { refresh(); }, [brand.id]);
 
-  const upload = async () => {
-    setBusy('upload');
-    try { await window.lh.knowledge.upload(brand.id); await refresh(); }
+  const upload = async (productId: number | null) => {
+    const key = productId === null ? 'upload' : `upload-${productId}`;
+    setBusy(key);
+    try { await window.lh.knowledge.upload(brand.id, productId); await refresh(); }
     finally { setBusy(null); }
   };
+
+  const brandKnowledge = knowledge.filter((k) => !k.product_id);
+  const knowledgeForProduct = (productId: number) =>
+    knowledge.filter((k) => k.product_id === productId);
+  const noteProductId = typeof noteTarget === 'number' ? noteTarget : null;
+  const linkProductId = typeof linkTarget === 'number' ? linkTarget : null;
+  const noteProduct = noteProductId ? products.find((p) => p.id === noteProductId) : null;
+  const linkProduct = linkProductId ? products.find((p) => p.id === linkProductId) : null;
 
   const research = async (productId: number) => {
     setBusy('research-' + productId);
@@ -209,59 +224,123 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                   </div>
                 </details>
               )}
+
+              {/* Product-level knowledge */}
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div className="label">Product knowledge</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn-ghost" onClick={() => upload(p.id)} disabled={busy === `upload-${p.id}`}>
+                      <FileText size={13} style={{ display: 'inline', marginRight: 4 }} />
+                      {busy === `upload-${p.id}` ? 'Uploading…' : 'Upload'}
+                    </button>
+                    <button className="btn-ghost" onClick={() => setLinkTarget(p.id)}>
+                      <Link2 size={13} style={{ display: 'inline', marginRight: 4 }} /> Add Link
+                    </button>
+                    <button className="btn-ghost" onClick={() => setNoteTarget(p.id)}>
+                      <NotebookPen size={13} style={{ display: 'inline', marginRight: 4 }} /> Add Note
+                    </button>
+                  </div>
+                </div>
+                {knowledgeForProduct(p.id).length === 0 ? (
+                  <div style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic' }}>
+                    Nothing attached yet — uploads / links / notes added here will be prioritised when running research for this product.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {knowledgeForProduct(p.id).map((k) => (
+                      <KnowledgeRow key={k.id} item={k} onDelete={async () => {
+                        if (confirm('Remove this item?')) { await window.lh.knowledge.delete(k.id); refresh(); }
+                      }} />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
       </div>
 
       <div className="card" style={{ padding: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div className="h-section">Knowledge Base</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div className="h-section">Brand-level Knowledge</div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn-ghost" onClick={upload} disabled={busy === 'upload'}>
+            <button className="btn-ghost" onClick={() => upload(null)} disabled={busy === 'upload'}>
               <FileText size={14} style={{ display: 'inline', marginRight: 4 }} />
               {busy === 'upload' ? 'Uploading…' : 'Upload Files'}
             </button>
-            <button className="btn-ghost" onClick={() => setShowAddLink(true)}>
+            <button className="btn-ghost" onClick={() => setLinkTarget(null)}>
               <Link2 size={14} style={{ display: 'inline', marginRight: 4 }} /> Add Link
             </button>
-            <button className="btn-ghost" onClick={() => setShowAddNote(true)}>
+            <button className="btn-ghost" onClick={() => setNoteTarget(null)}>
               <NotebookPen size={14} style={{ display: 'inline', marginRight: 4 }} /> Add Note
             </button>
           </div>
         </div>
-        {knowledge.length === 0 && <div style={{ color: '#6b7280', fontSize: 13 }}>No knowledge ingested. Upload PDFs/PPTs, link sources, or paste notes.</div>}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {knowledge.map((k) => (
-            <div key={k.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 8 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 500, fontSize: 14 }}>
-                  {k.kind === 'link' ? (
-                    <a onClick={() => openExternal(k.source)} style={{ cursor: 'pointer' }}>{k.title}</a>
-                  ) : k.title}
-                </div>
-                <div style={{ fontSize: 12, color: '#6b7280' }}>
-                  <span className="chip chip-muted" style={{ marginRight: 6 }}>{k.kind}</span>
-                  {fmtDateShort(k.created_at)} {k.kind === 'link' && '· ' + k.source}
-                </div>
-              </div>
-              <button className="btn-danger" onClick={async () => { if (confirm('Remove this item?')) { await window.lh.knowledge.delete(k.id); refresh(); } }}>
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          Material that applies to the whole brand. For product-specific material, use the “Product knowledge” section inside each product above.
         </div>
+        {brandKnowledge.length === 0 ? (
+          <div style={{ color: '#6b7280', fontSize: 13 }}>Nothing at brand level. Upload PDFs/PPTs, link sources, or paste notes.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {brandKnowledge.map((k) => (
+              <KnowledgeRow key={k.id} item={k} onDelete={async () => {
+                if (confirm('Remove this item?')) { await window.lh.knowledge.delete(k.id); refresh(); }
+              }} />
+            ))}
+          </div>
+        )}
       </div>
 
       <Modal open={showAddProduct} onClose={() => setShowAddProduct(false)} title="Add Product">
         <AddProductForm brandId={brand.id} onDone={async () => { setShowAddProduct(false); await refresh(); }} />
       </Modal>
-      <Modal open={showAddNote} onClose={() => setShowAddNote(false)} title="Add Knowledge Note">
-        <AddNoteForm brandId={brand.id} onDone={async () => { setShowAddNote(false); await refresh(); }} />
+      <Modal
+        open={noteTarget !== false}
+        onClose={() => setNoteTarget(false)}
+        title={noteProduct ? `Add Note — ${noteProduct.name}` : 'Add Brand-level Note'}
+      >
+        <AddNoteForm
+          brandId={brand.id}
+          productId={noteProductId}
+          productName={noteProduct?.name}
+          onDone={async () => { setNoteTarget(false); await refresh(); }}
+        />
       </Modal>
-      <Modal open={showAddLink} onClose={() => setShowAddLink(false)} title="Add Knowledge Link">
-        <AddLinkForm brandId={brand.id} onDone={async () => { setShowAddLink(false); await refresh(); }} />
+      <Modal
+        open={linkTarget !== false}
+        onClose={() => setLinkTarget(false)}
+        title={linkProduct ? `Add Link — ${linkProduct.name}` : 'Add Brand-level Link'}
+      >
+        <AddLinkForm
+          brandId={brand.id}
+          productId={linkProductId}
+          productName={linkProduct?.name}
+          onDone={async () => { setLinkTarget(false); await refresh(); }}
+        />
       </Modal>
+    </div>
+  );
+}
+
+function KnowledgeRow({ item, onDelete }: { item: KnowledgeItem; onDelete: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500, fontSize: 14 }}>
+          {item.kind === 'link' ? (
+            <a onClick={() => openExternal(item.source)} style={{ cursor: 'pointer' }}>{item.title}</a>
+          ) : item.title}
+        </div>
+        <div style={{ fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span className="chip chip-muted" style={{ marginRight: 6 }}>{item.kind}</span>
+          {fmtDateShort(item.created_at)} {item.kind === 'link' && '· ' + item.source}
+        </div>
+      </div>
+      <button className="btn-danger" onClick={onDelete}>
+        <Trash2 size={13} />
+      </button>
     </div>
   );
 }
@@ -299,11 +378,18 @@ function AddProductForm({ brandId, onDone }: { brandId: number; onDone: () => vo
   );
 }
 
-function AddNoteForm({ brandId, onDone }: { brandId: number; onDone: () => void }) {
+function AddNoteForm({
+  brandId, productId, productName, onDone
+}: { brandId: number; productId: number | null; productName?: string; onDone: () => void }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   return (
     <div>
+      {productName && (
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+          Attaching to product <b>{productName}</b>. This note will be prioritised when running research for it.
+        </div>
+      )}
       <label className="label">Title</label>
       <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
       <div style={{ height: 12 }} />
@@ -311,7 +397,7 @@ function AddNoteForm({ brandId, onDone }: { brandId: number; onDone: () => void 
       <textarea className="textarea" value={content} onChange={(e) => setContent(e.target.value)} style={{ minHeight: 200 }} />
       <div style={{ marginTop: 14, textAlign: 'right' }}>
         <button className="btn-primary" disabled={!title || !content} onClick={async () => {
-          await window.lh.knowledge.addNote({ brandId, title, content });
+          await window.lh.knowledge.addNote({ brandId, productId, title, content });
           onDone();
         }}>Save Note</button>
       </div>
@@ -319,12 +405,19 @@ function AddNoteForm({ brandId, onDone }: { brandId: number; onDone: () => void 
   );
 }
 
-function AddLinkForm({ brandId, onDone }: { brandId: number; onDone: () => void }) {
+function AddLinkForm({
+  brandId, productId, productName, onDone
+}: { brandId: number; productId: number | null; productName?: string; onDone: () => void }) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
     <div>
+      {productName && (
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+          Attaching to product <b>{productName}</b>.
+        </div>
+      )}
       <label className="label">URL</label>
       <input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" />
       <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>LeadsHawk will fetch the page and add it to the knowledge base.</div>
@@ -333,7 +426,7 @@ function AddLinkForm({ brandId, onDone }: { brandId: number; onDone: () => void 
         <button className="btn-primary" disabled={!url || busy} onClick={async () => {
           setBusy(true); setError(null);
           try {
-            await window.lh.knowledge.addLink({ brandId, url });
+            await window.lh.knowledge.addLink({ brandId, productId, url });
             onDone();
           } catch (e: any) { setError(e.message); }
           finally { setBusy(false); }

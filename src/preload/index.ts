@@ -29,9 +29,12 @@ const api = {
   },
   knowledge: {
     list: (brandId?: number) => ipcRenderer.invoke('knowledge:list', brandId),
-    addNote: (p: any) => ipcRenderer.invoke('knowledge:addNote', p),
-    addLink: (p: any) => ipcRenderer.invoke('knowledge:addLink', p),
-    upload: (brandId: number) => ipcRenderer.invoke('knowledge:upload', brandId),
+    addNote: (p: { brandId: number; productId?: number | null; title: string; content: string }) =>
+      ipcRenderer.invoke('knowledge:addNote', p),
+    addLink: (p: { brandId: number; productId?: number | null; url: string }) =>
+      ipcRenderer.invoke('knowledge:addLink', p),
+    upload: (brandId: number, productId?: number | null) =>
+      ipcRenderer.invoke('knowledge:upload', brandId, productId ?? null),
     delete: (id: number) => ipcRenderer.invoke('knowledge:delete', id)
   },
   sources: {
@@ -58,6 +61,7 @@ const api = {
     setStatus: (id: number, status: string) =>
       ipcRenderer.invoke('opps:setStatus', id, status),
     delete: (id: number) => ipcRenderer.invoke('opps:delete', id),
+    deleteMany: (ids: number[]) => ipcRenderer.invoke('opps:deleteMany', ids),
     brief: (id: number) => ipcRenderer.invoke('opps:brief', id),
     dispatch: (id: number, target: string, payload: string) =>
       ipcRenderer.invoke('opps:dispatch', id, target, payload)

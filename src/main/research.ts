@@ -56,14 +56,23 @@ export async function researchProduct(productId: number): Promise<Product> {
   db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('researching', productId);
 
   try {
+    // Pull this brand's knowledge, prioritising items tied to THIS product,
+    // then brand-level items, then items tied to OTHER products of the same brand.
     const knowledge = db
       .prepare(
         `SELECT * FROM knowledge_items
          WHERE (brand_id = ? OR brand_id IS NULL)
            AND status = 'indexed'
-         ORDER BY created_at DESC LIMIT 20`
+         ORDER BY
+           CASE
+             WHEN product_id = ? THEN 0
+             WHEN product_id IS NULL THEN 1
+             ELSE 2
+           END,
+           created_at DESC
+         LIMIT 20`
       )
-      .all(brand.id) as KnowledgeItem[];
+      .all(brand.id, productId) as KnowledgeItem[];
 
     const knowledgeBlob = knowledge
       .map(

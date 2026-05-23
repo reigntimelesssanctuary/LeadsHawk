@@ -16,6 +16,15 @@ LeadsHawk now has a **4-stage funnel** that runs 24/7 instead of (or alongside) 
  free         free, on-device     ~$0.0001 per candidate      ~$0.02 per strong item
 ```
 
+**Time-zone note for the Live Monitor "Fetched" column:** SQLite's
+`datetime('now')` writes UTC strings without a timezone marker — JS Date
+parses those as local time, which is wrong. `fmtDateSGT()` in `lib/api.ts`
+appends `'Z'` to bare SQLite datetimes and renders them in
+`Asia/Singapore` with `hour12: true` (AM/PM). Used on the Live Monitor
+table's Fetched column. Other date displays still use `fmtDate` /
+`fmtDateShort` (system locale, no forced zone) — if you need to fix those
+too, switch them to `fmtDateSGT` or generalise the helper.
+
 - **Stage 1 — Ingest** (`src/main/monitor/ingest.ts`): RSS/Atom poller with adaptive cadence + ETag / If-Modified-Since. Per-source poll intervals, exponential backoff on consecutive empty polls (up to 8×). Default seeded sources: TechCrunch Enterprise, Reuters Tech, The Register Networking, Dark Reading, three Google News queries (outages, CIO/CISO appointments, vulnerabilities), and SEC EDGAR 8-K. All raw items land in `signal_items` with status `'new'`.
 - **Stage 2 — Embed + filter** (`src/main/monitor/embed.ts`): `@huggingface/transformers` running `Xenova/all-MiniLM-L6-v2` (384-dim, ~22 MB) **on-device, free**. We pre-compute one embedding per signal bullet per product (`products.signal_embeddings` JSON column) at research time. Items are embedded on arrival, scored against every researched product's vector set via cosine similarity, and the best match is recorded. Items above `embedSimilarityThreshold` become `'candidate'`; below become `'filtered'`.
 - **Stage 3 — Triage** (`src/main/monitor/triage.ts`): Claude **Sonnet 4.6** call per candidate, scoped to the matched product. Returns `{decision: rejected|weak|strong, confidence, reason}`. Strong → continue; weak / rejected → tagged and stopped.
@@ -333,9 +342,22 @@ directly.
   four stat cards in a row, the "Last Scan" panel with the **Run Scan Now**
   purple button, then the "Open Opportunities" table. Each row resolves its
   brand and product names asynchronously via `window.lh.brands.get` /
-  `products.get`. The Actions column has **View / Source / Delete** — Delete
-  confirms, calls `opps.delete(id)` (which also clears `dispatch_log` rows),
-  and refreshes.
+  `products.get`.
+
+  **Bulk select + delete:** every row has a checkbox, the header has a
+  master select-all (with indeterminate state). When ≥1 rows are selected
+  a contextual *Delete N* button appears next to the section title. Backed
+  by `opps:deleteMany(ids[])` which runs the delete in a single SQLite
+  transaction.
+
+  **Scan Type column:** derives whether the opportunity came from the cron
+  scanner (*Manual Scan*) or the live monitor (*Live Monitor*) by parsing
+  `opportunities.raw_signal` JSON (`source` starts with `live_monitor`) and
+  falling back to `source_title.includes('live monitor')`.
+
+  The Actions column has **View / Source / Delete** — Delete confirms,
+  calls `opps.delete(id)` (which also clears `dispatch_log` rows), and
+  refreshes.
 
 - **`pages/ScanJobs.tsx`** — Schedule editor (cron + enable toggle +
   presets: Every hour / 6h / Twice daily / Daily 9am), manual "Run Scan
@@ -357,14 +379,28 @@ directly.
      scanner Pass 2.
 
 - **`pages/BrandsProducts.tsx`** — Two-pane layout. Left: 240px brand list.
-  Right: the selected brand's panel containing (a) editable brand metadata
-  + competitive summary + an **"Include in scans" Switch** for the brand,
+  Right: the selected brand's panel containing:
+  (a) editable brand metadata + competitive summary + an **"Include in
+  scans" Switch** for the brand;
   (b) products list, each product card with a **"Scan" Switch** (disabled
-  when the brand is excluded), per-product "Run research" button, and
-  collapsible dossier details, (c) the knowledge base with
-  *Upload Files / Add Link / Add Note* buttons. The brand/product scan
-  toggles write `brands.scan_enabled` / `products.scan_enabled` and are the
-  same fields surfaced as checkboxes on the Signal Config page.
+  when the brand is excluded), per-product "Run research" button,
+  collapsible dossier details, AND a **"Product knowledge" sub-section**
+  with its own Upload / Add Link / Add Note buttons + inline list of
+  attached items (added v1.1.1). Items added here have
+  `knowledge_items.product_id` set;
+  (c) a separate **"Brand-level Knowledge"** card with its own
+  Upload / Add Link / Add Note buttons that creates items with
+  `product_id IS NULL`.
+
+  The `noteTarget` / `linkTarget` state in `BrandPanel` is `false | null | number`
+  — `false` = modal closed, `null` = brand-level, `<number>` = product-level
+  with that product's id. The `AddNoteForm` / `AddLinkForm` modals accept an
+  optional `productId` + `productName` and show a "Attaching to product X"
+  hint when product-scoped.
+
+  Brand/product scan toggles write `brands.scan_enabled` /
+  `products.scan_enabled` and are the same fields surfaced as checkboxes on
+  the Signal Config page.
 
 - **`components/Switch.tsx`** — Small purple pill toggle. Props:
   `checked`, `onChange(bool)`, optional `label`, optional `disabled`.
@@ -500,6 +536,10 @@ produce x64, change `"arch": ["arm64"]` to `["arm64", "x64"]` in the
 User asked (2026-05-20) to swap scans + research from Claude to Perplexity. Brief generation stayed on Claude because it wasn't part of that ask.
 
 Later same day, user asked to make signals fully autonomous — the app derives signals from product research instead of requiring manual configuration. Scanner now iterates over researched products and uses each product's `signals` field as the search anchor for that product's scan pass.
+
+**v1.1 (2026-05-23):** Live Monitor added — 24/7 ingestion → on-device embedding pre-filter → Claude Sonnet 4.6 triage → Perplexity deep qualify. See section 0.
+
+**v1.1.1 (2026-05-23):** Dashboard bulk-select + Scan Type column; Live Monitor Fetched timestamps in SGT with AM/PM; per-product knowledge actions (Upload / Add Link / Add Note) on every product card. `research.ts` now prioritises product-scoped knowledge when researching that product.
 
 ## 8. Conventions worth keeping
 

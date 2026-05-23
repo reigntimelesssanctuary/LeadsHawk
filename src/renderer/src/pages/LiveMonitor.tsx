@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Switch } from '../components/Switch';
 import { Modal } from '../components/Modal';
 import type { MonitorStatus, MonitorSource, SignalItem } from '../../../shared/types';
-import { fmtDate, openExternal } from '../lib/api';
+import { fmtDate, fmtDateSGT, openExternal } from '../lib/api';
 import { Activity, Plus, Trash2, RefreshCw, AlertCircle, Radio } from 'lucide-react';
 
 export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
@@ -97,7 +97,9 @@ export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) 
             )}
             {items.map((it) => (
               <tr key={it.id}>
-                <td style={{ whiteSpace: 'nowrap', fontSize: 13, color: '#6b7280' }}>{fmtDate(it.fetched_at)}</td>
+                <td style={{ whiteSpace: 'nowrap', fontSize: 13, color: '#6b7280' }} title="Singapore time (UTC+8)">
+                  {fmtDateSGT(it.fetched_at)}
+                </td>
                 <td style={{ maxWidth: 420 }}>
                   <div style={{ fontWeight: 500 }}>{it.title}</div>
                   {it.snippet && (

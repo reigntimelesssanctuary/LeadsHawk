@@ -170,22 +170,22 @@ export function registerIpc() {
       .prepare('SELECT * FROM knowledge_items ORDER BY created_at DESC LIMIT 200')
       .all() as KnowledgeItem[];
   });
-  ipcMain.handle('knowledge:addNote', (_e, payload: { brandId: number; title: string; content: string }) => {
+  ipcMain.handle('knowledge:addNote', (_e, payload: { brandId: number; productId?: number | null; title: string; content: string }) => {
     const info = db.prepare(
-      `INSERT INTO knowledge_items(brand_id, kind, title, source, content, status)
-       VALUES (?, 'note', ?, 'manual', ?, 'indexed')`
-    ).run(payload.brandId, payload.title, payload.content);
+      `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
+       VALUES (?, ?, 'note', ?, 'manual', ?, 'indexed')`
+    ).run(payload.brandId, payload.productId ?? null, payload.title, payload.content);
     return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid);
   });
-  ipcMain.handle('knowledge:addLink', async (_e, payload: { brandId: number; url: string }) => {
+  ipcMain.handle('knowledge:addLink', async (_e, payload: { brandId: number; productId?: number | null; url: string }) => {
     const fetched = await fetchUrl(payload.url);
     const info = db.prepare(
-      `INSERT INTO knowledge_items(brand_id, kind, title, source, content, status)
-       VALUES (?, 'link', ?, ?, ?, 'indexed')`
-    ).run(payload.brandId, fetched.title, payload.url, fetched.content);
+      `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
+       VALUES (?, ?, 'link', ?, ?, ?, 'indexed')`
+    ).run(payload.brandId, payload.productId ?? null, fetched.title, payload.url, fetched.content);
     return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid);
   });
-  ipcMain.handle('knowledge:upload', async (_e, brandId: number) => {
+  ipcMain.handle('knowledge:upload', async (_e, brandId: number, productId?: number | null) => {
     const win = BrowserWindow.getFocusedWindow();
     if (!win) return null;
     const sel = await dialog.showOpenDialog(win, {
@@ -196,7 +196,7 @@ export function registerIpc() {
     });
     if (sel.canceled) return [];
     const results: KnowledgeItem[] = [];
-    const brandDir = join(dataDir(), 'brands', String(brandId), 'uploads');
+    const brandDir = join(dataDir(), 'brands', String(brandId), productId ? `products/${productId}` : 'uploads');
     await mkdir(brandDir, { recursive: true });
     for (const filePath of sel.filePaths) {
       const extracted = await extractFromFile(filePath);
@@ -206,9 +206,9 @@ export function registerIpc() {
         await writeFile(dest, data);
       } catch {}
       const info = db.prepare(
-        `INSERT INTO knowledge_items(brand_id, kind, title, source, content, status)
-         VALUES (?, 'file', ?, ?, ?, 'indexed')`
-      ).run(brandId, extracted.title, dest, extracted.content);
+        `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
+         VALUES (?, ?, 'file', ?, ?, ?, 'indexed')`
+      ).run(brandId, productId ?? null, extracted.title, dest, extracted.content);
       results.push(
         db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid) as KnowledgeItem
       );
@@ -297,6 +297,18 @@ export function registerIpc() {
     db.prepare('DELETE FROM dispatch_log WHERE opportunity_id = ?').run(id);
     db.prepare('DELETE FROM opportunities WHERE id = ?').run(id);
     return true;
+  });
+  ipcMain.handle('opps:deleteMany', (_e, ids: number[]) => {
+    if (!Array.isArray(ids) || ids.length === 0) return 0;
+    const placeholders = ids.map(() => '?').join(',');
+    const delLog = db.prepare(`DELETE FROM dispatch_log WHERE opportunity_id IN (${placeholders})`);
+    const delOpps = db.prepare(`DELETE FROM opportunities WHERE id IN (${placeholders})`);
+    const txn = db.transaction((values: number[]) => {
+      delLog.run(...values);
+      delOpps.run(...values);
+    });
+    txn(ids);
+    return ids.length;
   });
   ipcMain.handle('opps:brief', async (_e, id: number) => buildBrief(id));
   ipcMain.handle('opps:dispatch', async (_e, id: number, target: string, payload: string) => {
