@@ -12,5 +12,5 @@ data/leadshawk.db-wal
 data/leadshawk.db-shm
 data/logs/
 data/brands/*/uploads/
-build/icon.icns
+build/icon.iconset/
 .vite/

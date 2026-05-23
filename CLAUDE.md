@@ -541,6 +541,8 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.1 (2026-05-23):** Dashboard bulk-select + Scan Type column; Live Monitor Fetched timestamps in SGT with AM/PM; per-product knowledge actions (Upload / Add Link / Add Note) on every product card. `research.ts` now prioritises product-scoped knowledge when researching that product.
 
+**v1.1.2 (2026-05-23):** Custom app icon — gold circuit-pattern hawk on black. Source at `build/icon.png` (1254×1254), compiled to `build/icon.icns` and wired into `package.json > build.mac.icon` so electron-builder bakes it into the bundle and DMG. Sidebar version string bumped from v1.0.0 → v1.1.2.
+
 ## 8. Conventions worth keeping
 
 - **Synchronous SQLite.** `better-sqlite3` is sync; do *not* await its calls.
@@ -617,9 +619,6 @@ These came directly from the original request:
 - **No background download of news bodies before LLM call.** The current
   `qualifyAndStore` fetches each URL synchronously inline. For high-volume
   scans, batching/parallelizing this would be the first optimization.
-- **No icon.icns.** Electron-builder falls back to the default Electron
-  icon. Drop a real `build/icon.icns` and re-enable
-  `"icon": "build/icon.icns"` in `package.json > build.mac`.
 
 ---
 
