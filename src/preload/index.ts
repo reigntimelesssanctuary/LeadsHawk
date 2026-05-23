@@ -49,7 +49,10 @@ const api = {
     create: (p: { productId: number; kind: 'include' | 'exclude'; text: string }) =>
       ipcRenderer.invoke('rules:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('rules:update', id, p),
-    delete: (id: number) => ipcRenderer.invoke('rules:delete', id)
+    delete: (id: number) => ipcRenderer.invoke('rules:delete', id),
+    listGlobal: () => ipcRenderer.invoke('rules:listGlobal'),
+    createGlobal: (p: { kind: 'include' | 'exclude'; text: string }) =>
+      ipcRenderer.invoke('rules:createGlobal', p)
   },
   scan: {
     run: () => ipcRenderer.invoke('scan:run'),

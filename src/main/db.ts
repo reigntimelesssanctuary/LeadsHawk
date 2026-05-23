@@ -197,6 +197,21 @@ function migrate(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_api_calls_created ON api_calls(created_at);
     CREATE INDEX IF NOT EXISTS idx_api_calls_stage   ON api_calls(stage);
+
+    -- v1.3 -----------------------------------------------------
+    -- Fingerprints of items the user disqualified. The live monitor's
+    -- pre-filter uses these to demote similar incoming items (Layer B).
+    -- Persists even if the source opportunity is deleted — the learning
+    -- doesn't go away just because the user cleaned up their inbox.
+    CREATE TABLE IF NOT EXISTS disqualify_vectors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      headline TEXT NOT NULL,
+      reason TEXT,
+      embedding TEXT NOT NULL,           -- JSON Float32 array
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_disq_vectors_product ON disqualify_vectors(product_id);
   `);
 
   // Idempotent column additions for upgrade-in-place
@@ -206,6 +221,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'products', 'signal_embeddings', 'TEXT'); // JSON [{text, embedding[]}]
   // v1.2: optional one-line user explanation on Disqualify.
   addColumnIfMissing(db, 'opportunities', 'disqualify_reason', 'TEXT');
+  // v1.3: per-product scope on scan rules ('product' default, or 'global').
+  addColumnIfMissing(db, 'scan_rules', 'scope', "TEXT NOT NULL DEFAULT 'product'");
 }
 
 function addColumnIfMissing(

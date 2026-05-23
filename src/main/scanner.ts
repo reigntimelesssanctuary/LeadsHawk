@@ -1,13 +1,25 @@
 import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
+import { buildDisqualificationsBlock } from './learning.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
-function buildGuardrails(productId: number): string {
+/**
+ * Build the user-defined-rules guardrail block. If productId is provided,
+ * BOTH global rules and that product's rules are included. If productId is
+ * null, only global rules are included.
+ */
+function buildGuardrails(productId: number | null): string {
   const db = getDb();
-  const rules = db
-    .prepare("SELECT * FROM scan_rules WHERE product_id = ? AND enabled = 1 ORDER BY kind, id")
-    .all(productId) as ScanRule[];
+  const productRules = productId
+    ? (db.prepare(
+        "SELECT * FROM scan_rules WHERE scope = 'product' AND product_id = ? AND enabled = 1 ORDER BY kind, id"
+      ).all(productId) as ScanRule[])
+    : [];
+  const globalRules = db
+    .prepare("SELECT * FROM scan_rules WHERE scope = 'global' AND enabled = 1 ORDER BY kind, id")
+    .all() as ScanRule[];
+  const rules = [...globalRules, ...productRules];
   if (rules.length === 0) return '';
   const includes = rules.filter((r) => r.kind === 'include');
   const excludes = rules.filter((r) => r.kind === 'exclude');
@@ -159,6 +171,8 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
         const ruleCount = guardrails.split('\n').filter((l) => l.startsWith('- ')).length;
         log(`  applying ${ruleCount} include/exclude rule(s) for this product`);
       }
+      const disqBlock = buildDisqualificationsBlock(product.id, 8);
+      if (disqBlock) log(`  injecting recent disqualifications`);
 
       const prompt = `# Product to find opportunities for
 Brand: ${brand.name}
@@ -179,6 +193,8 @@ ${product.signals}
 Only consider events from the last ${settings.scanRecency}.
 
 ${guardrails}
+
+${disqBlock}
 
 # Task
 Search the live web. For each genuine sales opportunity you find that
@@ -233,15 +249,28 @@ specific signal (from the list above) that this opportunity matches.`;
         log(`Custom topic: ${src.name}`);
         const cfg = (() => { try { return JSON.parse(src.config || '{}'); } catch { return {}; } })();
         const topic = cfg.query || cfg.url || src.name;
+        // v1.3: custom topics can pin to a product to inherit its scan rules
+        // (and have global rules apply automatically too). When unpinned,
+        // only global rules apply.
+        const pinnedProductId: number | null =
+          typeof cfg.pinnedProductId === 'number' ? cfg.pinnedProductId : null;
+        const pinned = pinnedProductId
+          ? allProducts.find((p) => p.id === pinnedProductId) || null
+          : null;
+        if (pinned) log(`  pinned to product "${pinned.name}" — inheriting its rules`);
+        const guardrails = buildGuardrails(pinnedProductId); // null → global only
 
         const prompt = `# Our portfolio
 ${portfolio}
 
 # Topic of interest
 ${topic}
+${pinned ? `\n# Pinned product\nThis topic is scoped to "${pinned.name}" (${pinned.category || ''}). Prefer opportunities that fit this product when picking matched_brand/matched_product.` : ''}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
+
+${guardrails}
 
 # Task
 Search the live web for RECENT events matching this topic that represent a

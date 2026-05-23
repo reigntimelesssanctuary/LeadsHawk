@@ -49,7 +49,8 @@ export type SignalSource = {
 
 export type ScanRule = {
   id: number;
-  product_id: number;
+  product_id: number | null;          // null when scope='global'
+  scope: 'product' | 'global';
   kind: 'include' | 'exclude';
   text: string;
   enabled: number;

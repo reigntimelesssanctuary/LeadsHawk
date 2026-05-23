@@ -165,13 +165,50 @@ export async function ensureAllProductEmbeddings(log?: (m: string) => void): Pro
 export type ProductMatch = {
   productId: number;
   brandId: number;
-  similarity: number;
+  similarity: number;          // post-penalty (used by the threshold gate)
+  rawSimilarity: number;       // pre-penalty (for logging / debugging)
+  disqualifyPenalty: number;   // 0 = none, 1 = full kill
   matchedSignal: string;
 };
 
+const DISQ_LEARNING_MIN_EXAMPLES = 3;
+// Penalty curve: when item's max similarity to a disqualified example is
+// above this threshold, scale the raw similarity down.
+const DISQ_PENALTY_THRESHOLD = 0.70;
+const DISQ_PENALTY_STRENGTH = 0.60;  // multiplier applied to the over-threshold similarity
+
+/**
+ * Compute the disqualification penalty for an item against a specific
+ * product's past rejections. Returns a value in [0, 1]:
+ *   0   = no penalty, this item looks nothing like past rejections
+ *   1   = full kill, this item is nearly identical to something the user rejected
+ *
+ * Gated by DISQ_LEARNING_MIN_EXAMPLES so it doesn't fire on noise.
+ * Caller may decide what to do with the value (we scale the similarity).
+ */
+function disqualifyPenalty(itemVec: number[], productId: number): number {
+  const db = getDb();
+  const rows = db
+    .prepare('SELECT embedding FROM disqualify_vectors WHERE product_id = ?')
+    .all(productId) as Array<{ embedding: string }>;
+  if (rows.length < DISQ_LEARNING_MIN_EXAMPLES) return 0;
+  let maxSim = 0;
+  for (const r of rows) {
+    let vec: number[];
+    try { vec = JSON.parse(r.embedding); } catch { continue; }
+    const s = cosineSim(itemVec, vec);
+    if (s > maxSim) maxSim = s;
+  }
+  if (maxSim < DISQ_PENALTY_THRESHOLD) return 0;
+  // Map [0.70, 1.0] → [0, 1] linearly, then dampen by strength constant.
+  const over = (maxSim - DISQ_PENALTY_THRESHOLD) / (1 - DISQ_PENALTY_THRESHOLD);
+  return Math.min(1, over * DISQ_PENALTY_STRENGTH);
+}
+
 /**
  * Score a signal item against every researched product. Returns the best match,
- * or null if no product has embeddings.
+ * or null if no product has embeddings. The returned `similarity` is the raw
+ * signal-match score scaled down by any disqualification penalty (Layer B).
  */
 export async function bestProductMatch(itemText: string): Promise<ProductMatch | null> {
   const db = getDb();
@@ -189,7 +226,8 @@ export async function bestProductMatch(itemText: string): Promise<ProductMatch |
   if (products.length === 0) return null;
 
   const itemVec = await embedText(itemText);
-  let best: ProductMatch | null = null;
+  type RawBest = { productId: number; brandId: number; raw: number; matchedSignal: string };
+  let raw: RawBest | null = null;
   for (const p of products) {
     let vectors: SignalVector[] = [];
     try {
@@ -199,15 +237,51 @@ export async function bestProductMatch(itemText: string): Promise<ProductMatch |
     }
     for (const v of vectors) {
       const sim = cosineSim(itemVec, v.embedding);
-      if (!best || sim > best.similarity) {
-        best = {
+      if (!raw || sim > raw.raw) {
+        raw = {
           productId: p.productId,
           brandId: p.brandId,
-          similarity: sim,
+          raw: sim,
           matchedSignal: v.text
         };
       }
     }
   }
-  return best;
+  if (!raw) return null;
+
+  const penalty = disqualifyPenalty(itemVec, raw.productId);
+  const adjusted = raw.raw * (1 - penalty);
+  return {
+    productId: raw.productId,
+    brandId: raw.brandId,
+    similarity: adjusted,
+    rawSimilarity: raw.raw,
+    disqualifyPenalty: penalty,
+    matchedSignal: raw.matchedSignal
+  };
+}
+
+/**
+ * Store a fingerprint for a disqualified opportunity so future similar items
+ * get penalized in `bestProductMatch`. Fire-and-forget from the IPC handler;
+ * any embedding failure is swallowed so it can't block the disqualify itself.
+ */
+export async function recordDisqualifyVector(
+  productId: number,
+  headline: string,
+  reason: string | null,
+  summary: string | null
+): Promise<void> {
+  const db = getDb();
+  const text = [headline, summary || ''].filter(Boolean).join(' — ').trim();
+  if (!text) return;
+  try {
+    const vec = await embedText(text);
+    db.prepare(
+      `INSERT INTO disqualify_vectors(product_id, headline, reason, embedding)
+       VALUES (?, ?, ?, ?)`
+    ).run(productId, headline, reason || null, JSON.stringify(vec));
+  } catch (e: any) {
+    console.warn('[recordDisqualifyVector] embed failed:', e?.message || e);
+  }
 }

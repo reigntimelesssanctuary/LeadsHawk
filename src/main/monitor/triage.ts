@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getSettings } from '../settings.js';
 import { getDb } from '../db.js';
 import { recordApiCall } from '../spend.js';
+import { buildDisqualificationsBlock } from '../learning.js';
 import type { Brand, Product, SignalItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales analyst. You will be given ONE news /
@@ -40,6 +41,8 @@ export async function triageItem(
   const c = client();
   const modelId = triageModel || 'claude-sonnet-4-6';
 
+  const disqBlock = buildDisqualificationsBlock(product.id, 6);
+
   const prompt = `# Our product
 Brand: ${brand.name}
 Product: ${product.name}
@@ -57,6 +60,8 @@ Snippet: ${item.snippet || '(none)'}
 # Pre-filter signal that matched
 "${matchedSignal}"
 (cosine similarity to this signal: ${(item.best_match_similarity ?? 0).toFixed(3)})
+
+${disqBlock}
 
 # Task
 Decide: is this a credible buying-signal candidate for THIS product?

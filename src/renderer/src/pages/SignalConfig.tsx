@@ -3,22 +3,27 @@ import { Modal } from '../components/Modal';
 import type { SignalSource, Product, Brand, ScanRule } from '../../../shared/types';
 import {
   Plus, Trash2, Sparkles, ChevronDown, ChevronRight,
-  AlertCircle, CheckCircle2, Ban
+  AlertCircle, CheckCircle2, Ban, Globe
 } from 'lucide-react';
 
 export function SignalConfig() {
   const [products, setProducts] = useState<Product[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [sources, setSources] = useState<SignalSource[]>([]);
+  const [globalRules, setGlobalRules] = useState<ScanRule[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [globalOpen, setGlobalOpen] = useState(false);
 
   const refresh = async () => {
     setProducts(await window.lh.products.list());
     setBrands(await window.lh.brands.list());
     setSources(await window.lh.sources.list());
+    setGlobalRules(await window.lh.rules.listGlobal());
   };
   useEffect(() => { refresh(); }, []);
+
+  const loadGlobalRules = async () => setGlobalRules(await window.lh.rules.listGlobal());
 
   const toggleProduct = async (p: Product) => {
     await window.lh.products.setScanEnabled(p.id, p.scan_enabled ? false : true);
@@ -41,6 +46,53 @@ export function SignalConfig() {
           LeadsHawk scans the web for the buying signals it learned from your product research.
           Expand a product to see its signals and set include / exclude rules.
         </div>
+      </div>
+
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <button
+          onClick={() => setGlobalOpen(!globalOpen)}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+        >
+          {globalOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <Globe size={16} style={{ color: '#6c5cf2' }} />
+          <span className="h-section">Global rules</span>
+          <span style={{ marginLeft: 'auto', color: '#6b7280', fontSize: 13 }}>
+            {globalRules.length} rule{globalRules.length === 1 ? '' : 's'}
+          </span>
+        </button>
+        {globalOpen && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+              Hard constraints applied to <b>every</b> scan — across all products, custom topics, and the live monitor. Use these for things like geography, company-size floors, or industries you never sell into.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <RuleColumn
+                kind="include"
+                icon={<CheckCircle2 size={15} style={{ color: '#065f46' }} />}
+                title="Always include"
+                accent="#065f46"
+                accentBg="#ecfdf5"
+                accentBorder="#a7f3d0"
+                placeholder="e.g. US-headquartered companies only"
+                rules={globalRules.filter((r) => r.kind === 'include')}
+                onAdd={async (text) => { await window.lh.rules.createGlobal({ kind: 'include', text }); }}
+                refresh={loadGlobalRules}
+              />
+              <RuleColumn
+                kind="exclude"
+                icon={<Ban size={15} style={{ color: '#991b1b' }} />}
+                title="Always exclude"
+                accent="#991b1b"
+                accentBg="#fef2f2"
+                accentBorder="#fecaca"
+                placeholder="e.g. companies under 50 employees"
+                rules={globalRules.filter((r) => r.kind === 'exclude')}
+                onAdd={async (text) => { await window.lh.rules.createGlobal({ kind: 'exclude', text }); }}
+                refresh={loadGlobalRules}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
@@ -105,6 +157,7 @@ export function SignalConfig() {
                     <tr>
                       <th>Topic</th>
                       <th>Query</th>
+                      <th>Pinned to</th>
                       <th>Enabled</th>
                       <th></th>
                     </tr>
@@ -112,10 +165,20 @@ export function SignalConfig() {
                   <tbody>
                     {sources.map((s) => {
                       const cfg = (() => { try { return JSON.parse(s.config || '{}'); } catch { return {}; } })();
+                      const pinned = typeof cfg.pinnedProductId === 'number'
+                        ? products.find((p) => p.id === cfg.pinnedProductId)
+                        : null;
                       return (
                         <tr key={s.id}>
                           <td style={{ fontWeight: 500 }}>{s.name}</td>
-                          <td style={{ color: '#6b7280', maxWidth: 460 }}>{cfg.query || cfg.url || ''}</td>
+                          <td style={{ color: '#6b7280', maxWidth: 380 }}>{cfg.query || cfg.url || ''}</td>
+                          <td style={{ fontSize: 12 }}>
+                            {pinned ? (
+                              <span className="chip chip-brand" title="Inherits this product's scan rules">{pinned.name}</span>
+                            ) : (
+                              <span style={{ color: '#9ca3af' }}>—</span>
+                            )}
+                          </td>
                           <td>
                             <input type="checkbox" checked={!!s.enabled} onChange={() => toggleSource(s)} />
                           </td>
@@ -140,7 +203,7 @@ export function SignalConfig() {
       </div>
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Custom Topic">
-        <AddSourceForm onDone={async () => { setShowAdd(false); refresh(); }} />
+        <AddSourceForm products={products} onDone={async () => { setShowAdd(false); refresh(); }} />
       </Modal>
     </div>
   );
@@ -211,7 +274,6 @@ function ProductSignals({
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <RuleColumn
-                productId={product.id}
                 kind="include"
                 icon={<CheckCircle2 size={15} style={{ color: '#065f46' }} />}
                 title="Always include"
@@ -220,10 +282,10 @@ function ProductSignals({
                 accentBorder="#a7f3d0"
                 placeholder="e.g. publicly traded companies only"
                 rules={includes}
+                onAdd={async (text) => { await window.lh.rules.create({ productId: product.id, kind: 'include', text }); }}
                 refresh={loadRules}
               />
               <RuleColumn
-                productId={product.id}
                 kind="exclude"
                 icon={<Ban size={15} style={{ color: '#991b1b' }} />}
                 title="Always exclude"
@@ -232,6 +294,7 @@ function ProductSignals({
                 accentBorder="#fecaca"
                 placeholder="e.g. consulting firms"
                 rules={excludes}
+                onAdd={async (text) => { await window.lh.rules.create({ productId: product.id, kind: 'exclude', text }); }}
                 refresh={loadRules}
               />
             </div>
@@ -243,9 +306,8 @@ function ProductSignals({
 }
 
 function RuleColumn({
-  productId, kind, icon, title, accent, accentBg, accentBorder, placeholder, rules, refresh
+  kind, icon, title, accent, accentBg, accentBorder, placeholder, rules, onAdd, refresh
 }: {
-  productId: number;
   kind: 'include' | 'exclude';
   icon: React.ReactNode;
   title: string;
@@ -254,17 +316,20 @@ function RuleColumn({
   accentBorder: string;
   placeholder: string;
   rules: ScanRule[];
+  onAdd: (text: string) => Promise<void>;
   refresh: () => void;
 }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  // kind is referenced by callers via add(); satisfy noUnusedLocals.
+  void kind;
 
   const add = async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setBusy(true);
     try {
-      await window.lh.rules.create({ productId, kind, text: trimmed });
+      await onAdd(trimmed);
       setText('');
       refresh();
     } finally {
@@ -360,9 +425,10 @@ function parseBullets(raw: string): string[] {
     .filter((l) => l.length > 0);
 }
 
-function AddSourceForm({ onDone }: { onDone: () => void }) {
+function AddSourceForm({ products, onDone }: { products: Product[]; onDone: () => void }) {
   const [name, setName] = useState('');
   const [query, setQuery] = useState('');
+  const [pinnedProductId, setPinnedProductId] = useState<number | ''>('');
   return (
     <div>
       <label className="label">Topic name</label>
@@ -370,15 +436,29 @@ function AddSourceForm({ onDone }: { onDone: () => void }) {
       <div style={{ height: 12 }} />
       <label className="label">Search query</label>
       <input className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="e.g. healthcare ransomware OR patient data breach" />
+      <div style={{ height: 12 }} />
+      <label className="label">Apply rules from product (optional)</label>
+      <select
+        className="select"
+        value={pinnedProductId === '' ? '' : String(pinnedProductId)}
+        onChange={(e) => setPinnedProductId(e.target.value === '' ? '' : Number(e.target.value))}
+      >
+        <option value="">— none (global rules only) —</option>
+        {products.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
       <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
-        LeadsHawk will search the web for this topic on every scan, in addition to the auto-derived signals from your products.
+        LeadsHawk will search the web for this topic on every scan, in addition to the auto-derived signals from your products. If you pin a product, that product's include/exclude rules are applied to this topic's results.
       </div>
       <div style={{ marginTop: 14, textAlign: 'right' }}>
         <button className="btn-primary" disabled={!name || !query} onClick={async () => {
+          const cfg: Record<string, any> = { query };
+          if (pinnedProductId !== '') cfg.pinnedProductId = pinnedProductId;
           await window.lh.sources.create({
             name,
             kind: 'query',
-            config: JSON.stringify({ query }),
+            config: JSON.stringify(cfg),
             enabled: 1
           });
           onDone();

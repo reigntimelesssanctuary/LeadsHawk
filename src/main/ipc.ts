@@ -10,7 +10,8 @@ import { getSpendSummary } from './spend.js';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning
 } from './monitor/index.js';
-import type { MonitorSource, SignalItem, SourceHealth } from '@shared/types';
+import { recordDisqualifyVector } from './monitor/embed.js';
+import type { MonitorSource, SignalItem, SourceHealth, Opportunity } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
 import type {
@@ -247,12 +248,12 @@ export function registerIpc() {
   // -------- Scan Rules (per-product include / exclude guardrails) --------
   ipcMain.handle('rules:list', (_e, productId: number) =>
     db
-      .prepare('SELECT * FROM scan_rules WHERE product_id = ? ORDER BY kind, id')
+      .prepare("SELECT * FROM scan_rules WHERE scope = 'product' AND product_id = ? ORDER BY kind, id")
       .all(productId) as ScanRule[]
   );
   ipcMain.handle('rules:create', (_e, payload: { productId: number; kind: 'include' | 'exclude'; text: string }) => {
     const info = db.prepare(
-      'INSERT INTO scan_rules(product_id, kind, text, enabled) VALUES (?, ?, ?, 1)'
+      "INSERT INTO scan_rules(product_id, scope, kind, text, enabled) VALUES (?, 'product', ?, ?, 1)"
     ).run(payload.productId, payload.kind, payload.text);
     return db.prepare('SELECT * FROM scan_rules WHERE id = ?').get(info.lastInsertRowid);
   });
@@ -265,6 +266,18 @@ export function registerIpc() {
   ipcMain.handle('rules:delete', (_e, id: number) => {
     db.prepare('DELETE FROM scan_rules WHERE id = ?').run(id);
     return true;
+  });
+
+  // v1.3 — Global rules apply to EVERY Perplexity scan call (Pass 1, Pass 2,
+  // and Live Monitor deep qualify). product_id is NULL for global rules.
+  ipcMain.handle('rules:listGlobal', () =>
+    db.prepare("SELECT * FROM scan_rules WHERE scope = 'global' ORDER BY kind, id").all() as ScanRule[]
+  );
+  ipcMain.handle('rules:createGlobal', (_e, payload: { kind: 'include' | 'exclude'; text: string }) => {
+    const info = db.prepare(
+      "INSERT INTO scan_rules(product_id, scope, kind, text, enabled) VALUES (NULL, 'global', ?, ?, 1)"
+    ).run(payload.kind, payload.text);
+    return db.prepare('SELECT * FROM scan_rules WHERE id = ?').get(info.lastInsertRowid);
   });
 
   // -------- Scans / Opportunities --------
@@ -296,14 +309,23 @@ export function registerIpc() {
     return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id);
   });
   ipcMain.handle('opps:disqualify', (_e, id: number, reason?: string | null) => {
+    const cleanReason = (reason ?? '').trim() || null;
     db.prepare(
       `UPDATE opportunities
        SET status = 'disqualified',
            disqualify_reason = ?,
            updated_at = datetime('now')
        WHERE id = ?`
-    ).run((reason ?? '').trim() || null, id);
-    return db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id);
+    ).run(cleanReason, id);
+    const opp = db.prepare('SELECT * FROM opportunities WHERE id = ?').get(id) as Opportunity | undefined;
+    // Layer B: fire-and-forget fingerprint capture so the live-monitor's
+    // local pre-filter learns to demote similar incoming items.
+    if (opp && opp.product_id) {
+      recordDisqualifyVector(opp.product_id, opp.headline, cleanReason, opp.signal_summary).catch(
+        (e) => console.warn('[opps:disqualify] vector capture failed:', e?.message || e)
+      );
+    }
+    return opp;
   });
   ipcMain.handle('opps:delete', (_e, id: number) => {
     db.prepare('DELETE FROM dispatch_log WHERE opportunity_id = ?').run(id);

@@ -1,6 +1,7 @@
 import { getDb } from '../db.js';
 import { completePerplexity } from '../perplexity.js';
 import { getSettings } from '../settings.js';
+import { buildDisqualificationsBlock } from '../learning.js';
 import type { Brand, Product, SignalItem, ScanRule } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales intelligence analyst. You will be
@@ -47,9 +48,15 @@ const SCHEMA = {
 
 function buildProductGuardrails(productId: number): string {
   const db = getDb();
-  const rules = db
-    .prepare("SELECT * FROM scan_rules WHERE product_id = ? AND enabled = 1 ORDER BY kind, id")
+  const productRules = db
+    .prepare(
+      "SELECT * FROM scan_rules WHERE scope = 'product' AND product_id = ? AND enabled = 1 ORDER BY kind, id"
+    )
     .all(productId) as ScanRule[];
+  const globalRules = db
+    .prepare("SELECT * FROM scan_rules WHERE scope = 'global' AND enabled = 1 ORDER BY kind, id")
+    .all() as ScanRule[];
+  const rules = [...globalRules, ...productRules];
   if (rules.length === 0) return '';
   const includes = rules.filter((r) => r.kind === 'include');
   const excludes = rules.filter((r) => r.kind === 'exclude');
@@ -82,6 +89,7 @@ export async function qualifyItem(
     return { kind: 'rejected', reason: 'no perplexity key configured' };
   }
   const guardrails = buildProductGuardrails(product.id);
+  const disqBlock = buildDisqualificationsBlock(product.id, 6);
 
   const prompt = `# Product
 Brand: ${brand.name}
@@ -102,6 +110,8 @@ Snippet: ${item.snippet || ''}
 Pre-filter matched signal: "${matchedSignal}"
 
 ${guardrails}
+
+${disqBlock}
 
 # Task
 Use live web search to verify and enrich this signal. Produce a full
