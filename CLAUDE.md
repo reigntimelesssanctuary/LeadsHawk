@@ -543,6 +543,8 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.2 (2026-05-23):** Custom app icon — gold circuit-pattern hawk on black. Source at `build/icon.png` (1254×1254), compiled to `build/icon.icns` and wired into `package.json > build.mac.icon` so electron-builder bakes it into the bundle and DMG. Sidebar version string bumped from v1.0.0 → v1.1.2.
 
+**v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
+
 ## 8. Conventions worth keeping
 
 - **Synchronous SQLite.** `better-sqlite3` is sync; do *not* await its calls.

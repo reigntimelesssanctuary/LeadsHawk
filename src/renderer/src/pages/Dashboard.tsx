@@ -126,8 +126,8 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
             </div>
           )}
         </div>
-        <div className="card" style={{ overflow: 'hidden' }}>
-          <table className="lh">
+        <div className="card" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+          <table className="lh" style={{ minWidth: 1080 }}>
             <thead>
               <tr>
                 <th style={{ width: 36 }}>

@@ -1,6 +1,7 @@
 import {
   LayoutGrid, Clock, Filter, Send, Boxes, Archive, Settings as SettingsIcon, Radio
 } from 'lucide-react';
+import logoUrl from '../assets/logo.png';
 
 export type Page =
   | 'dashboard' | 'monitor' | 'scans' | 'signals' | 'dispatch'
@@ -27,6 +28,18 @@ export function Sidebar({
       <div>
         <div style={{ height: 36 }} />
         <div className="px-6 pb-6">
+          <img
+            src={logoUrl}
+            alt="LeadsHawk"
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              display: 'block',
+              marginBottom: 10,
+              boxShadow: '0 1px 2px rgba(0,0,0,0.4)'
+            }}
+          />
           <div style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>LeadsHawk</div>
           <div style={{ color: '#a78bfa', fontSize: 12, marginTop: 2 }}>B2B Signal Intelligence</div>
         </div>
@@ -68,7 +81,7 @@ export function Sidebar({
         </nav>
       </div>
       <div className="no-drag px-6 py-4" style={{ color: '#6b7280', fontSize: 11 }}>
-        v1.1.2
+        v1.1.3
       </div>
     </aside>
   );
