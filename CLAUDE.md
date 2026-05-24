@@ -545,6 +545,8 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.5.2 (2026-05-24):** Country column + filter on the Dashboard table. SortKey gains `country`; Filters gains a `country` string (exact match by name); new sticky-row dropdown populated from distinct non-null country values across the loaded set. Column sits between Industry and Brand to match the Excel column order. Table `minWidth` bumped 1180 → 1280 to accommodate; empty-state colSpan bumped 10 → 11.
+
 **v1.5.1 (2026-05-24):** Country field on opportunities.
 
 - New `opportunities.country TEXT` column (idempotent migration).

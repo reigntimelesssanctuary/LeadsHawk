@@ -18,12 +18,13 @@ function scanTypeOf(opp: Opportunity): ScanType {
   return 'Manual Scan';
 }
 
-type SortKey = 'date' | 'company' | 'industry' | 'brand' | 'product' | 'scanType' | 'confidence' | 'signal';
+type SortKey = 'date' | 'company' | 'industry' | 'country' | 'brand' | 'product' | 'scanType' | 'confidence' | 'signal';
 type SortDir = 'asc' | 'desc';
 
 type Filters = {
   company: string;
   industry: string;
+  country: string;   // exact match by country name; '' = all
   brand: string;     // exact match by name; '' = all
   product: string;
   scanType: '' | ScanType;
@@ -34,6 +35,7 @@ type Filters = {
 const EMPTY_FILTERS: Filters = {
   company: '',
   industry: '',
+  country: '',
   brand: '',
   product: '',
   scanType: '',
@@ -116,6 +118,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
     return allRows.filter((r) => {
       if (filters.company && !r.opp.company.toLowerCase().includes(filters.company.toLowerCase())) return false;
       if (filters.industry && !(r.opp.industry || '').toLowerCase().includes(filters.industry.toLowerCase())) return false;
+      if (filters.country && (r.opp.country || '') !== filters.country) return false;
       if (filters.brand && r.brandName !== filters.brand) return false;
       if (filters.product && r.productName !== filters.product) return false;
       if (filters.scanType && r.scanType !== filters.scanType) return false;
@@ -139,6 +142,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
         }
         case 'company':    return a.opp.company.localeCompare(b.opp.company) * dir;
         case 'industry':   return (a.opp.industry || '').localeCompare(b.opp.industry || '') * dir;
+        case 'country':    return (a.opp.country || '').localeCompare(b.opp.country || '') * dir;
         case 'brand':      return a.brandName.localeCompare(b.brandName) * dir;
         case 'product':    return a.productName.localeCompare(b.productName) * dir;
         case 'scanType':   return a.scanType.localeCompare(b.scanType) * dir;
@@ -156,6 +160,10 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   );
   const productOptions = useMemo(
     () => Array.from(new Set(allRows.map((r) => r.productName).filter((n) => n && n !== '—'))).sort(),
+    [allRows]
+  );
+  const countryOptions = useMemo(
+    () => Array.from(new Set(allRows.map((r) => r.opp.country || '').filter((c) => c.length > 0))).sort(),
     [allRows]
   );
 
@@ -287,7 +295,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
             minHeight: 280
           }}
         >
-          <table className="lh" style={{ minWidth: 1180 }}>
+          <table className="lh" style={{ minWidth: 1280 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
               <tr>
                 <th style={{ width: 36 }}>
@@ -302,6 +310,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                 <SortableTh label="Date"        k="date"       sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Company"     k="company"    sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Industry"    k="industry"   sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
+                <SortableTh label="Country"     k="country"    sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Brand"       k="brand"      sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Product"     k="product"    sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Scan Type"   k="scanType"   sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
@@ -314,6 +323,9 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                 <th />
                 <th><FilterInput value={filters.company} onChange={(v) => setFilters({ ...filters, company: v })} placeholder="filter…" /></th>
                 <th><FilterInput value={filters.industry} onChange={(v) => setFilters({ ...filters, industry: v })} placeholder="filter…" /></th>
+                <th>
+                  <FilterSelect value={filters.country} onChange={(v) => setFilters({ ...filters, country: v })} options={countryOptions} />
+                </th>
                 <th>
                   <FilterSelect value={filters.brand} onChange={(v) => setFilters({ ...filters, brand: v })} options={brandOptions} />
                 </th>
@@ -343,7 +355,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
             <tbody>
               {sortedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
+                  <td colSpan={11} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
                     {allRows.length === 0
                       ? 'No open opportunities. Run a scan to find new leads.'
                       : 'No opportunities match the current filters.'}
@@ -468,6 +480,7 @@ function OppRow({
       <td style={{ whiteSpace: 'nowrap' }}>{fmtDateShort(opp.created_at)}</td>
       <td style={{ fontWeight: 500 }}>{opp.company}</td>
       <td>{opp.industry || '—'}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>{opp.country || '—'}</td>
       <td>{brandName}</td>
       <td>{productName}</td>
       <td>
