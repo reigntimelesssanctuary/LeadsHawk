@@ -223,6 +223,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'opportunities', 'disqualify_reason', 'TEXT');
   // v1.3: per-product scope on scan rules ('product' default, or 'global').
   addColumnIfMissing(db, 'scan_rules', 'scope', "TEXT NOT NULL DEFAULT 'product'");
+  // v1.5: differentiate manual / deep cron runs in the history table.
+  addColumnIfMissing(db, 'scan_runs', 'kind', "TEXT NOT NULL DEFAULT 'manual'");
 }
 
 function addColumnIfMissing(

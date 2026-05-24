@@ -200,6 +200,47 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <div className="h-card" style={{ marginBottom: 6 }}>Deep Research Scan</div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          A third, heavier scanning engine — uses Perplexity's deep-research model on its own cron, separate from the regular hourly/6-hourly scan. Costlier per call, but reasons harder and pulls from more sources. The schedule lives here; the on/off toggle is the checkbox below.
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 12 }}>
+          <input
+            type="checkbox"
+            checked={s.deepScanEnabled}
+            onChange={(e) => setS({ ...s, deepScanEnabled: e.target.checked })}
+          /> Enable deep research scans on schedule
+        </label>
+        <label className="label">Cron expression</label>
+        <input
+          className="input"
+          value={s.deepScanCron}
+          onChange={(e) => setS({ ...s, deepScanCron: e.target.value })}
+        />
+        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Twice daily (9am / 9pm)', value: '0 9,21 * * *' },
+            { label: 'Daily at 9am',            value: '0 9 * * *' },
+            { label: 'Every 12 hours',          value: '0 */12 * * *' },
+            { label: 'Weekly Mon 9am',          value: '0 9 * * 1' }
+          ].map((p) => (
+            <button key={p.value} className="btn-ghost" onClick={() => setS({ ...s, deepScanCron: p.value })}>{p.label}</button>
+          ))}
+        </div>
+        <div style={{ height: 16 }} />
+        <label className="label">Deep scan model</label>
+        <select
+          className="select"
+          value={s.deepScanModel}
+          onChange={(e) => setS({ ...s, deepScanModel: e.target.value })}
+        >
+          <option value="sonar-deep-research">sonar-deep-research (recommended — multi-step research, costliest)</option>
+          <option value="sonar-reasoning-pro">sonar-reasoning-pro (chain-of-thought, mid-tier)</option>
+          <option value="sonar-pro">sonar-pro (same as regular scan — useful if you just want more frequent runs)</option>
+        </select>
+      </div>
+
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 12 }}>Scanner tuning</div>
         <label className="label">Minimum confidence to flag as opportunity</label>
         <input

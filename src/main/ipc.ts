@@ -3,7 +3,7 @@ import { getDb, dataDir } from './db.js';
 import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
 import { researchProduct, refreshProductSignals } from './research.js';
-import { runScan } from './scanner.js';
+import { runScan, runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
@@ -290,6 +290,10 @@ export function registerIpc() {
   // -------- Scans / Opportunities --------
   ipcMain.handle('scan:run', async () => {
     const result = await runScan();
+    return result;
+  });
+  ipcMain.handle('scan:runDeep', async () => {
+    const result = await runDeepScan();
     return result;
   });
   ipcMain.handle('scan:runs', () =>

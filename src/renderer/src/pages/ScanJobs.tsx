@@ -6,6 +6,7 @@ export function ScanJobs() {
   const [runs, setRuns] = useState<ScanRun[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [running, setRunning] = useState(false);
+  const [runningDeep, setRunningDeep] = useState(false);
   const [selectedRun, setSelectedRun] = useState<ScanRun | null>(null);
 
   const refresh = async () => {
@@ -31,20 +32,36 @@ export function ScanJobs() {
       <div className="card" style={{ padding: 20, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div className="h-card">Manual run</div>
-          <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>Trigger a one-off scan now.</div>
+          <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>
+            <b>Run Scan Now</b> uses the cheap sonar-pro model. <b>Run Deep Scan Now</b> uses sonar-deep-research — slower and costlier per call but reasons harder.
+          </div>
         </div>
-        <button
-          className="btn-primary"
-          onClick={async () => {
-            setRunning(true);
-            try { await window.lh.scan.run(); refresh(); }
-            catch (e: any) { alert(e.message); }
-            finally { setRunning(false); }
-          }}
-          disabled={running}
-        >
-          {running ? 'Scanning…' : 'Run Scan Now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn-ghost"
+            onClick={async () => {
+              setRunningDeep(true);
+              try { await window.lh.scan.runDeep(); refresh(); }
+              catch (e: any) { alert(e.message); }
+              finally { setRunningDeep(false); }
+            }}
+            disabled={runningDeep || running}
+          >
+            {runningDeep ? 'Deep scanning…' : 'Run Deep Scan Now'}
+          </button>
+          <button
+            className="btn-primary"
+            onClick={async () => {
+              setRunning(true);
+              try { await window.lh.scan.run(); refresh(); }
+              catch (e: any) { alert(e.message); }
+              finally { setRunning(false); }
+            }}
+            disabled={running || runningDeep}
+          >
+            {running ? 'Scanning…' : 'Run Scan Now'}
+          </button>
+        </div>
       </div>
 
       <div className="card" style={{ overflow: 'hidden' }}>
@@ -56,6 +73,7 @@ export function ScanJobs() {
             <tr>
               <th>Started</th>
               <th>Finished</th>
+              <th>Kind</th>
               <th>Status</th>
               <th>Scanned</th>
               <th>Opportunities</th>
@@ -63,11 +81,16 @@ export function ScanJobs() {
             </tr>
           </thead>
           <tbody>
-            {runs.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>No runs yet.</td></tr>}
+            {runs.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>No runs yet.</td></tr>}
             {runs.map((r) => (
               <tr key={r.id}>
                 <td>{fmtDate(r.started_at)}</td>
                 <td>{fmtDate(r.finished_at)}</td>
+                <td>
+                  <span className={`chip ${r.kind === 'deep' ? 'chip-brand' : 'chip-muted'}`}>
+                    {r.kind === 'deep' ? 'deep research' : 'manual'}
+                  </span>
+                </td>
                 <td><span className={`chip ${r.status === 'completed' ? 'chip-qualified' : r.status === 'error' ? 'chip-disqualified' : 'chip-open'}`}>{r.status}</span></td>
                 <td>{r.items_scanned}</td>
                 <td>{r.opportunities_created}</td>

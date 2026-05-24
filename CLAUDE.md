@@ -545,6 +545,18 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.5.0 (2026-05-24):** Third scanning engine — twice-daily Deep Research scan.
+
+- New settings: `deepScanEnabled` (default false), `deepScanCron` (default `0 9,21 * * *` — 9am & 9pm local), `deepScanModel` (default `sonar-deep-research`).
+- New schema column: `scan_runs.kind` (`'manual'` default, `'deep'` for deep-scan rows). Idempotent backfill via `addColumnIfMissing`.
+- `runScan()` refactored to take a `ScanOpts` object (`{ model, stage, kind, maxTokens, label }`). Default behavior unchanged — legacy callers still get sonar-pro + stage='manual_scan' + kind='manual'.
+- New `runDeepScan()` thin wrapper: same pipeline (Pass 1 + Pass 2 + brand-self hygiene + disqualify learning + scan rules) but uses the deep model + 9000-token budget + stage='deep_scan' so spend dashboard tracks it separately.
+- New `LlmStage` value `'deep_scan'` in `pricing.ts`.
+- Scheduler manages **two** ScheduledTask instances — regular + deep — each tied to its own enabled flag. `restartScheduler()` tears down both and re-registers them.
+- New IPC `scan:runDeep` + `window.lh.scan.runDeep()` for on-demand triggering.
+- Settings page: new "Deep Research Scan" card with toggle, cron presets (Twice daily / Daily 9am / Every 12h / Weekly Mon 9am), and a deep-model picker.
+- ScanJobs page: new "Run Deep Scan Now" button (greyer, secondary CTA) next to "Run Scan Now"; history table gains a "Kind" column with a purple `deep research` chip vs. grey `manual`.
+
 **v1.4.0 (2026-05-24):** Dashboard usability + edit-in-place + brand-self fix.
 
 1. **Default sort + sortable headers + per-column filters.** `opps:list` now returns rows in `datetime(created_at) DESC, id DESC` order. Dashboard rewritten to pre-fetch brands/products into maps (sync filter / sort, no per-row async lookup). Each column header is clickable to sort (toggle direction); a thin sticky filter row sits below the headers with: text inputs (company, industry, signal), select dropdowns (brand, product, scan type), and a min-confidence number input.

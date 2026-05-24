@@ -11,6 +11,11 @@ const defaults: Settings = {
   scanRecency: 'week',
   scanCron: '0 */6 * * *',
   scanEnabled: false,
+  // Deep Research scan defaults to twice daily, 9 AM and 9 PM local.
+  // Opt-in: more expensive than the regular scan.
+  deepScanCron: '0 9,21 * * *',
+  deepScanEnabled: false,
+  deepScanModel: 'sonar-deep-research',
   minConfidence: 0.55,
   maxItemsPerScan: 30,
   liveMonitoringEnabled: false,
@@ -32,6 +37,9 @@ export function getSettings(): Settings {
     scanRecency: (store as any).get('scanRecency') as 'day' | 'week' | 'month',
     scanCron: (store as any).get('scanCron') as string,
     scanEnabled: (store as any).get('scanEnabled') as boolean,
+    deepScanCron: (store as any).get('deepScanCron') as string,
+    deepScanEnabled: (store as any).get('deepScanEnabled') as boolean,
+    deepScanModel: (store as any).get('deepScanModel') as string,
     minConfidence: (store as any).get('minConfidence') as number,
     maxItemsPerScan: (store as any).get('maxItemsPerScan') as number,
     liveMonitoringEnabled: (store as any).get('liveMonitoringEnabled') as boolean,

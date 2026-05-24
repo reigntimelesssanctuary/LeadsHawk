@@ -3,7 +3,22 @@ import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import { buildDisqualificationsBlock } from './learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
+import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
+
+/**
+ * Runtime knobs for a scan run. Defaults reproduce the legacy "manual" run
+ * (sonar-pro, manual_scan stage tag). The twice-daily deep scan overrides
+ * with sonar-deep-research + 'deep_scan' stage + kind='deep'.
+ */
+export type ScanOpts = {
+  model?: string;
+  stage?: LlmStage;
+  kind?: 'manual' | 'deep';
+  maxTokens?: number;
+  /** Prefix line written to the scan_runs log so it's clear which engine ran. */
+  label?: string;
+};
 
 /**
  * Build the user-defined-rules guardrail block. If productId is provided,
@@ -110,14 +125,20 @@ function scanQuotaPerProduct(): number {
   return Math.max(3, Math.min(10, Math.ceil(maxItemsPerScan / 3)));
 }
 
-export async function runScan(): Promise<{ runId: number; created: number; scanned: number }> {
+export async function runScan(
+  opts: ScanOpts = {}
+): Promise<{ runId: number; created: number; scanned: number }> {
   const db = getDb();
-  const startStmt = db.prepare("INSERT INTO scan_runs(status) VALUES ('running')");
-  const runId = Number(startStmt.run().lastInsertRowid);
+  const kind = opts.kind ?? 'manual';
+  const stage: LlmStage = opts.stage ?? 'manual_scan';
+  const maxTokens = opts.maxTokens ?? 4500;
+  const startStmt = db.prepare("INSERT INTO scan_runs(status, kind) VALUES ('running', ?)");
+  const runId = Number(startStmt.run(kind).lastInsertRowid);
   const logLines: string[] = [];
   const log: ScanLog = (line) => {
     logLines.push(`[${new Date().toISOString()}] ${line}`);
   };
+  if (opts.label) log(opts.label);
 
   let created = 0;
   let scanned = 0;
@@ -126,6 +147,8 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
     if (!settings.perplexityApiKey) {
       throw new Error('Perplexity API key not configured. Open Settings and paste your key.');
     }
+    const scanModel = opts.model ?? settings.perplexityScanModel ?? 'sonar-pro';
+    log(`engine: model=${scanModel} stage=${stage} kind=${kind}`);
 
     const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
     const allProducts = db.prepare('SELECT * FROM products').all() as Product[];
@@ -212,12 +235,12 @@ specific signal (from the list above) that this opportunity matches.`;
           SYSTEM,
           prompt,
           {
-            model: settings.perplexityScanModel || 'sonar-pro',
-            maxTokens: 4500,
+            model: scanModel,
+            maxTokens,
             temperature: 0.2,
             searchRecency: settings.scanRecency,
             jsonSchema: OPPS_SCHEMA,
-            stage: 'manual_scan',
+            stage,
             relatedId: product.id
           }
         );
@@ -292,12 +315,12 @@ brand/product names that appear in our portfolio.`;
           const r = await completePerplexity<{ opportunities: (PplxOpportunity & {
             matched_brand?: string | null; matched_product?: string | null;
           })[] }>(SYSTEM, prompt, {
-            model: settings.perplexityScanModel || 'sonar-pro',
-            maxTokens: 4500,
+            model: scanModel,
+            maxTokens,
             temperature: 0.2,
             searchRecency: settings.scanRecency,
             jsonSchema: OPPS_SCHEMA_CUSTOM,
-            stage: 'manual_scan',
+            stage,
             relatedId: src.id
           });
           const opps = r.json?.opportunities || [];
@@ -346,6 +369,25 @@ brand/product names that appear in our portfolio.`;
     `UPDATE scan_jobs SET last_run_at = datetime('now'), last_status = 'completed', last_results = ?`
   ).run(created);
   return { runId, created, scanned };
+}
+
+/**
+ * Thin wrapper around runScan that uses Perplexity's heavy deep-research
+ * model. Designed for a low-frequency cron (default twice daily) so the
+ * higher per-call cost is amortized across discovery quality.
+ *
+ * The token budget is roughly 2× the regular scan because deep-research
+ * generates longer reasoning before its final answer.
+ */
+export async function runDeepScan(): Promise<{ runId: number; created: number; scanned: number }> {
+  const settings = getSettings();
+  return runScan({
+    model: settings.deepScanModel || 'sonar-deep-research',
+    stage: 'deep_scan',
+    kind: 'deep',
+    maxTokens: 9000,
+    label: '== Deep Research scan =='
+  });
 }
 
 const OPPS_SCHEMA_CUSTOM = {

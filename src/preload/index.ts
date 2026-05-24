@@ -57,6 +57,7 @@ const api = {
   },
   scan: {
     run: () => ipcRenderer.invoke('scan:run'),
+    runDeep: () => ipcRenderer.invoke('scan:runDeep'),
     runs: () => ipcRenderer.invoke('scan:runs'),
     runGet: (id: number) => ipcRenderer.invoke('scan:run:get', id)
   },

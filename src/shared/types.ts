@@ -72,6 +72,7 @@ export type ScanRun = {
   started_at: string;
   finished_at: string | null;
   status: 'running' | 'completed' | 'error';
+  kind: 'manual' | 'deep';
   items_scanned: number;
   opportunities_created: number;
   log: string | null;
@@ -138,6 +139,10 @@ export type Settings = {
   scanRecency: 'day' | 'week' | 'month';
   scanCron: string;
   scanEnabled: boolean;
+  // Deep scan — separate scheduled engine using sonar-deep-research
+  deepScanCron: string;
+  deepScanEnabled: boolean;
+  deepScanModel: string;
   minConfidence: number;
   maxItemsPerScan: number;
   // Live monitor
