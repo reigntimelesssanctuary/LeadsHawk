@@ -545,6 +545,25 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.5.4 (2026-05-24):** URL hygiene for scanner output — "Source" links no longer dump the user on hallucinated URLs.
+
+Root cause: Perplexity occasionally returns a `source_url` in the JSON that doesn't actually appear in its citations array (paraphrased, malformed, or invented). The old code accepted whatever string the LLM returned.
+
+New module `src/main/url-hygiene.ts` with:
+- `cleanUrl(raw)` — strips wrapping quotes/parens, trailing sentence punctuation, parses out markdown link form `[text](url)`, validates http/https, rejects placeholder hosts (`example.com` etc.), strips fragment.
+- `pickBestSourceUrl(llmUrl, citations)` — returns `{ url, source }` where source is `'llm'` (LLM URL matched a citation, canonical compare), `'citation'` (substituted because LLM URL not in citations — falls back to host-match, then first citation), or `'llm_unverified'` (no citations available, returning LLM URL as-is or null).
+- `dedupeCleanCitations(list)` — canonical-deduped list for UI display.
+
+`insertCandidates` (scanner.ts) now:
+- Threads `citations: string[]` through from the Perplexity response (both Pass 1 and Pass 2).
+- Calls `pickBestSourceUrl` on every candidate. Candidates with no usable URL are dropped with `skip (no usable source_url)`.
+- Logs substitution events as `~ substituted source_url with citation for X`.
+- Persists the picked source's provenance + up to 8 alternative citations in `raw_signal.alt_sources` / `raw_signal.url_source`.
+
+OpportunityDetail.tsx new `AlternativeSources` panel: shows a yellow info banner when the source was substituted or unverified, plus a clickable list of citations the user can try if the primary link is dead.
+
+Live monitor unaffected — its `source_url` comes from the original RSS item (already grounded), not from any LLM.
+
 **v1.5.3 (2026-05-24):** Bug fix — manual scan Pass 2 (custom topics) was producing leads for scan-disabled brands.
 
 Root cause: `buildPortfolio()` enumerated ALL brands + products regardless of `scan_enabled`, so the Pass 2 prompt told the LLM about disabled brands and let it return `matched_brand` against them. Three-layer fix in `scanner.ts`:

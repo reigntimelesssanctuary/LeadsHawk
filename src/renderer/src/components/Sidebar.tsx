@@ -81,7 +81,7 @@ export function Sidebar({
         </nav>
       </div>
       <div className="no-drag px-6 py-4" style={{ color: '#6b7280', fontSize: 11 }}>
-        v1.5.3
+        v1.5.4
       </div>
     </aside>
   );

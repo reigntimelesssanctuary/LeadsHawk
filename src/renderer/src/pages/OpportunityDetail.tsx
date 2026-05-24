@@ -97,6 +97,7 @@ export function OpportunityDetail({ id, onClose }: { id: number; onClose: () => 
             <button className="btn-ghost" style={{ marginTop: 10 }} onClick={() => openExternal(opp.source_url)}>
               <ExternalLink size={13} style={{ display: 'inline', marginRight: 4 }} /> Open source
             </button>
+            <AlternativeSources rawSignal={opp.raw_signal} />
           </div>
         </Section>
       </div>
@@ -122,6 +123,54 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="card" style={{ padding: 18 }}>
       <div className="label" style={{ marginBottom: 8 }}>{title}</div>
       <div style={{ fontSize: 14, color: '#1f2937', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{children || '—'}</div>
+    </div>
+  );
+}
+
+/**
+ * v1.5.4: if the primary source link is dead, the scanner now also stores
+ * up to 8 alternative citations from the Perplexity response. Surface them
+ * here so the user has a fallback.
+ */
+function AlternativeSources({ rawSignal }: { rawSignal: string | null }) {
+  if (!rawSignal) return null;
+  let alts: string[] = [];
+  let urlSource: string | undefined;
+  try {
+    const parsed = JSON.parse(rawSignal);
+    alts = Array.isArray(parsed?.alt_sources) ? parsed.alt_sources : [];
+    urlSource = typeof parsed?.url_source === 'string' ? parsed.url_source : undefined;
+  } catch { /* not JSON or malformed — ignore */ }
+  if (alts.length === 0 && !urlSource) return null;
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
+      {urlSource === 'citation' && (
+        <div style={{ fontSize: 12, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 6, marginBottom: 8 }}>
+          The primary source URL was substituted from Perplexity's citations (the LLM's stated URL didn't match a real citation).
+        </div>
+      )}
+      {urlSource === 'llm_unverified' && (
+        <div style={{ fontSize: 12, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 6, marginBottom: 8 }}>
+          The source URL came directly from the LLM and wasn't verified against Perplexity's citations — if it's broken, no citations were available to substitute.
+        </div>
+      )}
+      {alts.length > 0 && (
+        <>
+          <div className="label" style={{ marginBottom: 6 }}>Alternative sources</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {alts.map((url) => (
+              <a
+                key={url}
+                onClick={() => openExternal(url)}
+                style={{ fontSize: 13, cursor: 'pointer', wordBreak: 'break-all' }}
+                title={url}
+              >
+                {url}
+              </a>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

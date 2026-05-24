@@ -3,6 +3,7 @@ import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import { buildDisqualificationsBlock } from './learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
+import { pickBestSourceUrl, dedupeCleanCitations } from './url-hygiene.js';
 import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
@@ -232,6 +233,7 @@ ${perProduct} strongest opportunities. Set "matched_signal" to the
 specific signal (from the list above) that this opportunity matches.`;
 
       let json: { opportunities: PplxOpportunity[] } | null = null;
+      let citations: string[] = [];
       try {
         const r = await completePerplexity<{ opportunities: PplxOpportunity[] }>(
           SYSTEM,
@@ -247,11 +249,12 @@ specific signal (from the list above) that this opportunity matches.`;
           }
         );
         json = r.json;
+        citations = r.citations || [];
         if (!json) {
           log(`  ! unparseable response (${r.text.length} chars)`);
           continue;
         }
-        log(`  → ${json.opportunities?.length ?? 0} candidate(s) returned`);
+        log(`  → ${json.opportunities?.length ?? 0} candidate(s) returned, ${citations.length} citation(s)`);
       } catch (e: any) {
         log(`  ! Perplexity error: ${e.message || e}`);
         continue;
@@ -259,7 +262,7 @@ specific signal (from the list above) that this opportunity matches.`;
 
       created += insertCandidates(
         json.opportunities || [],
-        { brand, product, sourceLabel: `auto:${product.name}`, brands },
+        { brand, product, sourceLabel: `auto:${product.name}`, brands, citations },
         { settings, seenStmt, insertSeen, insertOpp, log }
       );
       scanned += json.opportunities?.length ?? 0;
@@ -347,7 +350,8 @@ brand/product names that appear in our portfolio.`;
             relatedId: src.id
           });
           const opps = r.json?.opportunities || [];
-          log(`  → ${opps.length} candidate(s) returned`);
+          const citations = r.citations || [];
+          log(`  → ${opps.length} candidate(s) returned, ${citations.length} citation(s)`);
           scanned += opps.length;
           for (const cand of opps) {
             // Resolve matched_brand / matched_product against ENABLED only —
@@ -367,7 +371,8 @@ brand/product names that appear in our portfolio.`;
                 brand: matchedBrand,
                 product: matchedProduct,
                 sourceLabel: `custom:${src.name}`,
-                brands
+                brands,
+                citations
               },
               { settings, seenStmt, insertSeen, insertOpp, log }
             );
@@ -480,13 +485,26 @@ type InsertCtx = {
 
 function insertCandidates(
   candidates: PplxOpportunity[],
-  attrib: { brand: Brand | null; product: Product | null; sourceLabel: string; brands: Brand[] },
+  attrib: { brand: Brand | null; product: Product | null; sourceLabel: string; brands: Brand[]; citations: string[] },
   ctx: InsertCtx
 ): number {
   let inserted = 0;
+  const cleanedCitations = dedupeCleanCitations(attrib.citations);
   for (const cand of candidates) {
-    const url = (cand.source_url || '').trim();
-    if (!url) { ctx.log('  - skip: no source_url'); continue; }
+    // v1.5.4: pick the best URL by cross-referencing the LLM's stated
+    // source_url against Perplexity's citation list. Drops candidates
+    // we can't anchor to a real URL.
+    const picked = pickBestSourceUrl(cand.source_url, attrib.citations);
+    if (!picked.url) {
+      ctx.log(`  - skip (no usable source_url): ${cand.company}`);
+      continue;
+    }
+    if (picked.source === 'citation') {
+      ctx.log(`  ~ substituted source_url with citation for ${cand.company} (LLM URL didn't match citations)`);
+    } else if (picked.source === 'llm_unverified' && cleanedCitations.length > 0) {
+      ctx.log(`  ~ LLM url not in citations for ${cand.company} — kept LLM url (no host match)`);
+    }
+    const url = picked.url;
     if (ctx.seenStmt.get(url)) { ctx.log(`  - skip (seen): ${cand.company}`); continue; }
     if ((cand.confidence ?? 0) < ctx.settings.minConfidence) {
       ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${cand.company}`);
@@ -524,7 +542,14 @@ function insertCandidates(
       cand.use_case,
       cand.angle,
       cand.signal_summary,
-      JSON.stringify({ source: attrib.sourceLabel, matched_signal: cand.matched_signal })
+      JSON.stringify({
+        source: attrib.sourceLabel,
+        matched_signal: cand.matched_signal,
+        // Keep up to 8 alternative citations so the UI can offer them if
+        // the primary source link is broken.
+        alt_sources: cleanedCitations.filter((c) => c !== url).slice(0, 8),
+        url_source: picked.source
+      })
     );
     inserted++;
     ctx.log(
