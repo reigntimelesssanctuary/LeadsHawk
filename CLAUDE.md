@@ -545,6 +545,8 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.3 (2026-05-25):** Crit fix — v1.7.2 wouldn't launch. `npm install undici` in v1.7.1 resolved to undici@8.x which calls `webidl.util.markAsUncloneable` (a Node 22.5+ API). Electron 33 ships Node 20.18.x, which lacks it. App crashed on startup at the require-time of undici's `lib/web/cache/cachestorage.js`. Pinned `undici: ^6.25.0` (same major as Electron's bundled undici). API shape (`Agent`, `fetch`) is identical so `perplexity.ts` needs no changes.
+
 **v1.7.2 (2026-05-25):** UX: scan-inclusion toggles moved from Brands & Products to Scan Jobs.
 
 New `ScanInclusionCard` on the Scan Jobs page (between Schedule and Manual run): lists every brand with its products as a hierarchical tree, each row with a Switch. Brand-level toggle still cascades — disabling a brand greys out and disables all its product toggles. Header shows live counts ("N/M brands active · X/Y products active").
