@@ -5,6 +5,7 @@ import { buildDisqualificationsBlock } from './learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
 import { pickBestSourceUrl, dedupeCleanCitations } from './url-hygiene.js';
 import { retrieveRelevantChunks, renderChunksBlock } from './knowledge-index.js';
+import { embedText, cosineSim, loadCachedSignalsForProduct } from './monitor/embed.js';
 import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
@@ -302,12 +303,21 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
         continue;
       }
 
-      created += insertCandidates(
+      const passInserts = insertCandidates(
         json.opportunities || [],
         { brand, product, sourceLabel: `auto:${product.name}`, brands, citations },
         { settings, seenStmt, insertSeen, insertOpp, log }
       );
+      created += passInserts;
       scanned += json.opportunities?.length ?? 0;
+      // v1.7: bidirectional cross-match. For every successfully inserted opp
+      // from this product's scan, check whether the article also matches
+      // any OTHER scan-enabled product's signal embeddings strongly enough
+      // to warrant an additional opportunity.
+      if (passInserts > 0 && settings.crossMatchEnabled) {
+        const xmCount = await crossMatchRecent(product.id, scanProducts, brands, log);
+        created += xmCount;
+      }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -442,6 +452,109 @@ brand/product names that appear in our portfolio.`;
     `UPDATE scan_jobs SET last_run_at = datetime('now'), last_status = 'completed', last_results = ?`
   ).run(created);
   return { runId, created, scanned };
+}
+
+/**
+ * v1.7 — Cross-match the most recent inserts for one product against
+ * every OTHER scan-enabled product's signal embeddings. If any other
+ * product's best similarity beats the (threshold + 0.10) bar, create a
+ * cross-match opportunity for that product too.
+ *
+ * Capped at 2 cross-matches per original opp to avoid lead inflation in
+ * portfolios with many similar products.
+ *
+ * Idempotent on (product_id, source_url): if a cross-match for the same
+ * url+product already exists, it's skipped.
+ */
+async function crossMatchRecent(
+  originalProductId: number,
+  scanProducts: Product[],
+  allBrands: Brand[],
+  log: ScanLog
+): Promise<number> {
+  const db = getDb();
+  const settings = getSettings();
+  // Pull the opportunities just inserted for this product in the last 60s
+  // — they're the ones that came from THIS product's Perplexity call.
+  const recents = db
+    .prepare(
+      `SELECT id, source_url, headline, signal_summary
+       FROM opportunities
+       WHERE product_id = ?
+         AND datetime(created_at) > datetime('now', '-60 seconds')`
+    )
+    .all(originalProductId) as Array<{ id: number; source_url: string; headline: string; signal_summary: string | null }>;
+  if (recents.length === 0) return 0;
+
+  const others = scanProducts.filter((p) => p.id !== originalProductId);
+  if (others.length === 0) return 0;
+
+  // Pre-load each candidate product's signal vectors once.
+  const otherVectors = others.map((p) => ({ product: p, vectors: loadCachedSignalsForProduct(p.id) }))
+                              .filter((x) => x.vectors.length > 0);
+  if (otherVectors.length === 0) return 0;
+
+  const threshold = settings.embedSimilarityThreshold + 0.10;
+  let inserted = 0;
+
+  // Avoid duplicate cross-matches: skip if any opp already exists for
+  // (product, url) — works for both prior runs and this run.
+  const existsStmt = db.prepare(
+    'SELECT 1 FROM opportunities WHERE product_id = ? AND source_url = ? LIMIT 1'
+  );
+  const xmInsert = db.prepare(`
+    INSERT INTO opportunities(
+      brand_id, product_id, company, industry, country, headline, source_url, source_title,
+      source_published_at, confidence, status, background, use_case, angle,
+      signal_summary, raw_signal
+    )
+    SELECT ?, ?, company, industry, country, headline, source_url, source_title,
+           source_published_at, ?, 'open', background, use_case, angle,
+           signal_summary, ?
+    FROM opportunities WHERE id = ?
+  `);
+
+  for (const opp of recents) {
+    const text = [opp.headline, opp.signal_summary || ''].filter(Boolean).join(' — ').trim();
+    if (!text) continue;
+    let itemVec: number[];
+    try { itemVec = await embedText(text); } catch (e: any) {
+      log(`  ~ cross-match embed failed for opp #${opp.id}: ${e?.message || e}`);
+      continue;
+    }
+    // Score this opp against every other product, sort, keep top 2 above threshold.
+    const scored: { product: Product; sim: number; matchedSignal: string }[] = [];
+    for (const { product, vectors } of otherVectors) {
+      let bestSim = 0;
+      let bestSig = '';
+      for (const v of vectors) {
+        const s = cosineSim(itemVec, v.embedding);
+        if (s > bestSim) { bestSim = s; bestSig = v.text; }
+      }
+      if (bestSim >= threshold) scored.push({ product, sim: bestSim, matchedSignal: bestSig });
+    }
+    scored.sort((a, b) => b.sim - a.sim);
+    const top = scored.slice(0, 2);
+    for (const { product, sim, matchedSignal } of top) {
+      if (existsStmt.get(product.id, opp.source_url)) continue;
+      const brand = allBrands.find((b) => b.id === product.brand_id) || null;
+      // Inherit content from the original opp but re-confidence based on
+      // cross-match strength: original_confidence * (sim normalized).
+      const origConf = (db.prepare('SELECT confidence FROM opportunities WHERE id = ?')
+                          .get(opp.id) as { confidence: number }).confidence ?? 0.5;
+      const xmConf = Math.min(0.95, Math.max(0.3, origConf * Math.min(1, sim * 1.2)));
+      const xmRaw = JSON.stringify({
+        source: `cross_match:from_product_${originalProductId}`,
+        cross_match_similarity: Number(sim.toFixed(3)),
+        matched_signal: matchedSignal,
+        origin_opportunity_id: opp.id
+      });
+      xmInsert.run(brand?.id ?? null, product.id, xmConf, xmRaw, opp.id);
+      inserted++;
+      log(`  ↔ cross-match: opp #${opp.id} also fits "${product.name}" (sim ${sim.toFixed(2)}, conf ${xmConf.toFixed(2)})`);
+    }
+  }
+  return inserted;
 }
 
 /**

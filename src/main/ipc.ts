@@ -10,8 +10,10 @@ import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
 import { getSpendSummary } from './spend.js';
 import {
-  startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning
+  startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning,
+  processSingleItem
 } from './monitor/index.js';
+import { fetchUrl as fetchUrlForKnowledge } from './knowledge.js';
 import { recordDisqualifyVector, embedSignalsForProduct } from './monitor/embed.js';
 import type { MonitorSource, SignalItem, SourceHealth, Opportunity } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
@@ -436,6 +438,39 @@ export function registerIpc() {
     db.prepare('DELETE FROM monitor_sources WHERE id = ?').run(id);
     return true;
   });
+  // v1.7: manual article intake. User pastes a URL (or URL + override
+  // title); we fetch, insert as a signal_item, and run the full
+  // embed → triage → qualify pipeline synchronously so they see the result.
+  ipcMain.handle('monitor:intake', async (_e, payload: { url: string; title?: string }) => {
+    const url = (payload?.url || '').trim();
+    if (!url) throw new Error('URL is required.');
+    let fetched: { title: string; content: string };
+    try {
+      fetched = await fetchUrlForKnowledge(url);
+    } catch (e: any) {
+      throw new Error(`Failed to fetch URL: ${e?.message || e}`);
+    }
+    const title = (payload.title || fetched.title || url).slice(0, 500);
+    const snippet = (fetched.content || '').slice(0, 1500);
+    // Insert or surface existing item if we've already seen this URL.
+    const existing = db.prepare('SELECT id FROM signal_items WHERE url = ?').get(url) as { id: number } | undefined;
+    let itemId: number;
+    if (existing) {
+      itemId = existing.id;
+      db.prepare(
+        "UPDATE signal_items SET title = ?, snippet = ?, content = ?, status = 'new', error = NULL, processed_at = NULL WHERE id = ?"
+      ).run(title, snippet, fetched.content || null, itemId);
+    } else {
+      const info = db.prepare(
+        `INSERT INTO signal_items(source_id, url, title, snippet, content, status)
+         VALUES (NULL, ?, ?, ?, ?, 'new')`
+      ).run(url, title, snippet, fetched.content || null);
+      itemId = Number(info.lastInsertRowid);
+    }
+    const outcome = await processSingleItem(itemId);
+    return { itemId, outcome };
+  });
+
   ipcMain.handle('monitor:sources:health', (): SourceHealth[] => {
     // Per-source 7-day funnel: ingested → passed prefilter (candidate or further)
     // → triaged strong → became opportunity. Joins through signal_items.

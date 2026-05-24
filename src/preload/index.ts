@@ -91,7 +91,8 @@ const api = {
     sourceCreate: (p: any) => ipcRenderer.invoke('monitor:sources:create', p),
     sourceUpdate: (id: number, p: any) => ipcRenderer.invoke('monitor:sources:update', id, p),
     sourceDelete: (id: number) => ipcRenderer.invoke('monitor:sources:delete', id),
-    sourcesHealth: () => ipcRenderer.invoke('monitor:sources:health')
+    sourcesHealth: () => ipcRenderer.invoke('monitor:sources:health'),
+    intake: (p: { url: string; title?: string }) => ipcRenderer.invoke('monitor:intake', p)
   },
   onNavigate: (cb: (data: { kind: string; id: number }) => void) => {
     ipcRenderer.on('navigate', (_e, data) => cb(data));

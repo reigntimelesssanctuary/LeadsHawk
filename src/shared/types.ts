@@ -160,6 +160,11 @@ export type Settings = {
   embedSimilarityThreshold: number;     // 0..1, default 0.55
   notifyOnNewOpportunity: boolean;      // macOS notifications
   openAtLogin: boolean;                  // start LeadsHawk when user logs in
+  // v1.7: when a scan finds an opportunity for one product, also check
+  // whether it matches OTHER products' signal embeddings and create
+  // additional opportunities for them. Uses embedSimilarityThreshold + 0.10
+  // (so only strong cross-matches fire).
+  crossMatchEnabled: boolean;
 };
 
 export type MonitorSource = {

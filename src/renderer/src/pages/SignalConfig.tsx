@@ -98,7 +98,46 @@ export function SignalConfig() {
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-section" style={{ marginBottom: 12 }}>
           <Sparkles size={16} style={{ display: 'inline', marginRight: 8, verticalAlign: '-2px', color: '#6c5cf2' }} />
-          Auto-derived signals
+          Brand-level signals
+        </div>
+        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+          Cross-cutting signals captured by brand research (v1.6). These apply across every product of the brand and are injected into every scan + live-monitor prompt. To edit, use the brand's Edit button on the Brands & Products page (Edit → Positioning) or re-run brand research.
+        </div>
+        {brands.length === 0 ? (
+          <div style={{ color: '#6b7280', fontSize: 13 }}>No brands yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {brands.map((b) => {
+              const lines = parseBullets(b.signals || '');
+              const researched = b.research_status === 'ready';
+              return (
+                <div key={b.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: researched ? 'white' : '#fafafa' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                    {!researched ? (
+                      <span className="chip chip-muted">brand not researched yet</span>
+                    ) : lines.length === 0 ? (
+                      <span className="chip chip-muted">no brand signals captured</span>
+                    ) : (
+                      <span className="chip chip-qualified">{lines.length} signal{lines.length === 1 ? '' : 's'}</span>
+                    )}
+                  </div>
+                  {lines.length > 0 && (
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#1f2937', lineHeight: 1.5 }}>
+                      {lines.map((line, i) => <li key={i} style={{ marginBottom: 2 }}>{line}</li>)}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <div className="h-section" style={{ marginBottom: 12 }}>
+          <Sparkles size={16} style={{ display: 'inline', marginRight: 8, verticalAlign: '-2px', color: '#6c5cf2' }} />
+          Product-level signals
         </div>
 
         {productsReady.length === 0 ? (

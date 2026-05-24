@@ -96,8 +96,20 @@ export async function qualifyItem(
   const allBrands = db.prepare('SELECT * FROM brands').all() as Brand[];
   const ownBrandsBlock = buildOwnBrandsBlock(allBrands);
 
-  const prompt = `# Product
-Brand: ${brand.name}
+  // v1.7: brand context — same foundational block the cast-nets scans get.
+  const brandBlock = `# Brand
+Name: ${brand.name}
+Category: ${brand.category || '(unspecified)'}
+Description: ${brand.description || '(none on file)'}
+Positioning: ${brand.positioning || '(none on file)'}
+Target ICP: ${brand.target_icp || '(not researched yet)'}
+Competitive summary: ${brand.competitive_summary || '(none on file)'}
+${brand.signals ? `\nBrand-level signals:\n${brand.signals}` : ''}
+${brand.research_summary ? `\nBrand research summary:\n${brand.research_summary.slice(0, 1000)}${brand.research_summary.length > 1000 ? '…' : ''}` : ''}`;
+
+  const prompt = `${brandBlock}
+
+# Product
 Product: ${product.name}
 Category: ${product.category || ''}
 Description: ${product.description || ''}

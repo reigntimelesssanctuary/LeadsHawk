@@ -43,8 +43,20 @@ export async function triageItem(
 
   const disqBlock = buildDisqualificationsBlock(product.id, 6);
 
-  const prompt = `# Our product
-Brand: ${brand.name}
+  // v1.7: brand context — same foundational block the cast-nets scans get
+  // (v1.6). Triage decisions are much sharper when the model knows our
+  // positioning + ICP rather than just the product name.
+  const brandBlock = `# Our brand
+Name: ${brand.name}
+Category: ${brand.category || '(unspecified)'}
+Description: ${brand.description || '(none on file)'}
+Positioning: ${brand.positioning || '(none on file)'}
+Target ICP: ${brand.target_icp || '(not researched yet)'}
+${brand.signals ? `\nBrand-level signals (apply across the whole brand):\n${brand.signals}` : ''}`;
+
+  const prompt = `${brandBlock}
+
+# Our product
 Product: ${product.name}
 Category: ${product.category || ''}
 Description: ${product.description || ''}
@@ -64,7 +76,7 @@ Snippet: ${item.snippet || '(none)'}
 ${disqBlock}
 
 # Task
-Decide: is this a credible buying-signal candidate for THIS product?
+Decide: is this a credible buying-signal candidate for THIS brand+product?
 
 Return JSON:
 {

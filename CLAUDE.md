@@ -545,6 +545,13 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.0 (2026-05-25):** **Signal-first track enhancements (Track B of the dual-track architecture).** Closes the parallel-tracks design.
+
+1. **Brand context in Live Monitor prompts.** Both `monitor/triage.ts` and `monitor/qualify.ts` now include the full brand block (category, description, positioning, target_icp, competitive_summary, brand signals, truncated research_summary) — same upgrade scans got in v1.6. Live monitor decisions now have the same foundational context as the cast-nets engine.
+2. **Manual article intake.** New `monitor:intake` IPC accepts `{url, title?}`, fetches via the existing `fetchUrl()`, inserts a `signal_item` with `source_id=NULL`, and runs the full pipeline (embed → match → triage → qualify) **synchronously** via the new `processSingleItem(itemId)` export in `monitor/index.ts`. Returns a typed `IntakeOutcome` so the UI can show what happened. New `ManualIntakeCard` on the Live Monitor page with an inline URL input + result banner (qualified / triaged / filtered / error). Lets the user feed anything they've seen externally through the signal-first engine on demand.
+3. **Bidirectional cross-match.** New `crossMatchRecent` in `scanner.ts` runs after every successful Pass-1 insert: embeds each fresh opportunity's headline+summary, compares against every OTHER scan-enabled product's cached signal embeddings, and creates up to 2 additional opportunities for products whose best similarity beats `embedSimilarityThreshold + 0.10`. Cross-match opportunities are tagged in `raw_signal.source = 'cross_match:from_product_<N>'` and reference `origin_opportunity_id`. Confidence is scaled by similarity (capped 0.30–0.95). Gated by a new `crossMatchEnabled` setting (default `true`). Dedupe is per-(product_id, source_url).
+4. **Brand-level signals surfaced on Signal Config.** New top section showing each brand's research-derived brand-level signals (read-only; edit via brand edit modal or re-run brand research). Makes it visible what the v1.6 brand research generated and what feeds every scan prompt.
+
 **v1.6.0 (2026-05-25):** **Knowledge-first scans (Track A of the dual-track architecture).** Cast-nets engine (manual + deep scans) now grounds on the full accumulated brand + product knowledge instead of being anchored to pre-derived signal bullets.
 
 Schema additions (all idempotent):

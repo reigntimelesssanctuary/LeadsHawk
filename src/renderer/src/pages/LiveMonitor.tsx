@@ -3,7 +3,7 @@ import { Switch } from '../components/Switch';
 import { Modal } from '../components/Modal';
 import type { MonitorStatus, MonitorSource, SignalItem, SourceHealth } from '../../../shared/types';
 import { fmtDate, fmtDateSGT, openExternal } from '../lib/api';
-import { Activity, Plus, Trash2, RefreshCw, AlertCircle, Radio } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, AlertCircle, Radio, Inbox } from 'lucide-react';
 
 export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   const [status, setStatus] = useState<MonitorStatus | null>(null);
@@ -86,6 +86,8 @@ export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) 
         <FunnelCard label="Triaged strong" value={status?.last24h.triagedStrong ?? 0} sublabel="passed Sonnet triage" color="#0891b2" />
         <FunnelCard label="Opportunities" value={status?.last24h.qualified ?? 0} sublabel="deep-qualified" color="#065f46" />
       </div>
+
+      <ManualIntakeCard onDone={refresh} onOpenOpp={onOpenOpp} />
 
       <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -241,6 +243,102 @@ export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) 
           50% { opacity: 0.35; }
         }
       `}</style>
+    </div>
+  );
+}
+
+type IntakeOutcome =
+  | { kind: 'filtered'; reason: string; similarity: number }
+  | { kind: 'triaged'; decision: 'rejected' | 'weak'; reason: string; similarity: number }
+  | { kind: 'qualified'; opportunityId: number; confidence: number }
+  | { kind: 'error'; error: string };
+
+function ManualIntakeCard({ onDone, onOpenOpp }: { onDone: () => void; onOpenOpp: (id: number) => void }) {
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ outcome: IntakeOutcome; itemId: number } | null>(null);
+
+  const submit = async () => {
+    if (!url.trim() || busy) return;
+    setBusy(true); setResult(null);
+    try {
+      const r = await window.lh.monitor.intake({ url: url.trim() });
+      setResult(r);
+      setUrl('');
+      onDone();
+    } catch (e: any) {
+      setResult({ itemId: 0, outcome: { kind: 'error', error: e?.message || String(e) } });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <Inbox size={16} style={{ color: '#6c5cf2' }} />
+        <div className="h-section" style={{ flex: 1 }}>Manual intake</div>
+      </div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+        Paste a URL you've seen externally. LeadsHawk will fetch it, embed it, match against every product's signals, and (if it survives triage) run a deep qualify. Same pipeline as RSS items — just one-at-a-time, on demand.
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          className="input"
+          style={{ flex: 1 }}
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          placeholder="https://example.com/article-or-press-release"
+          disabled={busy}
+        />
+        <button className="btn-primary" onClick={submit} disabled={!url.trim() || busy}>
+          {busy ? 'Processing…' : 'Run through pipeline'}
+        </button>
+      </div>
+      {result && <IntakeResultBanner result={result} onOpenOpp={onOpenOpp} />}
+    </div>
+  );
+}
+
+function IntakeResultBanner({
+  result, onOpenOpp
+}: {
+  result: { outcome: IntakeOutcome; itemId: number };
+  onOpenOpp: (id: number) => void;
+}) {
+  const { outcome } = result;
+  const style = (bg: string, border: string, fg: string) => ({
+    marginTop: 12, padding: '10px 14px', background: bg, border: `1px solid ${border}`,
+    borderRadius: 8, fontSize: 13, color: fg, lineHeight: 1.45
+  });
+  if (outcome.kind === 'qualified') {
+    return (
+      <div style={style('#ecfdf5', '#a7f3d0', '#065f46')}>
+        ✓ <b>Opportunity created</b> ({Math.round((outcome.confidence || 0) * 100)}% confidence).{' '}
+        <button className="btn-ghost" style={{ marginLeft: 6, padding: '2px 8px', fontSize: 12 }} onClick={() => onOpenOpp(outcome.opportunityId)}>
+          Open
+        </button>
+      </div>
+    );
+  }
+  if (outcome.kind === 'triaged') {
+    return (
+      <div style={style('#fef3c7', '#fde68a', '#92400e')}>
+        Triaged <b>{outcome.decision}</b> — {outcome.reason} (pre-filter sim {outcome.similarity.toFixed(2)})
+      </div>
+    );
+  }
+  if (outcome.kind === 'filtered') {
+    return (
+      <div style={style('#f3f4f6', '#e5e7eb', '#4b5563')}>
+        Filtered at pre-filter — {outcome.reason}
+      </div>
+    );
+  }
+  return (
+    <div style={style('#fef2f2', '#fecaca', '#991b1b')}>
+      Error: {outcome.error}
     </div>
   );
 }

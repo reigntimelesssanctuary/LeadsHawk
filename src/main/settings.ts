@@ -21,7 +21,8 @@ const defaults: Settings = {
   liveMonitoringEnabled: false,
   embedSimilarityThreshold: 0.55,
   notifyOnNewOpportunity: true,
-  openAtLogin: false
+  openAtLogin: false,
+  crossMatchEnabled: true
 };
 
 const store = new Store<Settings>({ name: 'settings', defaults });
@@ -45,7 +46,8 @@ export function getSettings(): Settings {
     liveMonitoringEnabled: (store as any).get('liveMonitoringEnabled') as boolean,
     embedSimilarityThreshold: (store as any).get('embedSimilarityThreshold') as number,
     notifyOnNewOpportunity: (store as any).get('notifyOnNewOpportunity') as boolean,
-    openAtLogin: (store as any).get('openAtLogin') as boolean
+    openAtLogin: (store as any).get('openAtLogin') as boolean,
+    crossMatchEnabled: (store as any).get('crossMatchEnabled') as boolean
   };
 }
 

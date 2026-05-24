@@ -231,6 +231,101 @@ function maybeNotify(
   }
 }
 
+/**
+ * v1.7 — Process ONE specific signal_item all the way through the funnel
+ * (embed → triage → qualify) synchronously, so the manual-intake IPC can
+ * give the user immediate feedback rather than waiting for the next 30s
+ * cycle. Returns the final state for the caller to surface.
+ */
+export type IntakeOutcome =
+  | { kind: 'filtered'; reason: string; similarity: number }
+  | { kind: 'triaged'; decision: 'rejected' | 'weak'; reason: string; similarity: number }
+  | { kind: 'qualified'; opportunityId: number; confidence: number }
+  | { kind: 'error'; error: string };
+
+export async function processSingleItem(itemId: number): Promise<IntakeOutcome> {
+  const settings = getSettings();
+  const db = getDb();
+  const item = db
+    .prepare('SELECT * FROM signal_items WHERE id = ?')
+    .get(itemId) as SignalItem | undefined;
+  if (!item) return { kind: 'error', error: 'item not found' };
+
+  try {
+    // Stage 2: embed + match
+    const text = [item.title, item.snippet].filter(Boolean).join(' — ');
+    const match = await bestProductMatch(text);
+    if (!match) {
+      db.prepare(
+        "UPDATE signal_items SET status = 'filtered', error = 'no scan-enabled product with embeddings', processed_at = datetime('now') WHERE id = ?"
+      ).run(itemId);
+      return { kind: 'filtered', reason: 'no scan-enabled product with signal embeddings', similarity: 0 };
+    }
+    const passed = match.similarity >= settings.embedSimilarityThreshold;
+    db.prepare(
+      `UPDATE signal_items
+       SET status = ?, best_match_product_id = ?, best_match_similarity = ?, processed_at = datetime('now')
+       WHERE id = ?`
+    ).run(passed ? 'candidate' : 'filtered', match.productId, match.similarity, itemId);
+    if (!passed) {
+      return {
+        kind: 'filtered',
+        reason: `pre-filter similarity ${match.similarity.toFixed(2)} below threshold ${settings.embedSimilarityThreshold}`,
+        similarity: match.similarity
+      };
+    }
+
+    // Stage 3: triage
+    if (!settings.anthropicApiKey) {
+      return { kind: 'error', error: 'Anthropic API key not configured — triage cannot run.' };
+    }
+    const pb = loadProductAndBrand(match.productId);
+    if (!pb) return { kind: 'error', error: 'matched product/brand vanished' };
+    const decision = await triageItem(
+      { ...item, best_match_similarity: match.similarity } as any,
+      pb.product,
+      pb.brand,
+      match.matchedSignal
+    );
+    const triagedStatus =
+      decision.decision === 'strong' ? 'triaged_strong'
+      : decision.decision === 'weak' ? 'triaged_weak'
+      : 'triaged_rejected';
+    db.prepare(
+      `UPDATE signal_items
+       SET status = ?, triage_result = ?, triage_confidence = ?, processed_at = datetime('now')
+       WHERE id = ?`
+    ).run(triagedStatus, JSON.stringify(decision), decision.confidence, itemId);
+    if (decision.decision !== 'strong') {
+      return { kind: 'triaged', decision: decision.decision, reason: decision.reason, similarity: match.similarity };
+    }
+
+    // Stage 4: qualify
+    if (!settings.perplexityApiKey) {
+      return { kind: 'error', error: 'Perplexity API key not configured — qualify cannot run.' };
+    }
+    const fresh = db.prepare('SELECT * FROM signal_items WHERE id = ?').get(itemId) as SignalItem;
+    const outcome = await qualifyItem(fresh, pb.product, pb.brand, match.matchedSignal);
+    if (outcome.kind === 'opportunity') {
+      db.prepare(
+        `UPDATE signal_items SET status = 'qualified', opportunity_id = ?, processed_at = datetime('now') WHERE id = ?`
+      ).run(outcome.opportunityId, itemId);
+      maybeNotify(item, pb.product.name, pb.brand.name, outcome.opportunityId, outcome.confidence);
+      return { kind: 'qualified', opportunityId: outcome.opportunityId, confidence: outcome.confidence };
+    }
+    db.prepare(
+      "UPDATE signal_items SET status = 'triaged_rejected', error = ?, processed_at = datetime('now') WHERE id = ?"
+    ).run(outcome.reason.slice(0, 500), itemId);
+    return { kind: 'triaged', decision: 'rejected', reason: outcome.reason, similarity: match.similarity };
+  } catch (e: any) {
+    const msg = String(e?.message || e).slice(0, 500);
+    db.prepare(
+      "UPDATE signal_items SET status = 'error', error = ?, processed_at = datetime('now') WHERE id = ?"
+    ).run(msg, itemId);
+    return { kind: 'error', error: msg };
+  }
+}
+
 export function getMonitorStatus(): MonitorStatus {
   const db = getDb();
   const sourcesCount = (db.prepare('SELECT COUNT(*) AS c FROM monitor_sources').get() as any).c as number;
