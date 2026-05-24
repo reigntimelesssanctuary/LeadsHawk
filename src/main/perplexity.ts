@@ -3,47 +3,53 @@ import { getSettings } from './settings.js';
 import { recordApiCall } from './spend.js';
 import type { LlmStage } from './pricing.js';
 
-const PPLX_URL = 'https://api.perplexity.ai/chat/completions';
+const PPLX_SYNC_URL = 'https://api.perplexity.ai/chat/completions';
+const PPLX_ASYNC_SUBMIT_URL = 'https://api.perplexity.ai/v1/async/sonar';
+const PPLX_ASYNC_GET_URL = (id: string) => `https://api.perplexity.ai/v1/async/sonar/${id}`;
 
 /**
- * Node's bundled undici fetch has a default 5-minute bodyTimeout that
- * trips on long sonar-deep-research calls (multi-step research on broad
- * domains can take 5-8 minutes). We override with a generous 12-minute
- * budget. headersTimeout stays short — Perplexity responds with headers
- * within a couple of seconds even on long research calls.
+ * Generous bodyTimeout for the SYNC endpoint (sonar / sonar-pro etc).
+ * `sonar-deep-research` no longer uses this path — see completePerplexityAsync.
  */
 const PPLX_AGENT = new Agent({
-  bodyTimeout: 12 * 60 * 1000,    // 12 min — covers worst-case deep research
-  headersTimeout: 60 * 1000        // 60s — headers arrive quickly even when body is slow
+  bodyTimeout: 5 * 60 * 1000,     // 5 min — sync endpoint kills connections ~120s anyway
+  headersTimeout: 60 * 1000
 });
 
 const TRANSIENT_ERROR_RE = /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR|socket hang up|HeadersTimeoutError|BodyTimeoutError/i;
 
 /**
- * fetch wrapper with one auto-retry on transient network errors.
- * API errors (4xx/5xx with body) are NOT retried — they're the caller's
- * problem and retrying just wastes tokens.
+ * Models that should always go through Perplexity's async endpoint.
+ * Sync /chat/completions has a server-side gateway timeout (~120s) that
+ * kills long sonar-deep-research calls before they complete. The async
+ * endpoint submits a job and lets us poll for completion over the full
+ * research duration without keeping any single HTTP connection open.
  */
-async function fetchPplx(body: any, headers: Record<string, string>): Promise<{ data: any }> {
+function isLongRunningModel(model: string): boolean {
+  return /deep-research/i.test(model);
+}
+
+async function fetchJsonWithRetry<T = any>(
+  url: string,
+  init: { method: 'GET' | 'POST'; headers: Record<string, string>; body?: string }
+): Promise<T> {
   let lastErr: any;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const resp = await undiciFetch(PPLX_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+      const resp = await undiciFetch(url, {
+        method: init.method,
+        headers: init.headers,
+        body: init.body,
         dispatcher: PPLX_AGENT
       });
       if (!resp.ok) {
         const text = await resp.text();
-        // Don't retry API errors — caller sees the original status.
         throw new Error(`Perplexity API ${resp.status}: ${text.slice(0, 500)}`);
       }
-      return { data: await resp.json() };
+      return (await resp.json()) as T;
     } catch (e: any) {
       lastErr = e;
       const msg = String(e?.message || e);
-      // Retry only on network-level transient errors, NOT API errors.
       const transient = !msg.startsWith('Perplexity API ') && TRANSIENT_ERROR_RE.test(msg);
       if (!transient || attempt >= 1) throw e;
       console.warn(`[perplexity] transient error "${msg}" — retrying in 3s (attempt ${attempt + 2}/2)`);
@@ -88,12 +94,7 @@ function getKey(): string {
   return perplexityApiKey;
 }
 
-export async function completePerplexity<T = unknown>(
-  system: string,
-  user: string,
-  opts: PplxOptions = {}
-): Promise<PplxResponse<T>> {
-  const key = getKey();
+function buildBody(system: string, user: string, opts: PplxOptions): any {
   const body: any = {
     model: opts.model || 'sonar-pro',
     messages: [
@@ -114,42 +115,154 @@ export async function completePerplexity<T = unknown>(
       json_schema: { schema: opts.jsonSchema }
     };
   }
+  return body;
+}
 
-  const { data } = await fetchPplx(body, {
-    'content-type': 'application/json',
-    authorization: `Bearer ${key}`,
-    accept: 'application/json'
-  });
+function extractFromCompletion<T>(
+  data: any,
+  opts: PplxOptions
+): PplxResponse<T> {
   const text: string = data?.choices?.[0]?.message?.content ?? '';
   const citations: string[] = Array.isArray(data?.citations)
     ? data.citations
     : Array.isArray(data?.search_results)
       ? data.search_results.map((r: any) => r.url).filter(Boolean)
       : [];
-
   let json: T | null = null;
   if (opts.jsonSchema) {
     json = tryParseJson<T>(text);
   }
+  return { text, json, citations, usage: data?.usage ?? null, raw: data };
+}
 
-  // Telemetry: log spend for this call (fail-open).
-  const usage = data?.usage ?? null;
+/**
+ * Synchronous Perplexity call — used for sonar, sonar-pro, sonar-reasoning,
+ * sonar-reasoning-pro. Models that don't trip the 120s gateway timeout.
+ */
+async function completePerplexitySync<T = unknown>(
+  system: string,
+  user: string,
+  opts: PplxOptions
+): Promise<PplxResponse<T>> {
+  const key = getKey();
+  const body = buildBody(system, user, opts);
+  const data = await fetchJsonWithRetry<any>(PPLX_SYNC_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${key}`,
+      accept: 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
   recordApiCall({
     provider: 'perplexity',
     model: body.model,
     stage: opts.stage ?? 'unknown',
-    inputTokens: Number(usage?.prompt_tokens ?? 0),
-    outputTokens: Number(usage?.completion_tokens ?? 0),
+    inputTokens: Number(data?.usage?.prompt_tokens ?? 0),
+    outputTokens: Number(data?.usage?.completion_tokens ?? 0),
     relatedId: opts.relatedId ?? null
   });
+  return extractFromCompletion<T>(data, opts);
+}
 
-  return {
-    text,
-    json,
-    citations,
-    usage,
-    raw: data
+/**
+ * Asynchronous Perplexity call — required for sonar-deep-research because
+ * the sync endpoint has a server-side gateway timeout (~120s) that kills
+ * long research jobs. Async flow:
+ *   1. POST /v1/async/sonar  with  { request: <sync body> }   → returns { id, status }
+ *   2. GET  /v1/async/sonar/{id}   periodically until status === 'COMPLETED'
+ *   3. Extract response.choices[0].message.content + citations + usage
+ *
+ * Polls every POLL_INTERVAL_MS for up to MAX_WAIT_MS. Each poll is a quick
+ * GET so we never keep a long HTTP connection open.
+ */
+const POLL_INTERVAL_MS = 5_000;
+const POLL_MAX_WAIT_MS = 20 * 60 * 1000; // 20 minutes — covers worst-case deep research
+
+async function completePerplexityAsync<T = unknown>(
+  system: string,
+  user: string,
+  opts: PplxOptions
+): Promise<PplxResponse<T>> {
+  const key = getKey();
+  const body = buildBody(system, user, opts);
+  const headers = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${key}`,
+    accept: 'application/json'
   };
+
+  // Step 1: submit
+  const submitResp = await fetchJsonWithRetry<{
+    id: string;
+    status?: string;
+    model?: string;
+  }>(PPLX_ASYNC_SUBMIT_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ request: body })
+  });
+  const jobId = submitResp.id;
+  if (!jobId) {
+    throw new Error('Perplexity async submit did not return an id.');
+  }
+  console.log(`[perplexity-async] submitted job ${jobId} (model=${body.model})`);
+
+  // Step 2: poll
+  const start = Date.now();
+  let polls = 0;
+  while (Date.now() - start < POLL_MAX_WAIT_MS) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    polls++;
+    const poll = await fetchJsonWithRetry<{
+      id: string;
+      status: 'CREATED' | 'IN_PROGRESS' | 'STARTED' | 'COMPLETED' | 'FAILED';
+      response?: any;
+      error_message?: string | null;
+    }>(PPLX_ASYNC_GET_URL(jobId), {
+      method: 'GET',
+      headers
+    });
+    if (poll.status === 'COMPLETED') {
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      console.log(`[perplexity-async] job ${jobId} COMPLETED after ${elapsed}s (${polls} polls)`);
+      recordApiCall({
+        provider: 'perplexity',
+        model: body.model,
+        stage: opts.stage ?? 'unknown',
+        inputTokens: Number(poll.response?.usage?.prompt_tokens ?? 0),
+        outputTokens: Number(poll.response?.usage?.completion_tokens ?? 0),
+        relatedId: opts.relatedId ?? null
+      });
+      return extractFromCompletion<T>(poll.response, opts);
+    }
+    if (poll.status === 'FAILED') {
+      throw new Error(
+        `Perplexity async job ${jobId} FAILED: ${poll.error_message || 'no error message'}`
+      );
+    }
+    // CREATED / IN_PROGRESS / STARTED — keep polling
+  }
+  throw new Error(
+    `Perplexity async job ${jobId} did not complete within ${POLL_MAX_WAIT_MS / 60_000} minutes`
+  );
+}
+
+/**
+ * Top-level entrypoint. Auto-routes long-running models (sonar-deep-research)
+ * to the async endpoint and everything else to the sync endpoint.
+ */
+export async function completePerplexity<T = unknown>(
+  system: string,
+  user: string,
+  opts: PplxOptions = {}
+): Promise<PplxResponse<T>> {
+  const model = opts.model || 'sonar-pro';
+  if (isLongRunningModel(model)) {
+    return completePerplexityAsync<T>(system, user, opts);
+  }
+  return completePerplexitySync<T>(system, user, opts);
 }
 
 export function tryParseJson<T>(raw: string): T | null {
