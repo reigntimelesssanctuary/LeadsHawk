@@ -545,6 +545,14 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.5.1 (2026-05-24):** Country field on opportunities.
+
+- New `opportunities.country TEXT` column (idempotent migration).
+- `PplxOpportunity` (scanner.ts) and `QualifyResult` (monitor/qualify.ts) gain a `country: string | null` field; matching JSON schemas now require `country` with type `['string','null']` so the LLM can return null when unknown.
+- Both insert paths (`insertCandidates` in scanner.ts and `qualifyItem` in monitor/qualify.ts) persist the country; whitespace-only strings are normalized to null.
+- Excel export gains a **Country** column positioned between Industry and Brand (width 18).
+- Existing opportunities show empty Country in exports; new opportunities from any of the three engines (manual scan, deep research scan, live monitor) populate it. Country is not surfaced in the Dashboard UI yet — easy follow-up if useful.
+
 **v1.5.0 (2026-05-24):** Third scanning engine — twice-daily Deep Research scan.
 
 - New settings: `deepScanEnabled` (default false), `deepScanCron` (default `0 9,21 * * *` — 9am & 9pm local), `deepScanModel` (default `sonar-deep-research`).

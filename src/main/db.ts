@@ -225,6 +225,8 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'scan_rules', 'scope', "TEXT NOT NULL DEFAULT 'product'");
   // v1.5: differentiate manual / deep cron runs in the history table.
   addColumnIfMissing(db, 'scan_runs', 'kind', "TEXT NOT NULL DEFAULT 'manual'");
+  // v1.5.1: optional country captured by the scanner's LLM call.
+  addColumnIfMissing(db, 'opportunities', 'country', 'TEXT');
 }
 
 function addColumnIfMissing(

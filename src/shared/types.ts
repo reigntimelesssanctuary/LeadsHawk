@@ -84,6 +84,7 @@ export type Opportunity = {
   product_id: number | null;
   company: string;
   industry: string | null;
+  country: string | null;
   headline: string;
   source_url: string;
   source_title: string;

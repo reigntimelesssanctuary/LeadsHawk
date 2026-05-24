@@ -21,6 +21,7 @@ type QualifyResult = {
   confidence: number;
   company: string;
   industry: string;
+  country: string | null;
   background: string;
   use_case: string;
   angle: string;
@@ -31,7 +32,7 @@ type QualifyResult = {
 const SCHEMA = {
   type: 'object',
   required: [
-    'is_opportunity', 'confidence', 'company', 'industry',
+    'is_opportunity', 'confidence', 'company', 'industry', 'country',
     'background', 'use_case', 'angle', 'signal_summary', 'headline'
   ],
   properties: {
@@ -39,6 +40,7 @@ const SCHEMA = {
     confidence: { type: 'number' },
     company: { type: 'string' },
     industry: { type: 'string' },
+    country: { type: ['string', 'null'], description: 'Country where the company is headquartered or where the event takes place. Use the common English name. Null if genuinely unknown.' },
     background: { type: 'string' },
     use_case: { type: 'string' },
     angle: { type: 'string' },
@@ -149,16 +151,17 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
 
   const insert = db.prepare(`
     INSERT INTO opportunities(
-      brand_id, product_id, company, industry, headline, source_url, source_title,
+      brand_id, product_id, company, industry, country, headline, source_url, source_title,
       source_published_at, confidence, status, background, use_case, angle,
       signal_summary, raw_signal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
   `);
   const info = insert.run(
     brand.id,
     product.id,
     j.company,
     j.industry,
+    (j.country && j.country.trim()) || null,
     j.headline || item.title,
     item.url,
     'live monitor',

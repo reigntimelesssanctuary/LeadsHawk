@@ -73,6 +73,7 @@ Respond ONLY with JSON matching the schema you've been given. No prose.`;
 type PplxOpportunity = {
   company: string;
   industry: string;
+  country: string | null;
   source_url: string;
   source_title: string;
   source_published_at: string | null;
@@ -94,13 +95,14 @@ const OPPS_SCHEMA = {
       items: {
         type: 'object',
         required: [
-          'company', 'industry', 'source_url', 'source_title', 'headline',
+          'company', 'industry', 'country', 'source_url', 'source_title', 'headline',
           'background', 'use_case', 'angle', 'signal_summary',
           'matched_signal', 'confidence'
         ],
         properties: {
           company: { type: 'string' },
           industry: { type: 'string' },
+          country: { type: ['string', 'null'], description: 'Country where the company is headquartered or where the event takes place. Use the common English name (e.g. "United States", "Singapore", "United Kingdom"). Null if genuinely unknown.' },
           source_url: { type: 'string' },
           source_title: { type: 'string' },
           source_published_at: { type: ['string', 'null'] },
@@ -174,10 +176,10 @@ export async function runScan(
     const insertSeen = db.prepare('INSERT OR IGNORE INTO seen_urls(url) VALUES (?)');
     const insertOpp = db.prepare(`
       INSERT INTO opportunities(
-        brand_id, product_id, company, industry, headline, source_url, source_title,
+        brand_id, product_id, company, industry, country, headline, source_url, source_title,
         source_published_at, confidence, status, background, use_case, angle,
         signal_summary, raw_signal
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
     `);
 
     const perProduct = scanQuotaPerProduct();
@@ -399,7 +401,7 @@ const OPPS_SCHEMA_CUSTOM = {
       items: {
         type: 'object',
         required: [
-          'company', 'industry', 'source_url', 'source_title', 'headline',
+          'company', 'industry', 'country', 'source_url', 'source_title', 'headline',
           'background', 'use_case', 'angle', 'signal_summary',
           'matched_signal', 'confidence',
           'matched_brand', 'matched_product'
@@ -407,6 +409,7 @@ const OPPS_SCHEMA_CUSTOM = {
         properties: {
           company: { type: 'string' },
           industry: { type: 'string' },
+          country: { type: ['string', 'null'], description: 'Country where the company is headquartered or where the event takes place. Use the common English name. Null if genuinely unknown.' },
           source_url: { type: 'string' },
           source_title: { type: 'string' },
           source_published_at: { type: ['string', 'null'] },
@@ -475,6 +478,7 @@ function insertCandidates(
       attrib.product?.id ?? null,
       cand.company,
       cand.industry,
+      (cand.country && cand.country.trim()) || null,
       cand.headline,
       url,
       cand.source_title || attrib.sourceLabel,
