@@ -2,6 +2,7 @@ import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import { embedSignalsForProduct } from './monitor/embed.js';
+import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import type { Product, Brand, KnowledgeItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B competitive-intelligence analyst conducting
@@ -124,6 +125,7 @@ result as JSON matching the schema you've been given.`;
          signals = ?,
          research_summary = ?,
          research_status = 'ready',
+         last_researched_at = datetime('now'),
          updated_at = datetime('now')
        WHERE id = ?`
     ).run(
@@ -142,30 +144,10 @@ result as JSON matching the schema you've been given.`;
       console.warn('[research] signal embedding failed for product', productId, e?.message || e);
     });
 
-    // Roll up a brand-level competitive summary using Perplexity too
-    const brandPrompt = `Brand: ${brand.name}
-Existing brand description: ${brand.description || '(none)'}
-
-Based on live research and the freshly-researched product "${product.name}"
-in this brand's portfolio, write a tight 150-word competitive summary for the
-BRAND itself — its positioning, where it wins, where it's vulnerable. No
-fluff. Plain prose, no markdown headings.`;
-    try {
-      const { text: brandSummary } = await completePerplexity(SYSTEM, brandPrompt, {
-        model: perplexityResearchModel || 'sonar-deep-research',
-        maxTokens: 700,
-        temperature: 0.2,
-        stage: 'brand_summary',
-        relatedId: brand.id
-      });
-      if (brandSummary) {
-        db.prepare(
-          "UPDATE brands SET competitive_summary = ?, updated_at = datetime('now') WHERE id = ?"
-        ).run(brandSummary, brand.id);
-      }
-    } catch {
-      // brand summary is a nice-to-have, don't fail the whole research
-    }
+    // v1.6: brand competitive_summary is no longer regenerated as a
+    // side-effect of product research. Use `researchBrand(id)` for that —
+    // see below. This stops the historical bug where the brand summary
+    // got overwritten every time any product was re-researched.
 
     return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
   } catch (e) {
@@ -258,6 +240,143 @@ the last few weeks. Return JSON matching the schema.`;
   return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
 }
 
+/**
+ * v1.6 — Brand becomes a first-class research subject. Generates a
+ * brand-level dossier that downstream product research AND every cast-nets
+ * scan can use as foundational context.
+ *
+ * Pulls brand-level knowledge_items (product_id IS NULL) first, then a
+ * sample of cross-product knowledge to give breadth. Sends to Perplexity
+ * sonar-deep-research with a schema focused on positioning + ICP +
+ * brand-level signals + a narrative summary.
+ *
+ * Stores in brands.research_summary / target_icp / category / signals /
+ * competitive_summary, and stamps last_researched_at.
+ */
+const BRAND_RESEARCH_SYSTEM = `You are a senior B2B competitive-intelligence
+analyst conducting deep web research on a specific BRAND (a company that
+sells products). Your job: produce a foundational brand-level dossier that
+downstream product research and lead-finding scans can use as context.
+
+You have live search; USE IT. Pull from the brand's own website, analyst
+coverage, customer case studies, news, social media, and industry reports.
+
+Be specific and honest. Avoid generic marketing language. The dossier is
+internal — it will be invisible to the brand.`;
+
+type BrandResearchOutput = {
+  category: string;
+  positioning: string;
+  target_icp: string;
+  competitive_summary: string;
+  signals: string;
+  research_summary: string;
+};
+
+const BRAND_RESEARCH_SCHEMA = {
+  type: 'object',
+  required: ['category', 'positioning', 'target_icp', 'competitive_summary', 'signals', 'research_summary'],
+  properties: {
+    category: { type: 'string', description: 'Short market category the brand operates in (e.g. "commercial interior design", "B2B SaaS observability", "managed network services").' },
+    positioning: { type: 'string', description: 'How this brand positions itself in market — its core promise / wedge / differentiation in 2-4 sentences.' },
+    target_icp: { type: 'string', description: 'The brand\'s ideal customer profile (ICP). Be specific about company size, sector, geography, maturity stage, and the buying-team persona who typically initiates the deal.' },
+    competitive_summary: { type: 'string', description: 'Tight 150-200 word competitive narrative — where the brand wins, where it\'s vulnerable, who the main alternatives are.' },
+    signals: { type: 'string', description: 'Markdown bulleted list of brand-LEVEL buying signals — events that indicate ANY of this brand\'s products may be needed (e.g. for a workspace-design brand: "company announces APAC HQ expansion", "lease renewal due", "post-acquisition consolidation"). Distinct from product-specific signals. 5-10 bullets.' },
+    research_summary: { type: 'string', description: '400-600 word narrative tying positioning + ICP + signals + market context together. The single most useful paragraph a salesperson new to this brand could read.' }
+  }
+};
+
+export async function researchBrand(brandId: number): Promise<Brand> {
+  const db = getDb();
+  const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(brandId) as Brand | undefined;
+  if (!brand) throw new Error('Brand not found');
+
+  db.prepare("UPDATE brands SET research_status = 'researching' WHERE id = ?").run(brandId);
+
+  try {
+    // Brand research prioritises brand-level material, then takes a sample
+    // of product-scoped material for breadth.
+    const knowledge = db
+      .prepare(
+        `SELECT * FROM knowledge_items
+         WHERE brand_id = ? AND status = 'indexed'
+         ORDER BY
+           CASE WHEN product_id IS NULL THEN 0 ELSE 1 END,
+           created_at DESC
+         LIMIT 30`
+      )
+      .all(brandId) as KnowledgeItem[];
+
+    const knowledgeBlob = knowledge
+      .map((k) => `### ${k.title}\nSource: ${k.source}\n${(k.content || '').slice(0, 4000)}`)
+      .join('\n\n')
+      .slice(0, 50_000);
+
+    const prompt = `# Brand
+Name: ${brand.name}
+Existing description: ${brand.description || '(none)'}
+Existing positioning: ${brand.positioning || '(none)'}
+
+# Internal knowledge-base excerpts
+${knowledgeBlob || '(no internal knowledge — rely entirely on live web research)'}
+
+# Task
+Conduct deep web research on this BRAND. Synthesize external sources with the
+internal excerpts above into a foundational brand-level dossier. Return JSON
+matching the schema you've been given.`;
+
+    const { perplexityResearchModel } = getSettings();
+    const { json } = await completePerplexity<BrandResearchOutput>(
+      BRAND_RESEARCH_SYSTEM,
+      prompt,
+      {
+        model: perplexityResearchModel || 'sonar-deep-research',
+        maxTokens: 6000,
+        temperature: 0.15,
+        jsonSchema: BRAND_RESEARCH_SCHEMA,
+        stage: 'brand_research',
+        relatedId: brandId
+      }
+    );
+
+    if (!json) {
+      throw new Error('Perplexity returned an unparseable brand-research response. Try again.');
+    }
+
+    db.prepare(
+      `UPDATE brands SET
+         category = COALESCE(NULLIF(?, ''), category),
+         positioning = COALESCE(NULLIF(?, ''), positioning),
+         target_icp = ?,
+         competitive_summary = ?,
+         signals = ?,
+         research_summary = ?,
+         research_status = 'ready',
+         last_researched_at = datetime('now'),
+         updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(
+      json.category,
+      json.positioning,
+      json.target_icp,
+      json.competitive_summary,
+      json.signals,
+      json.research_summary,
+      brandId
+    );
+
+    return db.prepare('SELECT * FROM brands WHERE id = ?').get(brandId) as Brand;
+  } catch (e) {
+    db.prepare("UPDATE brands SET research_status = 'error' WHERE id = ?").run(brandId);
+    throw e;
+  }
+}
+
+/**
+ * Legacy "is this content long enough?" check. The real indexing work now
+ * happens in src/main/knowledge-index.ts (chunkAndEmbedKnowledgeItem),
+ * which is called fire-and-forget after every knowledge insert.
+ */
 export async function indexKnowledge(itemId: number): Promise<void> {
   const db = getDb();
   const item = db
@@ -267,4 +386,9 @@ export async function indexKnowledge(itemId: number): Promise<void> {
   if (item.content && item.content.length > 200) {
     db.prepare("UPDATE knowledge_items SET status = 'indexed' WHERE id = ?").run(itemId);
   }
+  // Trigger background chunk-and-embed so the chunk store stays in sync.
+  // We don't await — knowledge inserts must stay fast.
+  chunkAndEmbedKnowledgeItem(itemId).catch((e) => {
+    console.warn('[indexKnowledge] chunkAndEmbed failed:', e?.message || e);
+  });
 }

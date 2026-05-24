@@ -7,6 +7,7 @@ import { startScheduler } from './scheduler.js';
 import { startMonitor, stopMonitor } from './monitor/index.js';
 import { getSettings } from './settings.js';
 import { getDb } from './db.js';
+import { backfillKnowledgeIndex } from './knowledge-index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +51,13 @@ app.whenReady().then(() => {
   if (getSettings().liveMonitoringEnabled) {
     startMonitor().catch((e) => console.warn('monitor autostart failed:', e?.message || e));
   }
+  // v1.6: background-embed any knowledge items uploaded before this version.
+  // Don't await — the embedder model loads lazily and the user shouldn't wait.
+  setTimeout(() => {
+    backfillKnowledgeIndex((m) => console.log(m)).catch((e) =>
+      console.warn('knowledge backfill failed:', e?.message || e)
+    );
+  }, 5_000);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

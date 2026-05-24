@@ -2,9 +2,10 @@ import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
 import { getDb, dataDir } from './db.js';
 import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
-import { researchProduct, refreshProductSignals } from './research.js';
+import { researchProduct, refreshProductSignals, researchBrand } from './research.js';
 import { runScan, runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
+import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
 import { getSpendSummary } from './spend.js';
@@ -105,6 +106,8 @@ export function registerIpc() {
     ).run(enabled ? 1 : 0, id);
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
   });
+  // v1.6: brand becomes a first-class research subject.
+  ipcMain.handle('brands:research', async (_e, id: number) => researchBrand(id));
 
   // -------- Products --------
   ipcMain.handle('products:list', (_e, brandId?: number) => {
@@ -185,7 +188,10 @@ export function registerIpc() {
       `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
        VALUES (?, ?, 'note', ?, 'manual', ?, 'indexed')`
     ).run(payload.brandId, payload.productId ?? null, payload.title, payload.content);
-    return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid);
+    const id = Number(info.lastInsertRowid);
+    // Fire-and-forget chunk + embed so retrieval sees this immediately on next scan.
+    chunkAndEmbedKnowledgeItem(id).catch((e) => console.warn('[knowledge:addNote] embed failed:', e?.message || e));
+    return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(id);
   });
   ipcMain.handle('knowledge:addLink', async (_e, payload: { brandId: number; productId?: number | null; url: string }) => {
     const fetched = await fetchUrl(payload.url);
@@ -193,7 +199,9 @@ export function registerIpc() {
       `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
        VALUES (?, ?, 'link', ?, ?, ?, 'indexed')`
     ).run(payload.brandId, payload.productId ?? null, fetched.title, payload.url, fetched.content);
-    return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid);
+    const id = Number(info.lastInsertRowid);
+    chunkAndEmbedKnowledgeItem(id).catch((e) => console.warn('[knowledge:addLink] embed failed:', e?.message || e));
+    return db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(id);
   });
   ipcMain.handle('knowledge:upload', async (_e, brandId: number, productId?: number | null) => {
     const win = BrowserWindow.getFocusedWindow();
@@ -219,8 +227,10 @@ export function registerIpc() {
         `INSERT INTO knowledge_items(brand_id, product_id, kind, title, source, content, status)
          VALUES (?, ?, 'file', ?, ?, ?, 'indexed')`
       ).run(brandId, productId ?? null, extracted.title, dest, extracted.content);
+      const id = Number(info.lastInsertRowid);
+      chunkAndEmbedKnowledgeItem(id).catch((e) => console.warn('[knowledge:upload] embed failed:', e?.message || e));
       results.push(
-        db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(info.lastInsertRowid) as KnowledgeItem
+        db.prepare('SELECT * FROM knowledge_items WHERE id = ?').get(id) as KnowledgeItem
       );
     }
     return results;

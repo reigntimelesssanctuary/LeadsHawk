@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
 import { Modal } from '../components/Modal';
 import { Switch } from '../components/Switch';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw, Pencil } from 'lucide-react';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw, Pencil, AlertTriangle } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
 export function BrandsProducts() {
@@ -118,6 +118,13 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
   const [linkTarget, setLinkTarget] = useState<ModalTarget>(false);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const researchBrand = async () => {
+    setBusy('research-brand');
+    try { await window.lh.brands.research(brand.id); onChanged(); }
+    catch (e: any) { alert(e.message); }
+    finally { setBusy(null); }
+  };
+
   const refresh = async () => {
     setProducts(await window.lh.products.list(brand.id));
     setKnowledge(await window.lh.knowledge.list(brand.id));
@@ -167,12 +174,23 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
             <div className="h-section">{brand.name}</div>
             <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{brand.description || 'No description yet.'}</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <Switch
               checked={brand.scan_enabled === 1}
               label="Include in scans"
               onChange={async (v) => { await window.lh.brands.setScanEnabled(brand.id, v); onChanged(); }}
             />
+            <button
+              className="btn-ghost"
+              onClick={researchBrand}
+              disabled={busy === 'research-brand'}
+              title="Generate a brand-level dossier — positioning, ICP, market category, brand signals, summary. Used by every scan as foundational context."
+            >
+              <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
+              {busy === 'research-brand'
+                ? 'Researching brand…'
+                : brand.research_status === 'ready' ? 'Re-research brand' : 'Run brand research'}
+            </button>
             <button className="btn-ghost" onClick={() => setEditingBrand(true)}>
               <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} /> Edit
             </button>
@@ -184,12 +202,8 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
             This brand is excluded from job scans — none of its products will be scanned, regardless of their individual toggles.
           </div>
         )}
-        {brand.competitive_summary && (
-          <div style={{ marginTop: 16, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937' }}>
-            <div className="label" style={{ marginBottom: 6 }}>Competitive Summary</div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{brand.competitive_summary}</div>
-          </div>
-        )}
+        {/* v1.6: brand research status + dossier */}
+        <BrandResearchPanel brand={brand} knowledge={knowledge} />
       </div>
 
       <div className="card" style={{ padding: 20 }}>
@@ -254,6 +268,12 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                   </div>
                 </details>
               )}
+              <ReResearchBadge
+                lastResearchedAt={p.last_researched_at}
+                knowledgeItems={knowledgeForProduct(p.id)}
+                kind="product"
+              />
+
 
               {/* Product-level knowledge */}
               <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
@@ -446,6 +466,88 @@ function AddNoteForm({
         }}>Save Note</button>
       </div>
     </div>
+  );
+}
+
+function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: KnowledgeItem[] }) {
+  const statusChip = (() => {
+    if (brand.research_status === 'researching') {
+      return <span className="chip chip-open">researching…</span>;
+    }
+    if (brand.research_status === 'error') {
+      return <span className="chip chip-disqualified">research error</span>;
+    }
+    if (brand.research_status === 'ready') {
+      return <span className="chip chip-qualified">brand dossier ready</span>;
+    }
+    return <span className="chip chip-muted">brand not yet researched</span>;
+  })();
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        {statusChip}
+        <ReResearchBadge
+          lastResearchedAt={brand.last_researched_at}
+          knowledgeItems={knowledge}
+          kind="brand"
+        />
+      </div>
+
+      {brand.research_status !== 'ready' && (
+        <div style={{ fontSize: 13, color: '#6b7280' }}>
+          Run brand research to give every scan a foundational understanding of this brand —
+          positioning, ideal customer profile, brand-level signals, and a market summary.
+          {knowledge.length === 0 ? ' (Upload some brand-level knowledge first for best results.)' : ''}
+        </div>
+      )}
+
+      {brand.research_status === 'ready' && (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>View brand dossier</summary>
+          <div style={{ marginTop: 10, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937', display: 'grid', gap: 12 }}>
+            {brand.category && <Field label="Market category" value={brand.category} />}
+            {brand.positioning && <Field label="Positioning" value={brand.positioning} />}
+            {brand.target_icp && <Field label="Target ICP (ideal customer profile)" value={brand.target_icp} />}
+            {brand.signals && <Field label="Brand-level signals" value={brand.signals} />}
+            {brand.competitive_summary && <Field label="Competitive summary" value={brand.competitive_summary} />}
+            {brand.research_summary && <Field label="Research summary" value={brand.research_summary} />}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shows a yellow "Re-research recommended" badge when knowledge has been
+ * added (or modified) since the last research run.
+ */
+function ReResearchBadge({
+  lastResearchedAt, knowledgeItems, kind
+}: {
+  lastResearchedAt: string | null;
+  knowledgeItems: KnowledgeItem[];
+  kind: 'brand' | 'product';
+}) {
+  if (!lastResearchedAt) return null; // never researched — explicit "run research" CTA covers this case
+  const lastResearchedMs = new Date(lastResearchedAt + 'Z').getTime();
+  const newer = knowledgeItems.filter(
+    (k) => new Date(k.created_at + 'Z').getTime() > lastResearchedMs
+  ).length;
+  if (newer === 0) return null;
+  return (
+    <span
+      title={`${newer} ${kind === 'brand' ? 'brand-level' : 'product'} knowledge item${newer === 1 ? '' : 's'} added since the last research run`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: 11, padding: '3px 8px',
+        background: '#fef3c7', color: '#92400e', borderRadius: 4
+      }}
+    >
+      <AlertTriangle size={11} />
+      Re-research recommended ({newer} new)
+    </span>
   );
 }
 

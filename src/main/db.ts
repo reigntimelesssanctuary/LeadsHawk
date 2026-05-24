@@ -227,6 +227,30 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'scan_runs', 'kind', "TEXT NOT NULL DEFAULT 'manual'");
   // v1.5.1: optional country captured by the scanner's LLM call.
   addColumnIfMissing(db, 'opportunities', 'country', 'TEXT');
+
+  // v1.6: brand becomes a first-class research subject.
+  addColumnIfMissing(db, 'brands', 'research_status', "TEXT NOT NULL DEFAULT 'pending'");
+  addColumnIfMissing(db, 'brands', 'research_summary', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'target_icp', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'category', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'signals', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'last_researched_at', 'TEXT');
+  addColumnIfMissing(db, 'products', 'last_researched_at', 'TEXT');
+  // Track when each knowledge_item finished being chunked + embedded.
+  addColumnIfMissing(db, 'knowledge_items', 'indexed_at', 'TEXT');
+
+  // v1.6: real knowledge indexing — chunks + embeddings per knowledge_item.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+      ord INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      embedding TEXT NOT NULL,        -- JSON Float32 array (384-dim from MiniLM)
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_chunks_item ON knowledge_chunks(item_id);
+  `);
 }
 
 function addColumnIfMissing(

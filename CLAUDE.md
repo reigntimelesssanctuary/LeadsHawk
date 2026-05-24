@@ -545,6 +545,35 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.6.0 (2026-05-25):** **Knowledge-first scans (Track A of the dual-track architecture).** Cast-nets engine (manual + deep scans) now grounds on the full accumulated brand + product knowledge instead of being anchored to pre-derived signal bullets.
+
+Schema additions (all idempotent):
+- `brands.research_status` (default 'pending'), `research_summary`, `target_icp`, `category`, `signals`, `last_researched_at`.
+- `products.last_researched_at`.
+- `knowledge_items.indexed_at`.
+- New `knowledge_chunks` table (id, item_id FK CASCADE, ord, text, embedding JSON, created_at) + index on item_id.
+
+New modules:
+- `src/main/knowledge-index.ts`: `chunkText` (~500-char chunks, 50-char overlap, sentence/paragraph-aware breaks), `chunkAndEmbedKnowledgeItem` (per-item, fire-and-forget), `retrieveRelevantChunks(query, brandId, productId?, k)` (cosine sim with small bonus for product-scoped chunks), `renderChunksBlock`, `backfillKnowledgeIndex` (one-time at boot).
+- All knowledge inserts in `ipc.ts` (addNote / addLink / upload) now fire `chunkAndEmbedKnowledgeItem(id)` async.
+- Boot path in `src/main/index.ts` schedules `backfillKnowledgeIndex` after 5s so existing knowledge items get indexed in the background.
+
+Brand becomes a research subject:
+- New `researchBrand(brandId)` in `research.ts` using `sonar-deep-research` with a `BRAND_RESEARCH_SCHEMA` (category, positioning, target_icp, competitive_summary, signals, research_summary). New `'brand_research'` LlmStage; new `brands:research` IPC; new `window.lh.brands.research(id)` preload mirror.
+- `researchProduct` now sets `last_researched_at` and **stops the side-effect brand-summary regeneration** (fixes the historical bug where brand summaries got overwritten on every product re-research). The brand summary is now ONLY produced by `researchBrand`.
+
+Scan prompt rewrite (the big one):
+- `scanner.ts` Pass 1 prompt now includes: full brand block (category, description, positioning, target_icp, competitive_summary, brand signals, truncated research_summary), full product block (including `competitors` and truncated `research_summary` — both previously stored but invisible to scans), and **top-5 retrieved knowledge chunks** queried by `[brand.name, target_icp, product.name, description, signals].join('\n')`.
+- SYSTEM prompt rewritten: signals are "guidance not constraint"; the model is told to USE accumulated knowledge to find quality opportunities.
+- Task framing rewritten: "Using ALL of the context above…anchor on signals when they fit, but don't be limited to them. Use your full understanding of who we are and who we sell to."
+
+UI:
+- BrandPanel header gains a **"Run Brand Research"** button (Sparkles icon) next to Edit / Delete with status chip (`pending` / `researching…` / `dossier ready` / `error`).
+- New `BrandResearchPanel` component replaces the old standalone competitive_summary card; shows status chip, optional "upload knowledge first" hint, and a collapsible dossier (Field grid for category / positioning / target_icp / signals / competitive_summary / research_summary).
+- New `ReResearchBadge` component on both brand and product cards: shows yellow "Re-research recommended (N new)" when `MAX(knowledge_items.created_at) > last_researched_at`.
+
+Cost note: brand research is a `sonar-deep-research` call (~$0.10-0.30 per brand). Run it once per brand, re-run when significant new knowledge is added (the yellow badge will tell you).
+
 **v1.5.4 (2026-05-24):** URL hygiene for scanner output — "Source" links no longer dump the user on hallucinated URLs.
 
 Root cause: Perplexity occasionally returns a `source_url` in the JSON that doesn't actually appear in its citations array (paraphrased, malformed, or invented). The old code accepted whatever string the LLM returned.

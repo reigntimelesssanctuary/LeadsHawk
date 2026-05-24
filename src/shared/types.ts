@@ -4,6 +4,13 @@ export type Brand = {
   description: string | null;
   positioning: string | null;
   competitive_summary: string | null;
+  // v1.6 brand-research fields
+  research_status: 'pending' | 'researching' | 'ready' | 'error';
+  research_summary: string | null;
+  target_icp: string | null;          // ideal customer profile narrative
+  category: string | null;             // market category
+  signals: string | null;              // brand-level signals (bulleted)
+  last_researched_at: string | null;
   scan_enabled: number; // 0 | 1 — when 0, all of this brand's products are excluded from scans
   created_at: string;
   updated_at: string;
@@ -21,6 +28,7 @@ export type Product = {
   signals: string | null;
   research_status: 'pending' | 'researching' | 'ready' | 'error';
   research_summary: string | null;
+  last_researched_at: string | null;
   scan_enabled: number; // 0 | 1 — when 1, autonomous scans include this product
   created_at: string;
   updated_at: string;
@@ -35,6 +43,7 @@ export type KnowledgeItem = {
   source: string;
   content: string | null;
   status: 'pending' | 'indexed' | 'error';
+  indexed_at: string | null;          // when chunking+embedding completed
   created_at: string;
 };
 

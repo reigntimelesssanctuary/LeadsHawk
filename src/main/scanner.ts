@@ -4,6 +4,7 @@ import { getSettings } from './settings.js';
 import { buildDisqualificationsBlock } from './learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
 import { pickBestSourceUrl, dedupeCleanCitations } from './url-hygiene.js';
+import { retrieveRelevantChunks, renderChunksBlock } from './knowledge-index.js';
 import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
@@ -57,14 +58,19 @@ function buildGuardrails(productId: number | null): string {
 }
 
 const SYSTEM = `You are a senior B2B sales-intelligence analyst with live web
-access. You will be given ONE specific product from our portfolio and the
-buying signals that indicate when a customer is likely to need it. Your job
-is to search the live web for RECENT real-world events that match those
-signals and represent credible B2B sales opportunities for THIS product.
+access. You will be given foundational context about who we are (a brand and
+one of its products) — its positioning, ideal customer profile, competitive
+landscape, and excerpts of our own internal knowledge.
+
+Your job: USE that context to do deep web research and identify recent
+real-world events that represent credible B2B sales opportunities for this
+product. Buying signals are provided as guidance — opportunities matching
+them are obvious wins, but you are not limited to them. Surface anything
+that fits our context and represents a genuine buying moment.
 
 You must be honest and skeptical. Most news is NOT an opportunity. Only
 surface items where a real named company is in a concrete situation that
-genuinely fits one of the signals AND fits this product.
+genuinely fits our positioning + ICP + this product.
 
 Always include a working source URL for each opportunity. Apply confidence
 0..1 — be honest, most should be 0.4–0.7 unless the fit is obvious.
@@ -202,8 +208,33 @@ export async function runScan(
       if (disqBlock) log(`  injecting recent disqualifications`);
       const ownBrandsBlock = buildOwnBrandsBlock(brands);
 
-      const prompt = `# Product to find opportunities for
-Brand: ${brand.name}
+      // v1.6: knowledge-anchored prompt. Retrieve top-K knowledge chunks
+      // relevant to this product so the LLM grounds on our internal
+      // material, not just on derived signal bullets.
+      const retrievalQuery = [
+        brand.name,
+        brand.target_icp || '',
+        product.name,
+        product.description || '',
+        product.signals || ''
+      ].filter((s) => s).join('\n');
+      const chunks = await retrieveRelevantChunks(retrievalQuery, brand.id, product.id, 5);
+      if (chunks.length > 0) {
+        log(`  retrieved ${chunks.length} knowledge chunk(s) (best sim ${chunks[0].similarity.toFixed(2)})`);
+      }
+      const chunksBlock = renderChunksBlock(chunks);
+
+      const prompt = `# Brand
+Name: ${brand.name}
+Category: ${brand.category || '(unspecified)'}
+Description: ${brand.description || '(none on file)'}
+Positioning: ${brand.positioning || '(none on file)'}
+Target ICP (ideal customer profile): ${brand.target_icp || '(not researched yet — fall back to general knowledge of this brand)'}
+Competitive summary: ${brand.competitive_summary || '(none on file)'}
+${brand.signals ? `\nBrand-level signals (apply across the whole brand, in addition to product signals):\n${brand.signals}` : ''}
+${brand.research_summary ? `\nBrand research summary:\n${brand.research_summary.slice(0, 1200)}${brand.research_summary.length > 1200 ? '…' : ''}` : ''}
+
+# Product to find opportunities for
 Product: "${product.name}"
 Category: ${product.category || '(unspecified)'}
 Description: ${product.description || ''}
@@ -214,8 +245,14 @@ ${product.use_cases || ''}
 Differentiators vs competitors:
 ${product.differentiators || ''}
 
-# Buying signals to search for
-${product.signals}
+Competitors:
+${product.competitors || ''}
+${product.research_summary ? `\nProduct research summary:\n${product.research_summary.slice(0, 1500)}${product.research_summary.length > 1500 ? '…' : ''}` : ''}
+
+# Product-level buying signals (guidance, not constraint)
+${product.signals || '(none derived yet)'}
+
+${chunksBlock}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
@@ -227,10 +264,15 @@ ${guardrails}
 ${disqBlock}
 
 # Task
-Search the live web. For each genuine sales opportunity you find that
-matches one of the signals above, return a record. Limit to the
-${perProduct} strongest opportunities. Set "matched_signal" to the
-specific signal (from the list above) that this opportunity matches.`;
+Using ALL of the context above (brand positioning + ICP + product details +
+retrieved knowledge), search the live web for recent events that represent
+quality B2B sales opportunities for this brand+product. The signals are
+GUIDANCE — anchor on them when they fit, but don't be limited to them. Use
+your full understanding of who we are and who we sell to.
+
+For each opportunity, return a record. Limit to the ${perProduct} strongest.
+Set "matched_signal" to whichever signal best describes the fit (or invent a
+short descriptor if it's a knowledge-grounded match outside the listed signals).`;
 
       let json: { opportunities: PplxOpportunity[] } | null = null;
       let citations: string[] = [];

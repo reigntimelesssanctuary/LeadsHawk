@@ -16,7 +16,8 @@
 
 export type LlmStage =
   | 'research'           // Perplexity sonar-deep-research, product dossier
-  | 'brand_summary'      // Perplexity, 150-word brand rollup
+  | 'brand_research'     // v1.6: Perplexity sonar-deep-research, brand dossier
+  | 'brand_summary'      // Perplexity, 150-word brand rollup (legacy; phased out by brand_research)
   | 'refresh_signals'    // Perplexity sonar-pro, signals-only refresh
   | 'manual_scan'        // Perplexity sonar-pro, Pass 1 + Pass 2 (cheap cron)
   | 'deep_scan'          // Perplexity sonar-deep-research, twice-daily heavy cron
