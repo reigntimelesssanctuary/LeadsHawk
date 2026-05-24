@@ -1,6 +1,6 @@
 {
   "name": "leadshawk",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "B2B Signal Intelligence — autonomous corporate sales opportunity hunter",
   "main": "out/main/index.js",
   "author": "LeadsHawk",
@@ -25,7 +25,8 @@
     "node-cron": "^3.0.3",
     "node-html-parser": "^6.1.13",
     "pdf-parse": "^1.1.1",
-    "rss-parser": "^3.13.0"
+    "rss-parser": "^3.13.0",
+    "undici": "^8.3.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",

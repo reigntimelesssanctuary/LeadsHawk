@@ -1,8 +1,57 @@
+import { Agent, fetch as undiciFetch } from 'undici';
 import { getSettings } from './settings.js';
 import { recordApiCall } from './spend.js';
 import type { LlmStage } from './pricing.js';
 
 const PPLX_URL = 'https://api.perplexity.ai/chat/completions';
+
+/**
+ * Node's bundled undici fetch has a default 5-minute bodyTimeout that
+ * trips on long sonar-deep-research calls (multi-step research on broad
+ * domains can take 5-8 minutes). We override with a generous 12-minute
+ * budget. headersTimeout stays short — Perplexity responds with headers
+ * within a couple of seconds even on long research calls.
+ */
+const PPLX_AGENT = new Agent({
+  bodyTimeout: 12 * 60 * 1000,    // 12 min — covers worst-case deep research
+  headersTimeout: 60 * 1000        // 60s — headers arrive quickly even when body is slow
+});
+
+const TRANSIENT_ERROR_RE = /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR|socket hang up|HeadersTimeoutError|BodyTimeoutError/i;
+
+/**
+ * fetch wrapper with one auto-retry on transient network errors.
+ * API errors (4xx/5xx with body) are NOT retried — they're the caller's
+ * problem and retrying just wastes tokens.
+ */
+async function fetchPplx(body: any, headers: Record<string, string>): Promise<{ data: any }> {
+  let lastErr: any;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const resp = await undiciFetch(PPLX_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        dispatcher: PPLX_AGENT
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        // Don't retry API errors — caller sees the original status.
+        throw new Error(`Perplexity API ${resp.status}: ${text.slice(0, 500)}`);
+      }
+      return { data: await resp.json() };
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e);
+      // Retry only on network-level transient errors, NOT API errors.
+      const transient = !msg.startsWith('Perplexity API ') && TRANSIENT_ERROR_RE.test(msg);
+      if (!transient || attempt >= 1) throw e;
+      console.warn(`[perplexity] transient error "${msg}" — retrying in 3s (attempt ${attempt + 2}/2)`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  throw lastErr;
+}
 
 export type PplxRecency = 'day' | 'week' | 'month' | 'year';
 
@@ -66,20 +115,11 @@ export async function completePerplexity<T = unknown>(
     };
   }
 
-  const resp = await fetch(PPLX_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${key}`,
-      accept: 'application/json'
-    },
-    body: JSON.stringify(body)
+  const { data } = await fetchPplx(body, {
+    'content-type': 'application/json',
+    authorization: `Bearer ${key}`,
+    accept: 'application/json'
   });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Perplexity API ${resp.status}: ${text.slice(0, 500)}`);
-  }
-  const data = await resp.json();
   const text: string = data?.choices?.[0]?.message?.content ?? '';
   const citations: string[] = Array.isArray(data?.citations)
     ? data.citations
