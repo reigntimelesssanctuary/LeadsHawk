@@ -2,6 +2,7 @@ import { getDb } from '../db.js';
 import { completePerplexity } from '../perplexity.js';
 import { getSettings } from '../settings.js';
 import { buildDisqualificationsBlock } from '../learning.js';
+import { isOwnBrandCompany, buildOwnBrandsBlock } from '../lead-hygiene.js';
 import type { Brand, Product, SignalItem, ScanRule } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales intelligence analyst. You will be
@@ -90,6 +91,8 @@ export async function qualifyItem(
   }
   const guardrails = buildProductGuardrails(product.id);
   const disqBlock = buildDisqualificationsBlock(product.id, 6);
+  const allBrands = db.prepare('SELECT * FROM brands').all() as Brand[];
+  const ownBrandsBlock = buildOwnBrandsBlock(allBrands);
 
   const prompt = `# Product
 Brand: ${brand.name}
@@ -108,6 +111,8 @@ Title: ${item.title}
 URL: ${item.url}
 Snippet: ${item.snippet || ''}
 Pre-filter matched signal: "${matchedSignal}"
+
+${ownBrandsBlock}
 
 ${guardrails}
 
@@ -137,6 +142,9 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
   if (!j.is_opportunity) return { kind: 'rejected', reason: 'model judged not an opportunity' };
   if ((j.confidence ?? 0) < settings.minConfidence) {
     return { kind: 'rejected', reason: `low confidence ${j.confidence}` };
+  }
+  if (isOwnBrandCompany(j.company, allBrands)) {
+    return { kind: 'rejected', reason: `our own brand as customer (${j.company})` };
   }
 
   const insert = db.prepare(`

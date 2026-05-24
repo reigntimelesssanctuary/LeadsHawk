@@ -4,13 +4,14 @@ import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
 import { researchProduct, refreshProductSignals } from './research.js';
 import { runScan } from './scanner.js';
+import { exportOpportunitiesXlsx } from './export.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
 import { getSpendSummary } from './spend.js';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning
 } from './monitor/index.js';
-import { recordDisqualifyVector } from './monitor/embed.js';
+import { recordDisqualifyVector, embedSignalsForProduct } from './monitor/embed.js';
 import type { MonitorSource, SignalItem, SourceHealth, Opportunity } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
@@ -156,6 +157,12 @@ export function registerIpc() {
   });
   ipcMain.handle('products:research', async (_e, id: number) => researchProduct(id));
   ipcMain.handle('products:refreshSignals', async (_e, id: number) => refreshProductSignals(id));
+  // Re-embed the product's signals string in-place — no Perplexity call.
+  // Used after the user manually edits the signals via the product editor.
+  ipcMain.handle('products:reembed', async (_e, id: number) => {
+    await embedSignalsForProduct(id);
+    return true;
+  });
   ipcMain.handle('products:setScanEnabled', (_e, id: number, enabled: boolean) => {
     db.prepare(
       "UPDATE products SET scan_enabled = ?, updated_at = datetime('now') WHERE id = ?"
@@ -297,8 +304,10 @@ export function registerIpc() {
   ipcMain.handle('opps:list', (_e, status?: string) => {
     const where = status ? "WHERE status = ?" : '';
     const args = status ? [status] : [];
+    // Default sort: newest first (created_at desc, then id desc as tie-break).
+    // The renderer can re-sort client-side once the rows are in memory.
     return db
-      .prepare(`SELECT * FROM opportunities ${where} ORDER BY confidence DESC, id DESC LIMIT 500`)
+      .prepare(`SELECT * FROM opportunities ${where} ORDER BY datetime(created_at) DESC, id DESC LIMIT 500`)
       .all(...args) as Opportunity[];
   });
   ipcMain.handle('opps:get', (_e, id: number) =>
@@ -331,6 +340,20 @@ export function registerIpc() {
     db.prepare('DELETE FROM dispatch_log WHERE opportunity_id = ?').run(id);
     db.prepare('DELETE FROM opportunities WHERE id = ?').run(id);
     return true;
+  });
+  ipcMain.handle('opps:exportXlsx', async (_e, ids: number[]) => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return null;
+    const buf = await exportOpportunitiesXlsx(ids);
+    const defaultName = `leadshawk-opportunities-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const sel = await dialog.showSaveDialog(win, {
+      title: 'Export opportunities',
+      defaultPath: defaultName,
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }]
+    });
+    if (sel.canceled || !sel.filePath) return null;
+    await writeFile(sel.filePath, buf);
+    return { path: sel.filePath, count: ids.length };
   });
   ipcMain.handle('opps:deleteMany', (_e, ids: number[]) => {
     if (!Array.isArray(ids) || ids.length === 0) return 0;

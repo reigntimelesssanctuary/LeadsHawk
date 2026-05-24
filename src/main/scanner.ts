@@ -2,6 +2,7 @@ import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import { buildDisqualificationsBlock } from './learning.js';
+import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
 /**
@@ -173,6 +174,7 @@ export async function runScan(): Promise<{ runId: number; created: number; scann
       }
       const disqBlock = buildDisqualificationsBlock(product.id, 8);
       if (disqBlock) log(`  injecting recent disqualifications`);
+      const ownBrandsBlock = buildOwnBrandsBlock(brands);
 
       const prompt = `# Product to find opportunities for
 Brand: ${brand.name}
@@ -191,6 +193,8 @@ ${product.signals}
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
+
+${ownBrandsBlock}
 
 ${guardrails}
 
@@ -230,7 +234,7 @@ specific signal (from the list above) that this opportunity matches.`;
 
       created += insertCandidates(
         json.opportunities || [],
-        { brand, product, sourceLabel: `auto:${product.name}` },
+        { brand, product, sourceLabel: `auto:${product.name}`, brands },
         { settings, seenStmt, insertSeen, insertOpp, log }
       );
       scanned += json.opportunities?.length ?? 0;
@@ -259,6 +263,7 @@ specific signal (from the list above) that this opportunity matches.`;
           : null;
         if (pinned) log(`  pinned to product "${pinned.name}" — inheriting its rules`);
         const guardrails = buildGuardrails(pinnedProductId); // null → global only
+        const ownBrandsBlock = buildOwnBrandsBlock(brands);
 
         const prompt = `# Our portfolio
 ${portfolio}
@@ -269,6 +274,8 @@ ${pinned ? `\n# Pinned product\nThis topic is scoped to "${pinned.name}" (${pinn
 
 # Time window
 Only consider events from the last ${settings.scanRecency}.
+
+${ownBrandsBlock}
 
 ${guardrails}
 
@@ -310,7 +317,8 @@ brand/product names that appear in our portfolio.`;
               {
                 brand: matchedBrand,
                 product: matchedProduct,
-                sourceLabel: `custom:${src.name}`
+                sourceLabel: `custom:${src.name}`,
+                brands
               },
               { settings, seenStmt, insertSeen, insertOpp, log }
             );
@@ -403,7 +411,7 @@ type InsertCtx = {
 
 function insertCandidates(
   candidates: PplxOpportunity[],
-  attrib: { brand: Brand | null; product: Product | null; sourceLabel: string },
+  attrib: { brand: Brand | null; product: Product | null; sourceLabel: string; brands: Brand[] },
   ctx: InsertCtx
 ): number {
   let inserted = 0;
@@ -413,6 +421,10 @@ function insertCandidates(
     if (ctx.seenStmt.get(url)) { ctx.log(`  - skip (seen): ${cand.company}`); continue; }
     if ((cand.confidence ?? 0) < ctx.settings.minConfidence) {
       ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${cand.company}`);
+      continue;
+    }
+    if (isOwnBrandCompany(cand.company, attrib.brands)) {
+      ctx.log(`  - skip (our own brand as customer): ${cand.company}`);
       continue;
     }
     ctx.insertSeen.run(url);

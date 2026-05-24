@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
 import { Modal } from '../components/Modal';
 import { Switch } from '../components/Switch';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw } from 'lucide-react';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw, Pencil } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
 export function BrandsProducts() {
@@ -112,6 +112,8 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
   const [products, setProducts] = useState<Product[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
   const [showAddProduct, setShowAddProduct] = useState(false);
+  const [editingBrand, setEditingBrand] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [noteTarget, setNoteTarget] = useState<ModalTarget>(false);
   const [linkTarget, setLinkTarget] = useState<ModalTarget>(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -171,6 +173,9 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
               label="Include in scans"
               onChange={async (v) => { await window.lh.brands.setScanEnabled(brand.id, v); onChanged(); }}
             />
+            <button className="btn-ghost" onClick={() => setEditingBrand(true)}>
+              <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} /> Edit
+            </button>
             <button className="btn-danger" onClick={deleteBrand}>Delete</button>
           </div>
         </div>
@@ -225,6 +230,13 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                       {busy === 'refresh-' + p.id ? 'Refreshing…' : 'Refresh signals'}
                     </button>
                   )}
+                  <button
+                    className="btn-ghost"
+                    onClick={() => setEditingProduct(p)}
+                    title="Edit name, description, and the research dossier"
+                  >
+                    <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} /> Edit
+                  </button>
                   <button className="btn-danger" onClick={async () => {
                     if (confirm(`Delete ${p.name}?`)) { await window.lh.products.delete(p.id); refresh(); }
                   }}><Trash2 size={13} /></button>
@@ -313,6 +325,20 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
 
       <Modal open={showAddProduct} onClose={() => setShowAddProduct(false)} title="Add Product">
         <AddProductForm brandId={brand.id} onDone={async () => { setShowAddProduct(false); await refresh(); }} />
+      </Modal>
+      <Modal open={editingBrand} onClose={() => setEditingBrand(false)} title={`Edit Brand — ${brand.name}`}>
+        <EditBrandForm
+          brand={brand}
+          onDone={async () => { setEditingBrand(false); await refresh(); onChanged(); }}
+        />
+      </Modal>
+      <Modal open={!!editingProduct} onClose={() => setEditingProduct(null)} title={editingProduct ? `Edit Product — ${editingProduct.name}` : ''}>
+        {editingProduct && (
+          <EditProductForm
+            product={editingProduct}
+            onDone={async () => { setEditingProduct(null); await refresh(); onChanged(); }}
+          />
+        )}
       </Modal>
       <Modal
         open={noteTarget !== false}
@@ -418,6 +444,128 @@ function AddNoteForm({
           await window.lh.knowledge.addNote({ brandId, productId, title, content });
           onDone();
         }}>Save Note</button>
+      </div>
+    </div>
+  );
+}
+
+function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) {
+  const [name, setName] = useState(brand.name);
+  const [description, setDescription] = useState(brand.description || '');
+  const [positioning, setPositioning] = useState(brand.positioning || '');
+  const [competitive, setCompetitive] = useState(brand.competitive_summary || '');
+  const [busy, setBusy] = useState(false);
+  return (
+    <div>
+      <label className="label">Brand name</label>
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+      <div style={{ height: 12 }} />
+      <label className="label">Short description</label>
+      <textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <div style={{ height: 12 }} />
+      <label className="label">Positioning (optional)</label>
+      <textarea className="textarea" value={positioning} onChange={(e) => setPositioning(e.target.value)} placeholder="How this brand positions itself in the market" />
+      <div style={{ height: 12 }} />
+      <label className="label">Competitive summary (optional)</label>
+      <textarea
+        className="textarea"
+        value={competitive}
+        onChange={(e) => setCompetitive(e.target.value)}
+        style={{ minHeight: 140 }}
+        placeholder="Auto-generated after product research — feel free to refine."
+      />
+      <div style={{ marginTop: 14, textAlign: 'right' }}>
+        <button className="btn-primary" disabled={!name.trim() || busy} onClick={async () => {
+          setBusy(true);
+          try {
+            await window.lh.brands.update(brand.id, {
+              name: name.trim(),
+              description: description.trim() || null as any,
+              positioning: positioning.trim() || null as any,
+              competitive_summary: competitive.trim() || null as any
+            });
+            onDone();
+          } finally { setBusy(false); }
+        }}>{busy ? 'Saving…' : 'Save changes'}</button>
+      </div>
+    </div>
+  );
+}
+
+function EditProductForm({ product, onDone }: { product: Product; onDone: () => void }) {
+  const [name, setName] = useState(product.name);
+  const [category, setCategory] = useState(product.category || '');
+  const [description, setDescription] = useState(product.description || '');
+  const [useCases, setUseCases] = useState(product.use_cases || '');
+  const [competitors, setCompetitors] = useState(product.competitors || '');
+  const [differentiators, setDifferentiators] = useState(product.differentiators || '');
+  const [signals, setSignals] = useState(product.signals || '');
+  const [summary, setSummary] = useState(product.research_summary || '');
+  const [busy, setBusy] = useState(false);
+
+  // Detect whether signals changed so we re-embed for the live monitor.
+  const signalsChanged = (signals || '').trim() !== (product.signals || '').trim();
+
+  return (
+    <div style={{ maxHeight: '70vh', overflowY: 'auto', paddingRight: 4 }}>
+      <label className="label">Name</label>
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+      <div style={{ height: 12 }} />
+      <label className="label">Category</label>
+      <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. SD-WAN, firewall, observability" />
+      <div style={{ height: 12 }} />
+      <label className="label">Short description</label>
+      <textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} />
+
+      <div style={{ marginTop: 18, padding: '12px 0 0', borderTop: '1px solid #e5e7eb' }}>
+        <div className="label" style={{ marginBottom: 4 }}>Research dossier</div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          Edit the fields below to refine what scans use. Use markdown bullets (lines starting with <code>-</code>) for the list fields.
+        </div>
+      </div>
+
+      <label className="label">Use cases</label>
+      <textarea className="textarea" value={useCases} onChange={(e) => setUseCases(e.target.value)} style={{ minHeight: 120 }} />
+      <div style={{ height: 12 }} />
+      <label className="label">Competitors</label>
+      <textarea className="textarea" value={competitors} onChange={(e) => setCompetitors(e.target.value)} style={{ minHeight: 100 }} />
+      <div style={{ height: 12 }} />
+      <label className="label">Differentiators</label>
+      <textarea className="textarea" value={differentiators} onChange={(e) => setDifferentiators(e.target.value)} style={{ minHeight: 100 }} />
+      <div style={{ height: 12 }} />
+      <label className="label">Signals to watch</label>
+      <textarea className="textarea" value={signals} onChange={(e) => setSignals(e.target.value)} style={{ minHeight: 140 }} />
+      {signalsChanged && (
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+          Signals were changed — embeddings for the Live Monitor will be refreshed when you save.
+        </div>
+      )}
+      <div style={{ height: 12 }} />
+      <label className="label">Research summary</label>
+      <textarea className="textarea" value={summary} onChange={(e) => setSummary(e.target.value)} style={{ minHeight: 180 }} />
+
+      <div style={{ marginTop: 16, textAlign: 'right' }}>
+        <button className="btn-primary" disabled={!name.trim() || busy} onClick={async () => {
+          setBusy(true);
+          try {
+            await window.lh.products.update(product.id, {
+              name: name.trim(),
+              category: category.trim(),
+              description: description.trim(),
+              use_cases: useCases,
+              competitors,
+              differentiators,
+              signals,
+              research_summary: summary
+            });
+            // If signals were edited, kick off a fresh embed pass so the
+            // Live Monitor's local pre-filter sees the new vectors.
+            if (signalsChanged) {
+              await window.lh.products.reembed(product.id).catch(() => {});
+            }
+            onDone();
+          } finally { setBusy(false); }
+        }}>{busy ? 'Saving…' : 'Save changes'}</button>
       </div>
     </div>
   );

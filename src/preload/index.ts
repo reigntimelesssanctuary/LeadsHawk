@@ -25,6 +25,7 @@ const api = {
     delete: (id: number) => ipcRenderer.invoke('products:delete', id),
     research: (id: number) => ipcRenderer.invoke('products:research', id),
     refreshSignals: (id: number) => ipcRenderer.invoke('products:refreshSignals', id),
+    reembed: (id: number) => ipcRenderer.invoke('products:reembed', id),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('products:setScanEnabled', id, enabled)
   },
@@ -68,6 +69,7 @@ const api = {
       ipcRenderer.invoke('opps:disqualify', id, reason ?? null),
     delete: (id: number) => ipcRenderer.invoke('opps:delete', id),
     deleteMany: (ids: number[]) => ipcRenderer.invoke('opps:deleteMany', ids),
+    exportXlsx: (ids: number[]) => ipcRenderer.invoke('opps:exportXlsx', ids),
     brief: (id: number) => ipcRenderer.invoke('opps:brief', id),
     dispatch: (id: number, target: string, payload: string) =>
       ipcRenderer.invoke('opps:dispatch', id, target, payload)
