@@ -1,17 +1,28 @@
 import { useEffect, useState } from 'react';
-import type { ScanRun, Settings } from '../../../shared/types';
+import type { ScanRun, Settings, Brand, Product } from '../../../shared/types';
 import { fmtDate } from '../lib/api';
+import { Switch } from '../components/Switch';
 
 export function ScanJobs() {
   const [runs, setRuns] = useState<ScanRun[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [running, setRunning] = useState(false);
   const [runningDeep, setRunningDeep] = useState(false);
   const [selectedRun, setSelectedRun] = useState<ScanRun | null>(null);
 
   const refresh = async () => {
-    setRuns(await window.lh.scan.runs());
-    setSettings(await window.lh.settings.get());
+    const [r, s, b, p] = await Promise.all([
+      window.lh.scan.runs(),
+      window.lh.settings.get(),
+      window.lh.brands.list(),
+      window.lh.products.list()
+    ]);
+    setRuns(r);
+    setSettings(s);
+    setBrands(b);
+    setProducts(p);
   };
   useEffect(() => { refresh(); }, []);
 
@@ -28,6 +39,8 @@ export function ScanJobs() {
         <div className="h-card" style={{ marginBottom: 10 }}>Schedule</div>
         {settings && <ScheduleEditor settings={settings} onSaved={refresh} />}
       </div>
+
+      <ScanInclusionCard brands={brands} products={products} onChanged={refresh} />
 
       <div className="card" style={{ padding: 20, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -110,6 +123,90 @@ export function ScanJobs() {
             <div className="h-section" style={{ marginBottom: 12 }}>Run #{selectedRun.id} logs</div>
             <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: '#0b0d12', color: '#d1d5db', padding: 16, borderRadius: 8 }}>{selectedRun.log || '(no logs)'}</pre>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScanInclusionCard({
+  brands, products, onChanged
+}: {
+  brands: Brand[];
+  products: Product[];
+  onChanged: () => void;
+}) {
+  const enabledBrandCount = brands.filter((b) => b.scan_enabled === 1).length;
+  const enabledProductCount = products.filter(
+    (p) => p.scan_enabled === 1 && brands.find((b) => b.id === p.brand_id)?.scan_enabled === 1
+  ).length;
+
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div className="h-card">Scan inclusion</div>
+        <div style={{ fontSize: 12, color: '#6b7280' }}>
+          {enabledBrandCount}/{brands.length} brand{brands.length === 1 ? '' : 's'} ·{' '}
+          {enabledProductCount}/{products.length} product{products.length === 1 ? '' : 's'} active
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
+        Toggle what gets included in every scan (manual, deep research, and live monitor). Disabling a brand pauses all of its products regardless of the per-product toggle.
+      </div>
+      {brands.length === 0 ? (
+        <div style={{ color: '#6b7280', fontSize: 13 }}>
+          No brands yet. Add some on the <b>Brands &amp; Products</b> tab.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {brands.map((b) => {
+            const brandProducts = products.filter((p) => p.brand_id === b.id);
+            const brandOn = b.scan_enabled === 1;
+            return (
+              <div key={b.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: brandOn ? 'white' : '#fafafa' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                    {b.description && (
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                        {b.description.slice(0, 120)}{b.description.length > 120 ? '…' : ''}
+                      </div>
+                    )}
+                  </div>
+                  <Switch
+                    checked={brandOn}
+                    label="Include in scans"
+                    onChange={async (v) => { await window.lh.brands.setScanEnabled(b.id, v); onChanged(); }}
+                  />
+                </div>
+                {brandProducts.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #e5e7eb', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {brandProducts.map((p) => (
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 6 }}>
+                        <div style={{ fontSize: 13, color: brandOn ? '#1f2937' : '#9ca3af' }}>
+                          {p.name}
+                          {p.research_status !== 'ready' && (
+                            <span style={{ marginLeft: 8, fontSize: 11, color: '#92400e' }}>(not researched)</span>
+                          )}
+                        </div>
+                        <Switch
+                          checked={p.scan_enabled === 1 && brandOn}
+                          disabled={!brandOn}
+                          label="Scan"
+                          onChange={async (v) => { await window.lh.products.setScanEnabled(p.id, v); onChanged(); }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {brandProducts.length === 0 && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>
+                    No products under this brand.
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

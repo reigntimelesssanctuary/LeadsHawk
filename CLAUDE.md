@@ -545,6 +545,19 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.2 (2026-05-25):** UX: scan-inclusion toggles moved from Brands & Products to Scan Jobs.
+
+New `ScanInclusionCard` on the Scan Jobs page (between Schedule and Manual run): lists every brand with its products as a hierarchical tree, each row with a Switch. Brand-level toggle still cascades — disabling a brand greys out and disables all its product toggles. Header shows live counts ("N/M brands active · X/Y products active").
+
+BrandsProducts cleanup:
+- Removed the brand "Include in scans" Switch from the BrandPanel header.
+- Removed the per-product "Scan" Switch from each product card.
+- Replaced with read-only chips (`scans on` / `scans paused`) with tooltip pointing to Scan Jobs → Scan inclusion.
+- Updated the disabled-brand banner to point users to the new location.
+- Removed unused `Switch` import.
+
+Backend IPC (`brands:setScanEnabled`, `products:setScanEnabled`) unchanged — both pages still use the same handlers, just from different UIs.
+
 **v1.7.1 (2026-05-25):** Bug fix — deep-research scans were failing with `fetch failed` on broad-domain products after ~5 minutes. Root cause: Node's bundled `undici` fetch has a default 5-minute `bodyTimeout`. Multi-step sonar-deep-research calls on broad topics (e.g. Zyeta / Renovation Services) legitimately exceed that. Replaced global `fetch` in `perplexity.ts` with explicit `undici` import + a custom `Agent` (bodyTimeout 12min, headersTimeout 60s). Added one-retry wrapper for transient network errors (`fetch failed`, `ECONNRESET`, `ETIMEDOUT`, etc.) — API errors (4xx/5xx with response body) are NOT retried. Added `undici` as a direct dependency.
 
 **v1.7.0 (2026-05-25):** **Signal-first track enhancements (Track B of the dual-track architecture).** Closes the parallel-tracks design.

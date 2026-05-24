@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
 import { Modal } from '../components/Modal';
-import { Switch } from '../components/Switch';
 import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw, Pencil, AlertTriangle } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
@@ -175,11 +174,12 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
             <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{brand.description || 'No description yet.'}</div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <Switch
-              checked={brand.scan_enabled === 1}
-              label="Include in scans"
-              onChange={async (v) => { await window.lh.brands.setScanEnabled(brand.id, v); onChanged(); }}
-            />
+            <span
+              className={`chip ${brand.scan_enabled === 1 ? 'chip-qualified' : 'chip-muted'}`}
+              title="Toggle on the Scan Jobs tab → Scan inclusion card."
+            >
+              {brand.scan_enabled === 1 ? 'scans on' : 'scans paused'}
+            </span>
             <button
               className="btn-ghost"
               onClick={researchBrand}
@@ -199,7 +199,7 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
         </div>
         {brand.scan_enabled !== 1 && (
           <div style={{ marginTop: 14, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, color: '#991b1b' }}>
-            This brand is excluded from job scans — none of its products will be scanned, regardless of their individual toggles.
+            This brand is currently paused — none of its products will be scanned. Toggle it back on under <b>Scan Jobs → Scan inclusion</b>.
           </div>
         )}
         {/* v1.6: brand research status + dossier */}
@@ -223,12 +223,12 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                   <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{p.description || 'No description.'}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <Switch
-                    checked={p.scan_enabled === 1 && brand.scan_enabled === 1}
-                    disabled={brand.scan_enabled !== 1}
-                    label="Scan"
-                    onChange={async (v) => { await window.lh.products.setScanEnabled(p.id, v); refresh(); }}
-                  />
+                  <span
+                    className={`chip ${p.scan_enabled === 1 && brand.scan_enabled === 1 ? 'chip-qualified' : 'chip-muted'}`}
+                    title="Toggle on the Scan Jobs tab → Scan inclusion card."
+                  >
+                    {p.scan_enabled === 1 && brand.scan_enabled === 1 ? 'scans on' : 'scans paused'}
+                  </span>
                   <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id || busy === 'refresh-' + p.id}>
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}
