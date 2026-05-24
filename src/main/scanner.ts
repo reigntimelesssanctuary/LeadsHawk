@@ -273,8 +273,19 @@ specific signal (from the list above) that this opportunity matches.`;
       .all() as SignalSource[];
 
     if (customSources.length > 0) {
-      const portfolio = buildPortfolio(brands, allProducts);
-      for (const src of customSources) {
+      // Only show the LLM brands + products that are currently scan-enabled.
+      // This is what makes custom topics honour the per-brand / per-product
+      // scan toggles. Disabled brands shouldn't be mentioned at all in the
+      // prompt, otherwise the model happily produces leads for them.
+      const enabledBrands = brands.filter((b) => b.scan_enabled === 1);
+      const enabledProducts = allProducts.filter(
+        (p) => p.scan_enabled === 1 && enabledBrandIds.has(p.brand_id)
+      );
+      if (enabledBrands.length === 0) {
+        log('Pass 2 (custom topics): skipped — no scan-enabled brands.');
+      }
+      const portfolio = buildPortfolio(enabledBrands, enabledProducts);
+      for (const src of (enabledBrands.length === 0 ? [] : customSources)) {
         log(`Custom topic: ${src.name}`);
         const cfg = (() => { try { return JSON.parse(src.config || '{}'); } catch { return {}; } })();
         const topic = cfg.query || cfg.url || src.name;
@@ -286,7 +297,17 @@ specific signal (from the list above) that this opportunity matches.`;
         const pinned = pinnedProductId
           ? allProducts.find((p) => p.id === pinnedProductId) || null
           : null;
-        if (pinned) log(`  pinned to product "${pinned.name}" — inheriting its rules`);
+        // If the topic is pinned to a product whose brand/itself is now
+        // scan-disabled, skip the topic entirely.
+        if (pinned) {
+          const pinnedBrandOk = enabledBrandIds.has(pinned.brand_id);
+          const pinnedProductOk = pinned.scan_enabled === 1;
+          if (!pinnedBrandOk || !pinnedProductOk) {
+            log(`  skipped — pinned product/brand is scan-disabled`);
+            continue;
+          }
+          log(`  pinned to product "${pinned.name}" — inheriting its rules`);
+        }
         const guardrails = buildGuardrails(pinnedProductId); // null → global only
         const ownBrandsBlock = buildOwnBrandsBlock(brands);
 
@@ -329,10 +350,13 @@ brand/product names that appear in our portfolio.`;
           log(`  → ${opps.length} candidate(s) returned`);
           scanned += opps.length;
           for (const cand of opps) {
+            // Resolve matched_brand / matched_product against ENABLED only —
+            // the LLM never sees disabled brands in the prompt, but be
+            // defensive in case it makes one up.
             const matchedBrand =
-              brands.find((b) => b.name.toLowerCase() === (cand.matched_brand || '').toLowerCase()) || null;
+              enabledBrands.find((b) => b.name.toLowerCase() === (cand.matched_brand || '').toLowerCase()) || null;
             const matchedProduct =
-              allProducts.find(
+              enabledProducts.find(
                 (p) =>
                   p.name.toLowerCase() === (cand.matched_product || '').toLowerCase() &&
                   (!matchedBrand || p.brand_id === matchedBrand.id)
@@ -470,6 +494,18 @@ function insertCandidates(
     }
     if (isOwnBrandCompany(cand.company, attrib.brands)) {
       ctx.log(`  - skip (our own brand as customer): ${cand.company}`);
+      continue;
+    }
+    // Defense-in-depth: never insert a lead for a scan-disabled brand or
+    // product, even if Pass 2's matched_brand/matched_product slipped past
+    // the prompt-level filter. Brand toggle is the master gate; product
+    // toggle is its inner gate.
+    if (attrib.brand && attrib.brand.scan_enabled !== 1) {
+      ctx.log(`  - skip (brand "${attrib.brand.name}" is scan-disabled): ${cand.company}`);
+      continue;
+    }
+    if (attrib.product && attrib.product.scan_enabled !== 1) {
+      ctx.log(`  - skip (product "${attrib.product.name}" is scan-disabled): ${cand.company}`);
       continue;
     }
     ctx.insertSeen.run(url);

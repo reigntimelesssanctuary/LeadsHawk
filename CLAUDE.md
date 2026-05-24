@@ -545,6 +545,19 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.5.3 (2026-05-24):** Bug fix — manual scan Pass 2 (custom topics) was producing leads for scan-disabled brands.
+
+Root cause: `buildPortfolio()` enumerated ALL brands + products regardless of `scan_enabled`, so the Pass 2 prompt told the LLM about disabled brands and let it return `matched_brand` against them. Three-layer fix in `scanner.ts`:
+
+1. **Pass 2 portfolio is now filtered to scan-enabled only** — `enabledBrands` + `enabledProducts` computed at the top of the block. If there are no enabled brands at all, Pass 2 is skipped entirely with a log line.
+2. **Pinned custom topics whose product or brand is disabled are skipped** with `skipped — pinned product/brand is scan-disabled`.
+3. **`matched_brand` / `matched_product` lookup uses only enabled lists**, so even if the model hallucinates a disabled brand name, it won't resolve.
+4. **Defense-in-depth in `insertCandidates`**: any candidate whose attributed brand or product is scan-disabled is dropped with `skip (brand "X" is scan-disabled)` / `skip (product "Y" is scan-disabled)` log lines.
+
+Pass 1 was unaffected — its `scanProducts` filter already correctly required `enabledBrandIds.has(p.brand_id)`. Live monitor also unaffected — `bestProductMatch` already joins on `b.scan_enabled = 1`.
+
+`buildOwnBrandsBlock` deliberately keeps ALL brands (including disabled) — that's an identity rule (Juniper is still us even when we're not actively hunting their leads), not a scan-enable rule.
+
 **v1.5.2 (2026-05-24):** Country column + filter on the Dashboard table. SortKey gains `country`; Filters gains a `country` string (exact match by name); new sticky-row dropdown populated from distinct non-null country values across the loaded set. Column sits between Industry and Brand to match the Excel column order. Table `minWidth` bumped 1180 → 1280 to accommodate; empty-state colSpan bumped 10 → 11.
 
 **v1.5.1 (2026-05-24):** Country field on opportunities.
