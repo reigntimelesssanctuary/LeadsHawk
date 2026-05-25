@@ -514,13 +514,64 @@ background color so the launch flash matches the sidebar.
 npm install        # installs deps + electron-rebuilds better-sqlite3 against Electron's Node
 npm run dev        # electron-vite dev — hot-reload renderer + main
 npm run build      # produces out/{main,preload,renderer}
-npm run dist:mac   # full build + electron-builder → release/LeadsHawk-1.0.0-arm64.dmg
+npm run smoke      # runs scripts/smoke-perplexity.mjs (~50ms, 23+ tests)
+npm run dist:mac   # full build + electron-builder → release/LeadsHawk-<v>-arm64.dmg
+npm run preship    # smoke → dist:mac (always run this before tagging/pushing)
 ```
 
 The `dist:mac` target currently produces only arm64 (Apple Silicon). To also
 produce x64, change `"arch": ["arm64"]` to `["arm64", "x64"]` in the
 `build.mac.target` block of `package.json`. The build is **not** code-signed
 (`identity: null`); first launch on macOS requires right-click → Open.
+
+## 7b. Release discipline (IMPORTANT — read before shipping)
+
+User is non-coder. The v1.7.x → v1.8.4 patch storm (8 patches in one
+afternoon, with v1.7.2 / v1.7.3 / v1.8.4 each shipping broken because
+they weren't smoke-tested or launched) created real friction. From
+v1.8.5 onward, follow this discipline EVERY release without exception:
+
+**Before every `git push` and `gh release create`:**
+
+1. **Run `npm run smoke`.** It takes ~50ms. If any test fails, fix
+   before pushing. The smoke test catches:
+   - JSON parsing regressions (Perplexity reasoning-mixed output)
+   - URL hygiene bugs (the v1.8.5 cleanUrl iterative-strip bug was
+     caught here pre-push)
+   - Brand-self filter false positives (Neptune Energy regression)
+   - Empty-completion detection logic
+2. **Run `npm run preship`** (which chains `smoke && dist:mac`). This
+   gives you a DMG you can actually launch.
+3. **Launch the packaged `.app`**, not just `npm run dev`:
+   ```bash
+   /Users/sanctuary/LeadsHawk/release/mac-arm64/LeadsHawk.app/Contents/MacOS/LeadsHawk
+   ```
+   Wait ~8 seconds. If it stays running, no startup crash. This catches
+   class-of-bug-that-killed-v1.7.2 (Node-runtime / native-module
+   incompatibilities that `npm run dev` doesn't surface because dev
+   uses your system Node, not the packaged Electron Node).
+4. **Only then `git push`, `git tag vX.Y.Z`, `git push origin <tag>`,
+   and `gh release create`.**
+
+**When adding any new pure-function logic** in `src/main/` (parsers,
+hygiene filters, resolvers, etc.) — add a corresponding test case to
+`scripts/smoke-perplexity.mjs` in the same commit. The smoke test
+inlines copies of production functions because the real modules pull
+in electron / undici / better-sqlite3 / settings.js which can't run
+under bare Node. Header comment in the test file flags the manual-
+sync requirement. Graduate to `vitest` with proper module mocking
+once test count exceeds ~30 cases.
+
+**When upgrading native dependencies** (better-sqlite3, undici,
+@huggingface/transformers, electron itself) — always verify the
+packaged `.app` launches, because a working `npm run dev` is no
+guarantee against runtime incompatibility with Electron's bundled
+Node. v1.7.2 shipped a broken undici@8 because it built fine in dev.
+
+**When the user reports a scanner failure** — first check the v1.7.6+
+diagnostic logs (head/tail preview, completion_tokens, citation
+samples). They were added specifically to make these bugs diagnosable
+from a log paste instead of guessing.
 
 ---
 
