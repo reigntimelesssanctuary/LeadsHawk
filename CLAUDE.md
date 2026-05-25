@@ -573,6 +573,20 @@ diagnostic logs (head/tail preview, completion_tokens, citation
 samples). They were added specifically to make these bugs diagnosable
 from a log paste instead of guessing.
 
+**Pre-push git hook (v1.8.6) enforces smoke automatically.** Activated
+via `git config core.hooksPath scripts/git-hooks` — `npm install`
+runs `scripts/setup-git-hooks.mjs` (the postinstall step) to set this.
+The hook at `scripts/git-hooks/pre-push` runs `npm run smoke` and
+refuses the push on failure with a clear error and a `--no-verify`
+hint. To verify the hook is active in a fresh clone:
+`git config core.hooksPath` should print `scripts/git-hooks`. If it's
+missing or returns an error, re-run `node scripts/setup-git-hooks.mjs`.
+
+**DO NOT use `git push --no-verify`** unless the smoke test failure
+is a genuine known-good case (extremely rare). Bypassing the hook
+defeats the purpose. If smoke fails for a "real" reason, fix the
+test or the production code, don't skip.
+
 ---
 
 ## 7a. Which LLM does what

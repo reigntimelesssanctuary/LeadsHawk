@@ -12,7 +12,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/setup-git-hooks.mjs",
     "dist": "electron-vite build && electron-builder --mac --arm64 --x64",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "smoke": "node scripts/smoke-perplexity.mjs",

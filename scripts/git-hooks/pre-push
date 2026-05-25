@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# LeadsHawk pre-push hook: enforces the v1.8.5 release discipline.
+#
+# Refuses to push if the smoke test fails. The smoke test is the pure-
+# function unit suite at scripts/smoke-perplexity.mjs — runs in ~50ms
+# and catches the class of regressions that caused the v1.7.x → v1.8.4
+# patch storm (parser, URL hygiene, brand-self filter, empty completions).
+#
+# To bypass once (do NOT make a habit): `git push --no-verify`.
+# To disable permanently:  `git config --unset core.hooksPath` (don't).
+#
+# This hook is committed to the repo (tracked at scripts/git-hooks/pre-push)
+# and activated via `git config core.hooksPath scripts/git-hooks`, which
+# `npm install` sets up via scripts/setup-git-hooks.mjs.
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Skip if package.json doesn't have the smoke script — e.g. on an old
+# branch from before v1.8.5.
+if ! grep -q '"smoke":' package.json 2>/dev/null; then
+  echo "[pre-push] no smoke script in package.json — skipping smoke test."
+  exit 0
+fi
+
+echo "[pre-push] running npm run smoke before push…"
+if ! npm run --silent smoke; then
+  echo ""
+  echo "✗ Smoke test failed — push blocked."
+  echo "  Fix the failing tests before pushing, or bypass once with: git push --no-verify"
+  exit 1
+fi
+
+echo "[pre-push] ✓ smoke passed — proceeding with push."
+exit 0
