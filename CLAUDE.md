@@ -545,6 +545,17 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.7 (2026-05-25):** Fix — scan history timestamps (and any other `fmtDate` / `fmtDateShort` consumer) were rendering in the wrong timezone.
+
+Root cause: SQLite's `datetime('now')` returns bare UTC strings like `"2026-05-25 04:44:35"` with no `Z` suffix. JS `new Date("2026-05-25 04:44:35")` parses that as local time, which is wrong. The `parseSqliteUtc()` helper (added in v1.1.1 for the Live Monitor "Fetched" column) already handled this correctly, but it was defined BELOW `fmtDate` / `fmtDateShort` and they weren't using it.
+
+Fix in `src/renderer/src/lib/api.ts`:
+- Hoisted `parseSqliteUtc()` above the formatters.
+- `fmtDate` and `fmtDateShort` both now call `parseSqliteUtc()` and render via `toLocaleString('en-SG', { timeZone: 'Asia/Singapore', ... })`.
+- `fmtDate` is 24-hour; `fmtDateSGT` stays 12-hour (AM/PM) for the Live Monitor where that cue is more useful.
+
+Affects every date display in the app: Scan Jobs history (Started / Finished), Dashboard Last Scan banner, Opportunity Detail source-published-at, Live Monitor source last-poll, etc.
+
 **v1.7.6 (2026-05-25):** Fix — `sonar-deep-research` responses (especially ~15KB+ ones) were failing JSON extraction even though the async call now completes cleanly.
 
 Root cause: deep-research mixes reasoning prose with the final structured JSON output in ways the old `tryParseJson` didn't handle. The old extractor only stripped `<think>` tags at edges and looked for the outer-most {…} with naive index matching — which broke when there were nested or sequential JSON objects, embedded ```json fenced blocks, or non-tagged reasoning text between blocks.
