@@ -303,7 +303,14 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
         json = r.json;
         citations = r.citations || [];
         if (!json) {
+          // Diagnostic preview so we can see WHY the parser failed. Cap at 800
+          // chars from the start + 200 from the end so the user can paste the
+          // log to figure out the response shape.
+          const head = (r.text || '').slice(0, 800).replace(/\s+/g, ' ');
+          const tail = (r.text || '').slice(-200).replace(/\s+/g, ' ');
           log(`  ! unparseable response (${r.text.length} chars)`);
+          log(`    head: ${head}`);
+          log(`    tail: …${tail}`);
           continue;
         }
         log(`  → ${json.opportunities?.length ?? 0} candidate(s) returned, ${citations.length} citation(s)`);

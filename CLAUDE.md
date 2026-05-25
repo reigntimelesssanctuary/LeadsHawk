@@ -545,6 +545,20 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.6 (2026-05-25):** Fix — `sonar-deep-research` responses (especially ~15KB+ ones) were failing JSON extraction even though the async call now completes cleanly.
+
+Root cause: deep-research mixes reasoning prose with the final structured JSON output in ways the old `tryParseJson` didn't handle. The old extractor only stripped `<think>` tags at edges and looked for the outer-most {…} with naive index matching — which broke when there were nested or sequential JSON objects, embedded ```json fenced blocks, or non-tagged reasoning text between blocks.
+
+Rewrite of `tryParseJson` in `perplexity.ts`:
+1. Strip `<think>...</think>` AND `<thinking>...</thinking>` AND `<reasoning>...</reasoning>` (case-insensitive, multi-occurrence).
+2. Extract content from every ```json (or plain ```) fenced block in the response. Try the largest first — if it parses, return.
+3. Strip remaining fence markers and try direct parse.
+4. Walk the cleaned string and collect every balanced `{...}` / `[...]` substring via proper brace-counting that respects strings + escapes. Sort by size descending, try each. The largest balanced block containing the expected schema almost always wins.
+
+Helpers `extractBalancedBlocks(s)` and `findBalancedClose(s, idx)` added.
+
+Diagnostic in `scanner.ts`: on parse failure, log the first 800 chars + last 200 chars of the response (whitespace-collapsed) so the user can paste the log and we can see what shape Perplexity actually returned. Previously the log just said "unparseable response (N chars)" with no info.
+
 **v1.7.5 (2026-05-25):** Architectural: deep scan no longer runs Pass 2 (custom topics).
 
 Rationale: custom topics are broad thematic searches that don't anchor on product knowledge, don't benefit from multi-step deep research, are failure-prone on `sonar-deep-research` (every custom topic timed out in v1.7.0–v1.7.3 deep runs), and are already covered by every-6h manual scans. Letting deep scans focus on per-product Pass 1 keeps the expensive model's budget on the work where it actually pays off.

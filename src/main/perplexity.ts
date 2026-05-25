@@ -265,27 +265,88 @@ export async function completePerplexity<T = unknown>(
   return completePerplexitySync<T>(system, user, opts);
 }
 
+/**
+ * Robust JSON extractor for Perplexity responses, especially sonar-deep-research
+ * which mixes reasoning text with the final structured output.
+ *
+ * Strategy (in order of attempt):
+ *  1. Strip <think>...</think> and <thinking>...</thinking> blocks (any case).
+ *  2. Extract content from ```json fenced blocks first (if present, prefer them).
+ *  3. Try parsing the whole cleaned string as JSON.
+ *  4. Walk the string and extract every balanced {...} or [...] block. Try
+ *     them in size-descending order — the largest block containing our
+ *     expected structure is almost always the real answer.
+ *
+ * Returns null only after all attempts fail.
+ */
 export function tryParseJson<T>(raw: string): T | null {
   if (!raw) return null;
-  let s = raw.trim();
-  // Strip <think>...</think> blocks that some reasoning models prepend
-  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  // Strip ```json fences
-  s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  try {
-    return JSON.parse(s) as T;
-  } catch {
-    const firstObj = s.indexOf('{');
-    const firstArr = s.indexOf('[');
-    const first =
-      firstObj === -1 ? firstArr : firstArr === -1 ? firstObj : Math.min(firstObj, firstArr);
-    if (first === -1) return null;
-    const last = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
-    if (last === -1) return null;
-    try {
-      return JSON.parse(s.slice(first, last + 1)) as T;
-    } catch {
-      return null;
+  let s = raw;
+
+  // 1. Strip reasoning blocks. Models use varied tags + casing.
+  s = s.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  s = s.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '');
+
+  // 2. If there are ```json (or plain ```) fenced blocks, prefer their content.
+  //    Try each in size-descending order before falling through.
+  const fenceMatches = [...s.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)]
+    .map((m) => m[1].trim())
+    .filter((b) => b.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const block of fenceMatches) {
+    try { return JSON.parse(block) as T; } catch { /* try next */ }
+  }
+  // Also clean fences out for the rest of the strategies.
+  s = s.replace(/```(?:json)?\s*\n?/gi, '').replace(/```/g, '').trim();
+
+  // 3. Direct parse on the cleaned string.
+  try { return JSON.parse(s) as T; } catch { /* fall through */ }
+
+  // 4. Extract every balanced {...} / [...] block in the string.
+  //    Largest blocks first — the real structured response is almost
+  //    always the biggest balanced block.
+  const blocks = extractBalancedBlocks(s).sort((a, b) => b.length - a.length);
+  for (const block of blocks) {
+    try { return JSON.parse(block) as T; } catch { /* try next */ }
+  }
+  return null;
+}
+
+/** Walk the string and collect every balanced {...} / [...] substring. */
+function extractBalancedBlocks(s: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c !== '{' && c !== '[') continue;
+    const end = findBalancedClose(s, i);
+    if (end !== -1) {
+      out.push(s.slice(i, end + 1));
+      // Don't advance i past end — nested blocks are also valid candidates.
     }
   }
+  return out;
+}
+
+function findBalancedClose(s: string, startIdx: number): number {
+  const open = s[startIdx];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIdx; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (c === '\\') escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
