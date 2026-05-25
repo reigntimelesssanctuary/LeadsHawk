@@ -6,6 +6,7 @@ import { isOwnBrandCompany, buildOwnBrandsBlock } from './lead-hygiene.js';
 import { pickBestSourceUrl, dedupeCleanCitations } from './url-hygiene.js';
 import { retrieveRelevantChunks, renderChunksBlock } from './knowledge-index.js';
 import { embedText, cosineSim, loadCachedSignalsForProduct } from './monitor/embed.js';
+import { resolveScanRecency } from './recency.js';
 import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
@@ -234,6 +235,10 @@ export async function runScan(
       }
       const chunksBlock = renderChunksBlock(chunks);
 
+      // v1.8: per-product / per-brand scan recency resolution.
+      const recency = resolveScanRecency(product, brand, settings);
+      log(`  recency: ${recency.value} (from ${recency.source})`);
+
       const prompt = `# Brand
 Name: ${brand.name}
 Category: ${brand.category || '(unspecified)'}
@@ -265,7 +270,7 @@ ${product.signals || '(none derived yet)'}
 ${chunksBlock}
 
 # Time window
-Only consider events from the last ${settings.scanRecency}.
+Only consider events from the last ${recency.value}.
 
 ${ownBrandsBlock}
 
@@ -294,7 +299,7 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
             model: scanModel,
             maxTokens,
             temperature: 0.2,
-            searchRecency: settings.scanRecency,
+            searchRecency: recency.value,
             jsonSchema: OPPS_SCHEMA,
             stage,
             relatedId: product.id
@@ -385,6 +390,14 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
         }
         const guardrails = buildGuardrails(pinnedProductId); // null → global only
         const ownBrandsBlock = buildOwnBrandsBlock(brands);
+        // Recency for custom topics: if pinned to a product, inherit that
+        // product's resolved recency; otherwise fall back to global.
+        const topicRecency = (() => {
+          if (!pinned) return { value: settings.scanRecency, source: 'global' as const };
+          const pinnedBrand = brands.find((b) => b.id === pinned.brand_id);
+          return pinnedBrand ? resolveScanRecency(pinned, pinnedBrand, settings) : { value: settings.scanRecency, source: 'global' as const };
+        })();
+        log(`  recency: ${topicRecency.value} (from ${topicRecency.source})`);
 
         const prompt = `# Our portfolio
 ${portfolio}
@@ -394,7 +407,7 @@ ${topic}
 ${pinned ? `\n# Pinned product\nThis topic is scoped to "${pinned.name}" (${pinned.category || ''}). Prefer opportunities that fit this product when picking matched_brand/matched_product.` : ''}
 
 # Time window
-Only consider events from the last ${settings.scanRecency}.
+Only consider events from the last ${topicRecency.value}.
 
 ${ownBrandsBlock}
 
@@ -416,7 +429,7 @@ brand/product names that appear in our portfolio.`;
             model: scanModel,
             maxTokens,
             temperature: 0.2,
-            searchRecency: settings.scanRecency,
+            searchRecency: topicRecency.value,
             jsonSchema: OPPS_SCHEMA_CUSTOM,
             stage,
             relatedId: src.id

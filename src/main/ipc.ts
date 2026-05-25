@@ -96,6 +96,12 @@ export function registerIpc() {
         updated_at = datetime('now')
        WHERE id = ?`
     ).run(payload.name ?? null, payload.description ?? null, payload.positioning ?? null, payload.competitive_summary ?? null, id);
+    // v1.8: scan_recency_override is set explicitly (null clears it). Only
+    // touched if the renderer included the key — otherwise leave alone.
+    if ('scan_recency_override' in payload) {
+      db.prepare("UPDATE brands SET scan_recency_override = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(payload.scan_recency_override ?? null, id);
+    }
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
   });
   ipcMain.handle('brands:delete', (_e, id: number) => {
@@ -153,6 +159,11 @@ export function registerIpc() {
       payload.research_summary ?? null,
       id
     );
+    // v1.8: scan_recency_override set explicitly when key is in payload.
+    if ('scan_recency_override' in payload) {
+      db.prepare("UPDATE products SET scan_recency_override = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(payload.scan_recency_override ?? null, id);
+    }
     return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   });
   ipcMain.handle('products:delete', (_e, id: number) => {

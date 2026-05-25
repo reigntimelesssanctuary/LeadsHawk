@@ -11,6 +11,9 @@ export type Brand = {
   category: string | null;             // market category
   signals: string | null;              // brand-level signals (bulleted)
   last_researched_at: string | null;
+  // v1.8: recency window for scans, derived by brand research.
+  scan_recency_auto: 'day' | 'week' | 'month' | 'year' | null;
+  scan_recency_override: 'day' | 'week' | 'month' | 'year' | null;
   scan_enabled: number; // 0 | 1 — when 0, all of this brand's products are excluded from scans
   created_at: string;
   updated_at: string;
@@ -29,6 +32,9 @@ export type Product = {
   research_status: 'pending' | 'researching' | 'ready' | 'error';
   research_summary: string | null;
   last_researched_at: string | null;
+  // v1.8: recency window for scans, derived by product research.
+  scan_recency_auto: 'day' | 'week' | 'month' | 'year' | null;
+  scan_recency_override: 'day' | 'week' | 'month' | 'year' | null;
   scan_enabled: number; // 0 | 1 — when 1, autonomous scans include this product
   created_at: string;
   updated_at: string;

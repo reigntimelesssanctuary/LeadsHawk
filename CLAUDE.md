@@ -545,6 +545,37 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.0 (2026-05-25):** Per-brand / per-product scan recency with auto-recommendation from research.
+
+Problem solved: forcing one global `scanRecency` across the whole portfolio is fundamentally wrong. Zyeta (workspace design) needs 12-month windows for premises decisions; a cybersecurity brand needs 7-day windows for breaches. v1.8 lets each brand and product pick its own — auto-derived from research, with a manual override slot.
+
+Schema additions (all idempotent):
+- `brands.scan_recency_auto` TEXT — set by `researchBrand`.
+- `brands.scan_recency_override` TEXT — user manual choice; null = use auto.
+- `products.scan_recency_auto` TEXT — set by `researchProduct`.
+- `products.scan_recency_override` TEXT — user manual choice; null = use auto.
+
+Brand type and Product type widen `scan_recency_*` fields to `'day' | 'week' | 'month' | 'year' | null`.
+
+Research integration:
+- New `recommended_scan_recency` field added to `BRAND_RESEARCH_SCHEMA` and `RESEARCH_SCHEMA` (product) — enum `day|week|month|year`. The schema description tells the model how to choose: hyper-time-sensitive (day), fast-cycle (week), medium (month), slow-cycle multi-quarter decisions (year).
+- `researchBrand()` and `researchProduct()` persist the chosen value into `scan_recency_auto`.
+
+New module: `src/main/recency.ts`
+- `resolveScanRecency(product, brand, settings?)` returns `{ value, source }` where source is `'product_override' | 'product_auto' | 'brand_override' | 'brand_auto' | 'global'`. Resolution order is most-specific-first.
+- `recencyHumanLabel(r)` for UI rendering.
+
+`scanner.ts` integration:
+- Pass 1 per-product loop calls `resolveScanRecency(product, brand)` and uses the value both in the prompt text (`Only consider events from the last X`) and in the API parameter (`search_recency_filter`). Logs `recency: <value> (from <source>)`.
+- Pass 2 custom topics: if pinned to a product, inherit that product's resolved recency; otherwise fall back to global.
+
+UI:
+- Brand edit modal: new "Scan recency window" dropdown. Default option shows `Auto (Last X — from brand research)` if the brand has been researched, else `Auto (uses global setting until brand research runs)`. Manual override options for each window. Saving null clears the override.
+- Product edit modal: same dropdown, with helper text noting per-product overrides win over the brand setting.
+- IPC handlers `brands:update` and `products:update` accept `scan_recency_override` via explicit `'in' payload` check (so null clears the override rather than being ignored by COALESCE).
+
+Existing users: brands and products researched before v1.8 won't have `scan_recency_auto` set yet — re-run research to populate. Until then, the resolver falls through to the global `settings.scanRecency`.
+
 **v1.7.8 (2026-05-25):** Settings → Recency window gains "Last 12 months" option. `scanRecency` type widened to `'day' | 'week' | 'month' | 'year'`. Perplexity's `search_recency_filter` accepts `year` natively, so no API-layer change. Quick patch ahead of v1.8's per-brand/product override architecture.
 
 **v1.7.7 (2026-05-25):** Fix — scan history timestamps (and any other `fmtDate` / `fmtDateShort` consumer) were rendering in the wrong timezone.

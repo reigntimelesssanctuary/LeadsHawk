@@ -29,13 +29,16 @@ type ResearchOutput = {
   differentiators: string;
   signals: string;
   research_summary: string;
+  recommended_scan_recency: 'day' | 'week' | 'month' | 'year';
 };
+
+const RECENCY_DESC = 'How far back the scanner should look for buying signals for this product. "day" for hyper-time-sensitive (outages, breaches, incidents); "week" for fast-cycle (executive moves, vulnerability disclosures, product launches); "month" for medium-cycle (CIO appointments, vendor changes, hiring sprees); "year" for slow-cycle decisions (real estate, multi-year programmes, infrastructure builds, ESG commitments, capital projects, M&A). Pick based on the lead time from buying signal to vendor selection.';
 
 const RESEARCH_SCHEMA = {
   type: 'object',
   required: [
     'description', 'category', 'use_cases', 'competitors',
-    'differentiators', 'signals', 'research_summary'
+    'differentiators', 'signals', 'research_summary', 'recommended_scan_recency'
   ],
   properties: {
     description: { type: 'string', description: '1-paragraph crisp description of the product' },
@@ -44,7 +47,12 @@ const RESEARCH_SCHEMA = {
     competitors: { type: 'string', description: 'Markdown bulleted list. Each line: "Competitor — short positioning"' },
     differentiators: { type: 'string', description: 'Markdown bulleted list of this product\'s unique angles vs competitors' },
     signals: { type: 'string', description: 'Markdown bulleted list of concrete news/event signals that indicate a buying opportunity' },
-    research_summary: { type: 'string', description: '300-500 word holistic narrative tying the above together' }
+    research_summary: { type: 'string', description: '300-500 word holistic narrative tying the above together' },
+    recommended_scan_recency: {
+      type: 'string',
+      enum: ['day', 'week', 'month', 'year'],
+      description: RECENCY_DESC
+    }
   }
 };
 
@@ -124,6 +132,7 @@ result as JSON matching the schema you've been given.`;
          differentiators = ?,
          signals = ?,
          research_summary = ?,
+         scan_recency_auto = ?,
          research_status = 'ready',
          last_researched_at = datetime('now'),
          updated_at = datetime('now')
@@ -136,6 +145,7 @@ result as JSON matching the schema you've been given.`;
       json.differentiators,
       json.signals,
       json.research_summary,
+      json.recommended_scan_recency || null,
       productId
     );
 
@@ -271,18 +281,24 @@ type BrandResearchOutput = {
   competitive_summary: string;
   signals: string;
   research_summary: string;
+  recommended_scan_recency: 'day' | 'week' | 'month' | 'year';
 };
 
 const BRAND_RESEARCH_SCHEMA = {
   type: 'object',
-  required: ['category', 'positioning', 'target_icp', 'competitive_summary', 'signals', 'research_summary'],
+  required: ['category', 'positioning', 'target_icp', 'competitive_summary', 'signals', 'research_summary', 'recommended_scan_recency'],
   properties: {
     category: { type: 'string', description: 'Short market category the brand operates in (e.g. "commercial interior design", "B2B SaaS observability", "managed network services").' },
     positioning: { type: 'string', description: 'How this brand positions itself in market — its core promise / wedge / differentiation in 2-4 sentences.' },
     target_icp: { type: 'string', description: 'The brand\'s ideal customer profile (ICP). Be specific about company size, sector, geography, maturity stage, and the buying-team persona who typically initiates the deal.' },
     competitive_summary: { type: 'string', description: 'Tight 150-200 word competitive narrative — where the brand wins, where it\'s vulnerable, who the main alternatives are.' },
     signals: { type: 'string', description: 'Markdown bulleted list of brand-LEVEL buying signals — events that indicate ANY of this brand\'s products may be needed (e.g. for a workspace-design brand: "company announces APAC HQ expansion", "lease renewal due", "post-acquisition consolidation"). Distinct from product-specific signals. 5-10 bullets.' },
-    research_summary: { type: 'string', description: '400-600 word narrative tying positioning + ICP + signals + market context together. The single most useful paragraph a salesperson new to this brand could read.' }
+    research_summary: { type: 'string', description: '400-600 word narrative tying positioning + ICP + signals + market context together. The single most useful paragraph a salesperson new to this brand could read.' },
+    recommended_scan_recency: {
+      type: 'string',
+      enum: ['day', 'week', 'month', 'year'],
+      description: 'Pick the recency window that best matches the lead time from buying signal to vendor selection for THIS brand. "day" for hyper-time-sensitive (incident response, breaches); "week" for fast-cycle (exec changes, breaches, breaking news); "month" for medium-cycle (CIO appointments, hiring sprees); "year" for slow-cycle (real estate, multi-year programmes, infrastructure builds, ESG commitments, M&A, capital projects).'
+    }
   }
 };
 
@@ -351,6 +367,7 @@ matching the schema you've been given.`;
          competitive_summary = ?,
          signals = ?,
          research_summary = ?,
+         scan_recency_auto = ?,
          research_status = 'ready',
          last_researched_at = datetime('now'),
          updated_at = datetime('now')
@@ -362,6 +379,7 @@ matching the schema you've been given.`;
       json.competitive_summary,
       json.signals,
       json.research_summary,
+      json.recommended_scan_recency || null,
       brandId
     );
 

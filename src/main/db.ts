@@ -227,6 +227,14 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'scan_runs', 'kind', "TEXT NOT NULL DEFAULT 'manual'");
   // v1.5.1: optional country captured by the scanner's LLM call.
   addColumnIfMissing(db, 'opportunities', 'country', 'TEXT');
+  // v1.8: per-brand / per-product scan recency.
+  // _auto is set by research; _override is the user's explicit choice (wins
+  // when set). Resolution order at scan time:
+  //   product.override → product.auto → brand.override → brand.auto → settings.scanRecency
+  addColumnIfMissing(db, 'brands', 'scan_recency_auto', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'scan_recency_override', 'TEXT');
+  addColumnIfMissing(db, 'products', 'scan_recency_auto', 'TEXT');
+  addColumnIfMissing(db, 'products', 'scan_recency_override', 'TEXT');
 
   // v1.6: brand becomes a first-class research subject.
   addColumnIfMissing(db, 'brands', 'research_status', "TEXT NOT NULL DEFAULT 'pending'");

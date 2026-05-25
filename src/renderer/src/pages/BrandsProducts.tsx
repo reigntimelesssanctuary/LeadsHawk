@@ -556,6 +556,7 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
   const [description, setDescription] = useState(brand.description || '');
   const [positioning, setPositioning] = useState(brand.positioning || '');
   const [competitive, setCompetitive] = useState(brand.competitive_summary || '');
+  const [recencyOverride, setRecencyOverride] = useState<string>(brand.scan_recency_override || '');
   const [busy, setBusy] = useState(false);
   return (
     <div>
@@ -576,6 +577,24 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
         style={{ minHeight: 140 }}
         placeholder="Auto-generated after product research — feel free to refine."
       />
+      <div style={{ height: 12 }} />
+      <label className="label">Scan recency window</label>
+      <select
+        className="select"
+        value={recencyOverride}
+        onChange={(e) => setRecencyOverride(e.target.value)}
+      >
+        <option value="">
+          Auto{brand.scan_recency_auto ? ` (${recencyLabel(brand.scan_recency_auto)} — from brand research)` : ' (uses global setting until brand research runs)'}
+        </option>
+        <option value="day">Override: Last 24 hours</option>
+        <option value="week">Override: Last 7 days</option>
+        <option value="month">Override: Last 30 days</option>
+        <option value="year">Override: Last 12 months</option>
+      </select>
+      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+        How far back scans look for buying signals for this brand. "Auto" uses the value brand research recommended (based on the signal type). Override only if you know better than the model. Per-product overrides on each product win over the brand setting.
+      </div>
       <div style={{ marginTop: 14, textAlign: 'right' }}>
         <button className="btn-primary" disabled={!name.trim() || busy} onClick={async () => {
           setBusy(true);
@@ -584,7 +603,8 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
               name: name.trim(),
               description: description.trim() || null as any,
               positioning: positioning.trim() || null as any,
-              competitive_summary: competitive.trim() || null as any
+              competitive_summary: competitive.trim() || null as any,
+              scan_recency_override: (recencyOverride || null) as any
             });
             onDone();
           } finally { setBusy(false); }
@@ -592,6 +612,16 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
       </div>
     </div>
   );
+}
+
+function recencyLabel(r: string): string {
+  switch (r) {
+    case 'day': return 'Last 24 hours';
+    case 'week': return 'Last 7 days';
+    case 'month': return 'Last 30 days';
+    case 'year': return 'Last 12 months';
+    default: return r;
+  }
 }
 
 function EditProductForm({ product, onDone }: { product: Product; onDone: () => void }) {
@@ -603,6 +633,7 @@ function EditProductForm({ product, onDone }: { product: Product; onDone: () => 
   const [differentiators, setDifferentiators] = useState(product.differentiators || '');
   const [signals, setSignals] = useState(product.signals || '');
   const [summary, setSummary] = useState(product.research_summary || '');
+  const [recencyOverride, setRecencyOverride] = useState<string>(product.scan_recency_override || '');
   const [busy, setBusy] = useState(false);
 
   // Detect whether signals changed so we re-embed for the live monitor.
@@ -646,6 +677,25 @@ function EditProductForm({ product, onDone }: { product: Product; onDone: () => 
       <label className="label">Research summary</label>
       <textarea className="textarea" value={summary} onChange={(e) => setSummary(e.target.value)} style={{ minHeight: 180 }} />
 
+      <div style={{ height: 14 }} />
+      <label className="label">Scan recency window</label>
+      <select
+        className="select"
+        value={recencyOverride}
+        onChange={(e) => setRecencyOverride(e.target.value)}
+      >
+        <option value="">
+          Auto{product.scan_recency_auto ? ` (${recencyLabel(product.scan_recency_auto)} — from product research)` : ' (falls back to brand setting, then global)'}
+        </option>
+        <option value="day">Override: Last 24 hours</option>
+        <option value="week">Override: Last 7 days</option>
+        <option value="month">Override: Last 30 days</option>
+        <option value="year">Override: Last 12 months</option>
+      </select>
+      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+        Per-product wins over the brand setting. Leave on "Auto" to use whatever product research recommended.
+      </div>
+
       <div style={{ marginTop: 16, textAlign: 'right' }}>
         <button className="btn-primary" disabled={!name.trim() || busy} onClick={async () => {
           setBusy(true);
@@ -658,7 +708,8 @@ function EditProductForm({ product, onDone }: { product: Product; onDone: () => 
               competitors,
               differentiators,
               signals,
-              research_summary: summary
+              research_summary: summary,
+              scan_recency_override: (recencyOverride || null) as any
             });
             // If signals were edited, kick off a fresh embed pass so the
             // Live Monitor's local pre-filter sees the new vectors.
