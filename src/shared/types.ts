@@ -146,7 +146,7 @@ export type Settings = {
   perplexityApiKey: string;         // research + scans + live-monitor deep qualify
   perplexityResearchModel: string;
   perplexityScanModel: string;
-  scanRecency: 'day' | 'week' | 'month';
+  scanRecency: 'day' | 'week' | 'month' | 'year';
   scanCron: string;
   scanEnabled: boolean;
   // Deep scan — separate scheduled engine using sonar-deep-research

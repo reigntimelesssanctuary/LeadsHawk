@@ -126,12 +126,16 @@ export function Settings() {
         <select
           className="select"
           value={s.scanRecency}
-          onChange={(e) => setS({ ...s, scanRecency: e.target.value as 'day' | 'week' | 'month' })}
+          onChange={(e) => setS({ ...s, scanRecency: e.target.value as 'day' | 'week' | 'month' | 'year' })}
         >
           <option value="day">Last 24 hours</option>
           <option value="week">Last 7 days</option>
           <option value="month">Last 30 days</option>
+          <option value="year">Last 12 months</option>
         </select>
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+          Slow-cycle signals (real estate, multi-year programmes, ESG commitments, M&A) telegraph over months. Fast-cycle signals (outages, CISO changes, breaches) need a tight window. This is the global default — per-brand and per-product overrides land in v1.8.
+        </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>

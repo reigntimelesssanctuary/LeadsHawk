@@ -545,6 +545,8 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.8 (2026-05-25):** Settings → Recency window gains "Last 12 months" option. `scanRecency` type widened to `'day' | 'week' | 'month' | 'year'`. Perplexity's `search_recency_filter` accepts `year` natively, so no API-layer change. Quick patch ahead of v1.8's per-brand/product override architecture.
+
 **v1.7.7 (2026-05-25):** Fix — scan history timestamps (and any other `fmtDate` / `fmtDateShort` consumer) were rendering in the wrong timezone.
 
 Root cause: SQLite's `datetime('now')` returns bare UTC strings like `"2026-05-25 04:44:35"` with no `Z` suffix. JS `new Date("2026-05-25 04:44:35")` parses that as local time, which is wrong. The `parseSqliteUtc()` helper (added in v1.1.1 for the Live Monitor "Fetched" column) already handled this correctly, but it was defined BELOW `fmtDate` / `fmtDateShort` and they weren't using it.

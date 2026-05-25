@@ -35,7 +35,7 @@ export function getSettings(): Settings {
     perplexityApiKey: (store as any).get('perplexityApiKey') as string,
     perplexityResearchModel: (store as any).get('perplexityResearchModel') as string,
     perplexityScanModel: (store as any).get('perplexityScanModel') as string,
-    scanRecency: (store as any).get('scanRecency') as 'day' | 'week' | 'month',
+    scanRecency: (store as any).get('scanRecency') as 'day' | 'week' | 'month' | 'year',
     scanCron: (store as any).get('scanCron') as string,
     scanEnabled: (store as any).get('scanEnabled') as boolean,
     deepScanCron: (store as any).get('deepScanCron') as string,
