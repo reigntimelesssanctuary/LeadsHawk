@@ -86,7 +86,14 @@ genuinely fits our positioning + ICP + this product.
 Always include a working source URL for each opportunity. Apply confidence
 0..1 — be honest, most should be 0.4–0.7 unless the fit is obvious.
 
-Respond ONLY with JSON matching the schema you've been given. No prose.`;
+CRITICAL: You MUST end your response with valid JSON matching the schema.
+Your reasoning may be extensive but the JSON output is the deliverable —
+prioritize finishing the JSON over additional reasoning. If you find no
+qualifying opportunities, return {"opportunities": []} rather than
+omitting the JSON.
+
+Respond with JSON matching the schema you've been given. Reasoning is
+optional; the JSON is required.`;
 
 type PplxOpportunity = {
   company: string;
@@ -307,18 +314,32 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
         );
         json = r.json;
         citations = r.citations || [];
+        const completionTokens = Number(r.usage?.completion_tokens ?? 0);
         if (!json) {
           // Diagnostic preview so we can see WHY the parser failed. Cap at 800
           // chars from the start + 200 from the end so the user can paste the
           // log to figure out the response shape.
           const head = (r.text || '').slice(0, 800).replace(/\s+/g, ' ');
           const tail = (r.text || '').slice(-200).replace(/\s+/g, ' ');
-          log(`  ! unparseable response (${r.text.length} chars)`);
+          log(`  ! unparseable response (${r.text.length} chars, ${completionTokens} completion tokens)`);
+          if ((r.text || '').endsWith('</think>') || (r.text || '').endsWith('</think>\n')) {
+            log(`    detected: response ended inside <think> block — model ran out of token budget before producing JSON. Consider increasing maxTokens.`);
+          }
           log(`    head: ${head}`);
           log(`    tail: …${tail}`);
           continue;
         }
-        log(`  → ${json.opportunities?.length ?? 0} candidate(s) returned, ${citations.length} citation(s)`);
+        const candCount = json.opportunities?.length ?? 0;
+        log(`  → ${candCount} candidate(s) returned, ${citations.length} citation(s), ${completionTokens} completion tokens`);
+        // v1.8.2: when a deep-scan call returns 0 candidates AND 0 citations,
+        // something is off — sonar-deep-research is supposed to search. Log a
+        // preview so we can diagnose silent-empty responses (Perplexity hiccups,
+        // immediate-fallback, etc.).
+        if (candCount === 0 && citations.length === 0 && stage === 'deep_scan') {
+          const head = (r.text || '').slice(0, 800).replace(/\s+/g, ' ');
+          log(`  ! suspicious: deep scan returned 0/0 in ${completionTokens} completion tokens`);
+          log(`    head: ${head || '(empty response)'}`);
+        }
       } catch (e: any) {
         log(`  ! Perplexity error: ${e.message || e}`);
         continue;
@@ -604,7 +625,11 @@ export async function runDeepScan(): Promise<{ runId: number; created: number; s
     model: settings.deepScanModel || 'sonar-deep-research',
     stage: 'deep_scan',
     kind: 'deep',
-    maxTokens: 9000,
+    // v1.8.2: bumped 9000 → 24000. sonar-deep-research mixes <think>
+    // reasoning into the completion stream, so a rich prompt can use
+    // 10-15K tokens just thinking — without enough headroom, the model
+    // runs out before producing JSON and we get an unparseable response.
+    maxTokens: 24000,
     label: '== Deep Research scan ==',
     skipCustomTopics: true   // v1.7.5: deep scan focuses on per-product Pass 1 only
   });

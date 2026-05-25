@@ -545,6 +545,18 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.2 (2026-05-25):** Fix — deep scan with rich prompts was running out of token budget mid-reasoning before producing JSON. Diagnostic in v1.7.6 confirmed: response of 40,452 chars ending with `</think>` and no JSON output.
+
+Root cause: `sonar-deep-research` mixes `<think>` reasoning blocks into the completion stream. With `maxTokens: 9000` and v1.6+'s rich prompts (brand dossier + product dossier + 5 knowledge chunks + signals + rules + disqualifications + own-brands hygiene + task), the model spends the entire budget on reasoning and never emits JSON.
+
+Three fixes in `scanner.ts`:
+1. Bumped `maxTokens` for deep scan **9000 → 24000**. Adds enough headroom for reasoning + JSON together. Cost impact: marginal — most calls won't actually use all 24K, this is just the ceiling.
+2. SYSTEM prompt updated with explicit instruction: "You MUST end your response with valid JSON matching the schema. Your reasoning may be extensive but the JSON output is the deliverable — prioritize finishing the JSON over additional reasoning. If you find no qualifying opportunities, return `{"opportunities": []}` rather than omitting the JSON."
+3. Diagnostic logs:
+   - Every scan response now logs `completion_tokens` (so you can see how much of the budget was used)
+   - On unparseable response, additionally detects `text.endsWith('</think>')` and emits a clear `detected: response ended inside <think> block — model ran out of token budget` hint
+   - On deep-scan responses with **0 candidates AND 0 citations**, log a `suspicious: deep scan returned 0/0` warning + head preview, because that combination means sonar-deep-research didn't actually search (Perplexity-side hiccup, immediate cache miss, etc.) and needs investigation
+
 **v1.8.1 (2026-05-25):** Recency at-a-glance. v1.8.0 stored the auto/override values but only surfaced them deep inside Edit modals and scan logs. Now visible everywhere:
 - New `RecencyChip` component on BrandsProducts: rendered next to the `scans on/paused` chip on the brand header and on every product card. Shows the short label + `(auto)` vs `(override)` indicator.
 - Scan Jobs → Scan inclusion card: each brand row and each product row now shows an inline recency pill (purple = override, green = auto, grey muted = global fallback). Tooltip explains the source.
