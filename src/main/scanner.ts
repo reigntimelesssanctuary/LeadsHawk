@@ -340,6 +340,23 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
           log(`  ! suspicious: deep scan returned 0/0 in ${completionTokens} completion tokens`);
           log(`    head: ${head || '(empty response)'}`);
         }
+        // v1.8.3: 0 candidates BUT citations exist — the model found sources
+        // but chose not to surface any. Log the top-3 citations so user can
+        // manually review what Perplexity searched but didn't pick as opps.
+        if (candCount === 0 && citations.length > 0) {
+          const sample = citations.slice(0, 3).map((u) => `      • ${u}`).join('\n');
+          log(`    model consulted ${citations.length} sources but surfaced no opportunities. Sample of what it saw:\n${sample}`);
+        }
+        // v1.8.3: if candidates came back but ALL get filtered by confidence,
+        // log the confidence distribution so user can see whether the
+        // threshold is the bottleneck.
+        const belowThreshold = (json.opportunities || []).filter(
+          (o: any) => (o.confidence ?? 0) < settings.minConfidence
+        );
+        if (candCount > 0 && belowThreshold.length === candCount) {
+          const confs = belowThreshold.map((o: any) => Number(o.confidence ?? 0).toFixed(2)).join(', ');
+          log(`    ! all ${candCount} candidates below minConfidence ${settings.minConfidence}: [${confs}]. Lower threshold in Settings to surface them.`);
+        }
       } catch (e: any) {
         log(`  ! Perplexity error: ${e.message || e}`);
         continue;

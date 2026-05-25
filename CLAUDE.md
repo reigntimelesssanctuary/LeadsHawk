@@ -545,6 +545,18 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.3 (2026-05-25):** Brand-self filter false-positive fix + 0-candidate diagnostics.
+
+Bug: `normalize()` in `lead-hygiene.ts` was stripping descriptive words like `software`, `technology`, `systems`, `solutions`, `services`, `group`, `holdings` from trailing positions. So "Neptune Software" normalized to just **`neptune`**, and the substring match silently filtered every company whose name contains "neptune" — Neptune Energy, Neptune Wellness Solutions, etc. For brands with unique names this didn't matter; for brands with common name stems it dropped legitimate leads.
+
+Fix in `lead-hygiene.ts`:
+- Suffix-strip list reduced to TRUE legal-entity suffixes only: `inc / incorporated / ltd / limited / llc / plc / gmbh / sa / nv / bv / co / company / corp / corporation / ag / kg / kk / sas / sarl`. "Neptune Software" now normalizes to `neptune software`, not `neptune`.
+- Added `SHORT_STEM_THRESHOLD = 5`: substring matching is gated by length. Stems ≤ 4 chars require exact-equality, not substring. So a brand "Acme" or "Zyeta" can't silently filter every company containing those letters.
+
+Two new scanner diagnostics:
+- **0 candidates but citations > 0** → log "model consulted N sources but surfaced no opportunities" with the top-3 citation URLs as a sample. Lets you see what Perplexity actually searched even when the model didn't pick anything.
+- **All returned candidates below minConfidence** → log the confidence distribution like `! all 4 candidates below minConfidence 0.55: [0.45, 0.48, 0.50, 0.52]. Lower threshold in Settings to surface them.` So you know when the threshold is the bottleneck.
+
 **v1.8.2 (2026-05-25):** Fix — deep scan with rich prompts was running out of token budget mid-reasoning before producing JSON. Diagnostic in v1.7.6 confirmed: response of 40,452 chars ending with `</think>` and no JSON output.
 
 Root cause: `sonar-deep-research` mixes `<think>` reasoning blocks into the completion stream. With `maxTokens: 9000` and v1.6+'s rich prompts (brand dossier + product dossier + 5 knowledge chunks + signals + rules + disqualifications + own-brands hygiene + task), the model spends the entire budget on reasoning and never emits JSON.

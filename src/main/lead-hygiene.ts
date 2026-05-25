@@ -14,11 +14,15 @@ import type { Brand } from '@shared/types';
 
 /**
  * Normalize a company / brand name for fuzzy compare:
- *   "Neptune Software, Inc."  →  "neptune software"
- *   "Acme   Corp."            →  "acme corp"
- *   "Foo-Bar Ltd"             →  "foo bar ltd"
+ *   "Acme, Inc."          →  "acme"
+ *   "Foo-Bar Ltd"         →  "foo bar"
+ *   "Neptune Software"    →  "neptune software"   ← v1.8.3: stem retained
  *
- * Strips trailing legal suffixes that vary between feeds.
+ * Strips trailing LEGAL suffixes only (Inc / Ltd / LLC / etc.). v1.8.3:
+ * dropped descriptive trailing words like "software", "technology", "systems",
+ * "solutions", "services", "group", "holdings" from the strip list. Stripping
+ * those left over-broad stems — e.g. "Neptune Software" → "neptune" was then
+ * substring-matching "Neptune Energy" / "Neptune Wellness" as the same org.
  */
 function normalize(name: string): string {
   if (!name) return '';
@@ -26,17 +30,23 @@ function normalize(name: string): string {
   s = s.replace(/[.,]/g, ' ');
   s = s.replace(/[^a-z0-9 &]/g, ' ');
   s = s.replace(/\s+/g, ' ').trim();
-  // Strip common trailing legal suffixes (idempotent — run twice in case
-  // of "Foo Inc Limited" type stacking).
-  const trail = /\s+(inc|incorporated|ltd|limited|llc|plc|gmbh|sa|nv|bv|co|company|corp|corporation|holdings|holding|group|software|technologies|technology|systems|solutions|services)$/;
+  // Strip only true legal-entity suffixes — never descriptive words.
+  const trail = /\s+(inc|incorporated|ltd|limited|llc|plc|gmbh|sa|nv|bv|co|company|corp|corporation|ag|kg|kk|sas|sarl)$/;
   for (let i = 0; i < 2; i++) s = s.replace(trail, '').trim();
   return s;
 }
+
+const SHORT_STEM_THRESHOLD = 5;
 
 /**
  * True when `company` looks like one of OUR brands (case/punctuation/suffix-tolerant).
  * Used to drop candidate opportunities where the LLM picked our own organization
  * as the customer.
+ *
+ * v1.8.3: substring match is now gated by stem length — short stems (≤ 4 chars)
+ * require exact-match equality, not substring containment. Otherwise a brand
+ * called "Neptune" / "Acme" / "Zyeta" silently filters every company whose name
+ * happens to contain those letters.
  */
 export function isOwnBrandCompany(company: string, brands: Brand[]): boolean {
   const c = normalize(company);
@@ -45,9 +55,9 @@ export function isOwnBrandCompany(company: string, brands: Brand[]): boolean {
     const n = normalize(b.name);
     if (!n) continue;
     if (c === n) return true;
-    // substring either way — "Neptune" should still match "Neptune Software"
-    // and "Neptune Software Ltd" should still match "Neptune Software".
-    if (c.includes(n) || n.includes(c)) return true;
+    // Substring matching is dangerous for short stems — gate on length.
+    if (n.length >= SHORT_STEM_THRESHOLD && c.includes(n)) return true;
+    if (c.length >= SHORT_STEM_THRESHOLD && n.includes(c)) return true;
   }
   return false;
 }
