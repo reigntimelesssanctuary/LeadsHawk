@@ -185,25 +185,53 @@ async function completePerplexityAsync<T = unknown>(
   user: string,
   opts: PplxOptions
 ): Promise<PplxResponse<T>> {
-  // v1.8.5: wrap the whole submit+poll cycle in a one-retry loop so we
-  // can recover from the rare case where Perplexity marks an async job
-  // COMPLETED but the response payload is empty (0 content chars, 0
-  // completion tokens). Empirically this is transient and a fresh submit
-  // usually succeeds.
-  let lastEmpty: string | null = null;
+  // v1.8.5: retry on totally-empty completions (0 tokens, 0 chars).
+  // v1.8.7: also retry on "lazy refusal" — the model returns the empty
+  // JSON shape without actually searching. For deep_scan / qualify /
+  // research / brand_research, citations.length === 0 means no web
+  // search happened, which is a failure regardless of the JSON shape.
+  let lastReason: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const result = await submitAndPollOnce<T>(system, user, opts, attempt);
-    if (isEmptyCompletion(result)) {
-      lastEmpty = result.usage ? `${result.usage.completion_tokens ?? 0} tokens, ${result.text.length} chars` : 'empty payload';
-      console.warn(`[perplexity-async] empty completion (${lastEmpty}) — retrying (attempt ${attempt + 2}/2)`);
+    const retryReason = shouldRetryResponse(result, opts);
+    if (retryReason) {
+      lastReason = retryReason;
+      console.warn(`[perplexity-async] retrying — ${retryReason} (attempt ${attempt + 2}/2)`);
       await new Promise((r) => setTimeout(r, 2000));
       continue;
     }
     return result;
   }
   throw new Error(
-    `Perplexity returned an empty completion twice in a row (last: ${lastEmpty}). Likely a transient Perplexity API issue — try again shortly.`
+    `Perplexity returned an inadequate response twice in a row (last: ${lastReason}). Likely a transient Perplexity API issue — try again shortly.`
   );
+}
+
+/**
+ * Decide whether a completed Perplexity response is good enough to keep,
+ * or whether we should retry. Returns a short reason string (suitable for
+ * logs) if retry is warranted, or null if the response is acceptable.
+ */
+function shouldRetryResponse<T>(r: PplxResponse<T>, opts: PplxOptions): string | null {
+  // 1. Totally empty: no content, no tokens. Always retry.
+  if (isEmptyCompletion(r)) {
+    const ct = Number(r.usage?.completion_tokens ?? 0);
+    return `empty completion (${ct} tokens, ${(r.text || '').length} chars)`;
+  }
+  // 2. Stages where the model is REQUIRED to do live web search but
+  //    returned zero citations — that's a "lazy refusal" (model produced
+  //    the empty JSON shape without searching). Retry once. Note: stages
+  //    like 'brief' are pure writing tasks and legitimately have zero
+  //    citations, so they're excluded here.
+  const SEARCH_REQUIRED_STAGES = new Set([
+    'research', 'brand_research', 'brand_summary', 'refresh_signals',
+    'manual_scan', 'deep_scan', 'qualify'
+  ]);
+  if (opts.stage && SEARCH_REQUIRED_STAGES.has(opts.stage) && r.citations.length === 0) {
+    const ct = Number(r.usage?.completion_tokens ?? 0);
+    return `no citations on ${opts.stage} stage (${ct} completion tokens, ${(r.text || '').length} chars) — model didn't search`;
+  }
+  return null;
 }
 
 function isEmptyCompletion<T>(r: PplxResponse<T>): boolean {

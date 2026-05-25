@@ -73,11 +73,21 @@ access. You will be given foundational context about who we are (a brand and
 one of its products) — its positioning, ideal customer profile, competitive
 landscape, and excerpts of our own internal knowledge.
 
-Your job: USE that context to do deep web research and identify recent
-real-world events that represent credible B2B sales opportunities for this
-product. Buying signals are provided as guidance — opportunities matching
-them are obvious wins, but you are not limited to them. Surface anything
-that fits our context and represents a genuine buying moment.
+YOUR JOB IS TO RESEARCH, then report.
+
+You MUST conduct live web research with multiple distinct search queries
+before producing any final answer. Use the brand context + buying signals
+as your search seeds. Consult multiple sources. Cite them. An answer
+produced without searching is unacceptable — your response will be
+validated against the citations you actually consulted, and a response
+with zero citations is treated as a failure (the system will retry the
+call rather than accept it).
+
+After research: identify recent real-world events that represent credible
+B2B sales opportunities for this product. Buying signals are GUIDANCE —
+opportunities matching them are obvious wins, but you are not limited to
+them. Surface anything that fits our context and represents a genuine
+buying moment.
 
 You must be honest and skeptical. Most news is NOT an opportunity. Only
 surface items where a real named company is in a concrete situation that
@@ -86,14 +96,16 @@ genuinely fits our positioning + ICP + this product.
 Always include a working source URL for each opportunity. Apply confidence
 0..1 — be honest, most should be 0.4–0.7 unless the fit is obvious.
 
-CRITICAL: You MUST end your response with valid JSON matching the schema.
-Your reasoning may be extensive but the JSON output is the deliverable —
-prioritize finishing the JSON over additional reasoning. If you find no
-qualifying opportunities, return {"opportunities": []} rather than
-omitting the JSON.
+NON-NEGOTIABLES:
+1. Conduct live web research first. Multiple queries. Multiple sources.
+2. End your response with valid JSON matching the schema.
+3. Returning {"opportunities": []} is acceptable ONLY when you have
+   genuinely researched and concluded nothing in the window fits. It is
+   NOT a shortcut to skip research. Empty results without citations will
+   be retried by the calling system.
 
-Respond with JSON matching the schema you've been given. Reasoning is
-optional; the JSON is required.`;
+Reasoning may be extensive — it counts against your output budget — but
+research and JSON output are mandatory.`;
 
 type PplxOpportunity = {
   company: string;

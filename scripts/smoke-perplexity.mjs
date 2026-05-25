@@ -97,6 +97,22 @@ function isEmptyCompletion(r) {
   return completionTokens === 0 && contentLen === 0;
 }
 
+function shouldRetryResponse(r, opts) {
+  if (isEmptyCompletion(r)) {
+    const ct = Number(r.usage?.completion_tokens ?? 0);
+    return `empty completion (${ct} tokens, ${(r.text || '').length} chars)`;
+  }
+  const SEARCH_REQUIRED_STAGES = new Set([
+    'research', 'brand_research', 'brand_summary', 'refresh_signals',
+    'manual_scan', 'deep_scan', 'qualify'
+  ]);
+  if (opts.stage && SEARCH_REQUIRED_STAGES.has(opts.stage) && r.citations.length === 0) {
+    const ct = Number(r.usage?.completion_tokens ?? 0);
+    return `no citations on ${opts.stage} stage (${ct} completion tokens, ${(r.text || '').length} chars) — model didn't search`;
+  }
+  return null;
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/url-hygiene.ts
 // ════════════════════════════════════════════════════════════════════════
@@ -223,6 +239,65 @@ test('non-zero tokens → false even with empty text', () => {
 });
 test('null usage → treats tokens as 0 → empty if text empty', () => {
   truthy(isEmptyCompletion({ text: '', usage: null }));
+});
+
+console.log('\n[shouldRetryResponse — v1.8.7 lazy-refusal detector]');
+test('deep_scan + 0 citations + valid empty JSON → RETRY (lazy refusal)', () => {
+  // This is the exact Run #20 Zyeta failure: model returned the empty
+  // JSON shape without searching. completion_tokens=7, citations=0.
+  const r = {
+    text: '{"opportunities": []}',
+    usage: { completion_tokens: 7 },
+    citations: []
+  };
+  const reason = shouldRetryResponse(r, { stage: 'deep_scan' });
+  truthy(reason, `should retry; got: ${reason}`);
+});
+test('deep_scan + citations > 0 → keep (real research happened)', () => {
+  const r = {
+    text: '{"opportunities":[]}',
+    usage: { completion_tokens: 843 },
+    citations: ['https://reuters.com/a', 'https://wsj.com/b']
+  };
+  eq(shouldRetryResponse(r, { stage: 'deep_scan' }), null);
+});
+test('brief stage + 0 citations → keep (writing task, no search needed)', () => {
+  const r = {
+    text: 'Sales brief: …',
+    usage: { completion_tokens: 800 },
+    citations: []
+  };
+  eq(shouldRetryResponse(r, { stage: 'brief' }), null);
+});
+test('research + 0 citations → RETRY (research must search)', () => {
+  const r = {
+    text: '{"description":"..."}',
+    usage: { completion_tokens: 200 },
+    citations: []
+  };
+  truthy(shouldRetryResponse(r, { stage: 'research' }));
+});
+test('qualify + 0 citations → RETRY', () => {
+  const r = {
+    text: '{"is_opportunity":false}',
+    usage: { completion_tokens: 50 },
+    citations: []
+  };
+  truthy(shouldRetryResponse(r, { stage: 'qualify' }));
+});
+test('totally empty completion still triggers retry (regression check)', () => {
+  truthy(shouldRetryResponse(
+    { text: '', usage: { completion_tokens: 0 }, citations: [] },
+    { stage: 'deep_scan' }
+  ));
+});
+test('no stage provided → no retry on 0 citations (be conservative)', () => {
+  const r = {
+    text: '{"foo":1}',
+    usage: { completion_tokens: 20 },
+    citations: []
+  };
+  eq(shouldRetryResponse(r, {}), null);
 });
 
 console.log('\n[cleanUrl + pickBestSourceUrl]');

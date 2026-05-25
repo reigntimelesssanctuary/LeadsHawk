@@ -610,6 +610,30 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.7 (2026-05-25):** Fix model lazy-refusal in deep scan + 7 new smoke tests.
+
+(v1.8.6 was the pre-push hook only; no app-facing change so version stayed at 1.8.5 in the app; bumping to 1.8.7 now to keep the user-visible release line moving.)
+
+Bug pattern (Run #20 Zyeta): deep scan returned `{"opportunities": []}` with 7 completion tokens and **0 citations**. Model produced the empty JSON shape without actually searching the web. The v1.8.5 empty-completion detector only fires on `tokens === 0 && content === ""` — this case had 7 tokens of empty-shape JSON, so the retry never fired.
+
+Root cause: the SYSTEM prompt added in v1.8.2 contained *"If you find no qualifying opportunities, return `{"opportunities": []}` rather than omitting the JSON"* + *"Reasoning is optional; the JSON is required."* That was meant as a safety net for token-exhaustion runs, but sonar-deep-research was reading it as permission to skip research entirely.
+
+Two-part fix in `scanner.ts` + `perplexity.ts`:
+
+1. **SYSTEM prompt rewrite** — research is now stated as a non-negotiable first step:
+   - Opens with *"YOUR JOB IS TO RESEARCH, then report."*
+   - Explicit: *"An answer produced without searching is unacceptable — your response will be validated against the citations you actually consulted, and a response with zero citations is treated as a failure (the system will retry the call rather than accept it)."*
+   - Removed *"Reasoning is optional"*. New framing: empty result is acceptable ONLY after genuine research.
+
+2. **New `shouldRetryResponse(r, opts)` detector** in `perplexity.ts` — supersedes the simple `isEmptyCompletion` check in the retry loop. Returns a short reason string when retry is warranted, null otherwise:
+   - **Empty completion**: 0 tokens AND 0 chars → retry (v1.8.5 behavior preserved).
+   - **Lazy refusal**: stage is in `SEARCH_REQUIRED_STAGES` (`research`, `brand_research`, `brand_summary`, `refresh_signals`, `manual_scan`, `deep_scan`, `qualify`) AND `citations.length === 0` → retry. The `brief` stage is excluded since it's a pure writing task.
+   - The async retry loop logs `retrying — no citations on deep_scan stage (7 completion tokens, 21 chars) — model didn't search` so the cause is visible.
+
+Smoke test grew 23 → 30 tests:
+- 7 new cases covering `shouldRetryResponse` — exact Run #20 Zyeta scenario, deep_scan-with-citations keep path, brief-stage no-retry, research/qualify retry paths, regression check that totally-empty still retries, and the conservative no-stage-given default.
+- `npm run smoke` still completes in <100ms.
+
 **v1.8.5 (2026-05-25):** Retry on empty Perplexity responses + first real smoke test.
 
 Bug: Perplexity's async API occasionally returns `status: COMPLETED` with an empty payload (0 chars content, 0 completion tokens). The submit-and-poll flow correctly detected COMPLETED and returned the empty response as if successful, causing downstream "unparseable response (0 chars)" failures.
