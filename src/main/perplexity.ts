@@ -185,6 +185,40 @@ async function completePerplexityAsync<T = unknown>(
   user: string,
   opts: PplxOptions
 ): Promise<PplxResponse<T>> {
+  // v1.8.5: wrap the whole submit+poll cycle in a one-retry loop so we
+  // can recover from the rare case where Perplexity marks an async job
+  // COMPLETED but the response payload is empty (0 content chars, 0
+  // completion tokens). Empirically this is transient and a fresh submit
+  // usually succeeds.
+  let lastEmpty: string | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await submitAndPollOnce<T>(system, user, opts, attempt);
+    if (isEmptyCompletion(result)) {
+      lastEmpty = result.usage ? `${result.usage.completion_tokens ?? 0} tokens, ${result.text.length} chars` : 'empty payload';
+      console.warn(`[perplexity-async] empty completion (${lastEmpty}) — retrying (attempt ${attempt + 2}/2)`);
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    return result;
+  }
+  throw new Error(
+    `Perplexity returned an empty completion twice in a row (last: ${lastEmpty}). Likely a transient Perplexity API issue — try again shortly.`
+  );
+}
+
+function isEmptyCompletion<T>(r: PplxResponse<T>): boolean {
+  const completionTokens = Number(r.usage?.completion_tokens ?? 0);
+  const contentLen = (r.text || '').length;
+  return completionTokens === 0 && contentLen === 0;
+}
+
+/** Single submit+poll cycle — extracted so the retry wrapper can call it twice. */
+async function submitAndPollOnce<T = unknown>(
+  system: string,
+  user: string,
+  opts: PplxOptions,
+  attempt: number
+): Promise<PplxResponse<T>> {
   const key = getKey();
   const body = buildBody(system, user, opts);
   const headers = {
@@ -207,7 +241,7 @@ async function completePerplexityAsync<T = unknown>(
   if (!jobId) {
     throw new Error('Perplexity async submit did not return an id.');
   }
-  console.log(`[perplexity-async] submitted job ${jobId} (model=${body.model})`);
+  console.log(`[perplexity-async] submitted job ${jobId} (model=${body.model}, attempt ${attempt + 1})`);
 
   // Step 2: poll
   const start = Date.now();
@@ -227,6 +261,8 @@ async function completePerplexityAsync<T = unknown>(
     if (poll.status === 'COMPLETED') {
       const elapsed = Math.round((Date.now() - start) / 1000);
       console.log(`[perplexity-async] job ${jobId} COMPLETED after ${elapsed}s (${polls} polls)`);
+      // Always record spend even when content is empty — Perplexity may
+      // still bill for the search cost.
       recordApiCall({
         provider: 'perplexity',
         model: body.model,

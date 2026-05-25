@@ -545,6 +545,28 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.5 (2026-05-25):** Retry on empty Perplexity responses + first real smoke test.
+
+Bug: Perplexity's async API occasionally returns `status: COMPLETED` with an empty payload (0 chars content, 0 completion tokens). The submit-and-poll flow correctly detected COMPLETED and returned the empty response as if successful, causing downstream "unparseable response (0 chars)" failures.
+
+Fix in `perplexity.ts`:
+- `completePerplexityAsync` refactored: extracted `submitAndPollOnce` as the inner submit-and-poll cycle, wrapped in a one-retry loop in the outer function.
+- New `isEmptyCompletion(r)` helper: `completion_tokens === 0 AND content.length === 0`.
+- On empty response, log `[perplexity-async] empty completion … retrying` and submit a fresh job after a 2s pause.
+- If the second attempt is ALSO empty, throw a clear error: `"Perplexity returned an empty completion twice in a row … likely a transient Perplexity API issue"`. Scanner's per-product catch handles it gracefully.
+- Spend is still recorded on the FIRST empty completion (Perplexity may bill for search even when content was empty); the second attempt records again on success.
+
+Bonus fix caught by the smoke test: `cleanUrl` in `url-hygiene.ts` was single-pass — for inputs like `"(https://example.com/path)."` the trailing-punct regex stripped the `.` but left the closing `)`, and the wrap-stripper had already missed it because it wasn't at the very end yet. Made the strip loop iterate to stable, which handles arbitrary nesting.
+
+New: `scripts/smoke-perplexity.mjs` — first proper smoke test for the pure-function logic that's been biting us:
+- 8 tests on `tryParseJson` (real sonar-deep-research output shapes: think blocks, fences, sequential blocks, escaped quotes, truncated mid-reasoning)
+- 4 tests on `isEmptyCompletion`
+- 5 tests on `cleanUrl` / `pickBestSourceUrl`
+- 6 tests on `isOwnBrandCompany` including the v1.8.3 regression
+- `npm run smoke` runs them in ~50ms. `npm run preship` runs smoke then dist:mac.
+
+The smoke test inlines copies of the production functions because the real modules pull in electron / undici / better-sqlite3 / settings.js which can't run under bare Node. The inlined copies must stay byte-identical with production — manual sync flagged in the file header. Move to vitest with proper module mocking once test surface grows beyond ~30 tests.
+
 **v1.8.4 (2026-05-25):** Crash fix — `scan:runDeep` was failing with `SqliteError: NOT NULL constraint failed: opportunities.headline` when Perplexity returned a candidate without a `headline` field. The whole scan run aborted on the first such candidate.
 
 Root cause: `response_format: json_schema` marks `headline` as required, but Perplexity's enforcement isn't perfectly strict — the model occasionally omits or nulls required fields, especially in long deep-research outputs. The Live Monitor's `qualify.ts` already had a fallback (`j.headline || item.title`); the scanner's `insertCandidates` did not.

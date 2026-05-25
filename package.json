@@ -1,6 +1,6 @@
 {
   "name": "leadshawk",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "description": "B2B Signal Intelligence — autonomous corporate sales opportunity hunter",
   "main": "out/main/index.js",
   "author": "LeadsHawk",
@@ -14,7 +14,9 @@
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-builder install-app-deps",
     "dist": "electron-vite build && electron-builder --mac --arm64 --x64",
-    "dist:mac": "electron-vite build && electron-builder --mac"
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "smoke": "node scripts/smoke-perplexity.mjs",
+    "preship": "npm run smoke && npm run dist:mac"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

@@ -27,10 +27,18 @@ export function cleanUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
   if (!s) return null;
-  // Strip wrapping quotes / parens / brackets.
-  s = s.replace(/^[<("'\[]+|[>)"'\]]+$/g, '');
-  // Strip trailing sentence punctuation often glued by paraphrasing.
-  s = s.replace(/[.,;:!?]+$/, '');
+  // v1.8.5: iterate stripping until stable. Handles nested wrappers like
+  //   "(https://example.com/path)."
+  // where a single pass leaves either the closing `)` or the trailing `.`
+  // attached depending on which regex runs first.
+  let prev = '';
+  while (prev !== s) {
+    prev = s;
+    // Strip wrapping quotes / parens / brackets at edges.
+    s = s.replace(/^[<("'\[]+|[>)"'\]]+$/g, '');
+    // Strip trailing sentence punctuation often glued by paraphrasing.
+    s = s.replace(/[.,;:!?]+$/, '');
+  }
   // Markdown link form: [text](url)
   const md = s.match(/\((https?:\/\/[^\s)]+)\)\s*$/);
   if (md) s = md[1];
