@@ -722,27 +722,38 @@ function insertCandidates(
   let inserted = 0;
   const cleanedCitations = dedupeCleanCitations(attrib.citations);
   for (const cand of candidates) {
+    // v1.8.4: defensive coercion. Perplexity's response_format: json_schema
+    // isn't strictly enforced — the model occasionally omits or nulls
+    // required fields. NOT NULL constraints on opportunities.{company,
+    // headline, source_url, source_title} would crash the whole scan,
+    // so we coerce or skip per-candidate instead.
+    const company = (cand.company || '').trim();
+    if (!company) {
+      ctx.log(`  - skip (missing company): ${cand.source_url || '(no url)'}`);
+      continue;
+    }
+
     // v1.5.4: pick the best URL by cross-referencing the LLM's stated
     // source_url against Perplexity's citation list. Drops candidates
     // we can't anchor to a real URL.
     const picked = pickBestSourceUrl(cand.source_url, attrib.citations);
     if (!picked.url) {
-      ctx.log(`  - skip (no usable source_url): ${cand.company}`);
+      ctx.log(`  - skip (no usable source_url): ${company}`);
       continue;
     }
     if (picked.source === 'citation') {
-      ctx.log(`  ~ substituted source_url with citation for ${cand.company} (LLM URL didn't match citations)`);
+      ctx.log(`  ~ substituted source_url with citation for ${company} (LLM URL didn't match citations)`);
     } else if (picked.source === 'llm_unverified' && cleanedCitations.length > 0) {
-      ctx.log(`  ~ LLM url not in citations for ${cand.company} — kept LLM url (no host match)`);
+      ctx.log(`  ~ LLM url not in citations for ${company} — kept LLM url (no host match)`);
     }
     const url = picked.url;
-    if (ctx.seenStmt.get(url)) { ctx.log(`  - skip (seen): ${cand.company}`); continue; }
+    if (ctx.seenStmt.get(url)) { ctx.log(`  - skip (seen): ${company}`); continue; }
     if ((cand.confidence ?? 0) < ctx.settings.minConfidence) {
-      ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${cand.company}`);
+      ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${company}`);
       continue;
     }
-    if (isOwnBrandCompany(cand.company, attrib.brands)) {
-      ctx.log(`  - skip (our own brand as customer): ${cand.company}`);
+    if (isOwnBrandCompany(company, attrib.brands)) {
+      ctx.log(`  - skip (our own brand as customer): ${company}`);
       continue;
     }
     // Defense-in-depth: never insert a lead for a scan-disabled brand or
@@ -750,42 +761,55 @@ function insertCandidates(
     // the prompt-level filter. Brand toggle is the master gate; product
     // toggle is its inner gate.
     if (attrib.brand && attrib.brand.scan_enabled !== 1) {
-      ctx.log(`  - skip (brand "${attrib.brand.name}" is scan-disabled): ${cand.company}`);
+      ctx.log(`  - skip (brand "${attrib.brand.name}" is scan-disabled): ${company}`);
       continue;
     }
     if (attrib.product && attrib.product.scan_enabled !== 1) {
-      ctx.log(`  - skip (product "${attrib.product.name}" is scan-disabled): ${cand.company}`);
+      ctx.log(`  - skip (product "${attrib.product.name}" is scan-disabled): ${company}`);
       continue;
     }
-    ctx.insertSeen.run(url);
-    ctx.insertOpp.run(
-      attrib.brand?.id ?? null,
-      attrib.product?.id ?? null,
-      cand.company,
-      cand.industry,
-      (cand.country && cand.country.trim()) || null,
-      cand.headline,
-      url,
-      cand.source_title || attrib.sourceLabel,
-      cand.source_published_at || null,
-      cand.confidence,
-      cand.background,
-      cand.use_case,
-      cand.angle,
-      cand.signal_summary,
-      JSON.stringify({
-        source: attrib.sourceLabel,
-        matched_signal: cand.matched_signal,
-        // Keep up to 8 alternative citations so the UI can offer them if
-        // the primary source link is broken.
-        alt_sources: cleanedCitations.filter((c) => c !== url).slice(0, 8),
-        url_source: picked.source
-      })
-    );
-    inserted++;
-    ctx.log(
-      `  ✓ ${cand.company} (${(cand.confidence ?? 0).toFixed(2)}) → ${attrib.brand?.name || '?'} / ${attrib.product?.name || '?'}`
-    );
+
+    // v1.8.4: coerce NOT NULL fields with sensible fallbacks rather than crash.
+    const headline = (cand.headline || '').trim()
+      || (cand.matched_signal ? `${company} — ${cand.matched_signal}` : '').trim()
+      || (cand.source_title || '').trim()
+      || `${company} — opportunity`;
+    const sourceTitle = (cand.source_title || '').trim() || attrib.sourceLabel || '(scan)';
+
+    try {
+      ctx.insertSeen.run(url);
+      ctx.insertOpp.run(
+        attrib.brand?.id ?? null,
+        attrib.product?.id ?? null,
+        company,
+        cand.industry || null,
+        (cand.country && cand.country.trim()) || null,
+        headline,
+        url,
+        sourceTitle,
+        cand.source_published_at || null,
+        cand.confidence ?? 0,
+        cand.background || null,
+        cand.use_case || null,
+        cand.angle || null,
+        cand.signal_summary || null,
+        JSON.stringify({
+          source: attrib.sourceLabel,
+          matched_signal: cand.matched_signal,
+          // Keep up to 8 alternative citations so the UI can offer them if
+          // the primary source link is broken.
+          alt_sources: cleanedCitations.filter((c) => c !== url).slice(0, 8),
+          url_source: picked.source
+        })
+      );
+      inserted++;
+      ctx.log(
+        `  ✓ ${company} (${(cand.confidence ?? 0).toFixed(2)}) → ${attrib.brand?.name || '?'} / ${attrib.product?.name || '?'}`
+      );
+    } catch (e: any) {
+      // v1.8.4: don't let one bad insert crash the whole scan run.
+      ctx.log(`  ! insert failed for ${company}: ${String(e?.message || e).slice(0, 200)}`);
+    }
   }
   return inserted;
 }

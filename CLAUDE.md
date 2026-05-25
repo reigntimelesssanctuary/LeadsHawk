@@ -545,6 +545,19 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.4 (2026-05-25):** Crash fix — `scan:runDeep` was failing with `SqliteError: NOT NULL constraint failed: opportunities.headline` when Perplexity returned a candidate without a `headline` field. The whole scan run aborted on the first such candidate.
+
+Root cause: `response_format: json_schema` marks `headline` as required, but Perplexity's enforcement isn't perfectly strict — the model occasionally omits or nulls required fields, especially in long deep-research outputs. The Live Monitor's `qualify.ts` already had a fallback (`j.headline || item.title`); the scanner's `insertCandidates` did not.
+
+Two fixes in `scanner.ts` → `insertCandidates`:
+1. **Defensive coercion** before insert:
+   - `company`: must be non-empty after trim; skip with `missing company` log if not.
+   - `headline`: fall back to `${company} — ${matched_signal}` → `source_title` → `${company} — opportunity` if missing.
+   - `source_title`: fall back to `attrib.sourceLabel` → `'(scan)'`.
+   - `industry`, `background`, `use_case`, `angle`, `signal_summary`: explicit `|| null` so empty strings become null rather than being stored as `""`.
+   - `confidence`: defaults to `0` if absent (will then fail the minConfidence gate naturally).
+2. **Per-candidate try/catch** around the insert. If any single candidate fails to insert (NOT NULL, FK, anything), it's logged with the error message and the scan continues with the next candidate. Previously one bad candidate killed the whole scan.
+
 **v1.8.3 (2026-05-25):** Brand-self filter false-positive fix + 0-candidate diagnostics.
 
 Bug: `normalize()` in `lead-hygiene.ts` was stripping descriptive words like `software`, `technology`, `systems`, `solutions`, `services`, `group`, `holdings` from trailing positions. So "Neptune Software" normalized to just **`neptune`**, and the substring match silently filtered every company whose name contains "neptune" — Neptune Energy, Neptune Wellness Solutions, etc. For brands with unique names this didn't matter; for brands with common name stems it dropped legitimate leads.
