@@ -180,6 +180,7 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
             >
               {brand.scan_enabled === 1 ? 'scans on' : 'scans paused'}
             </span>
+            <RecencyChip brand={brand} />
             <button
               className="btn-ghost"
               onClick={researchBrand}
@@ -229,6 +230,7 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                   >
                     {p.scan_enabled === 1 && brand.scan_enabled === 1 ? 'scans on' : 'scans paused'}
                   </span>
+                  <RecencyChip product={p} brand={brand} />
                   <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id || busy === 'refresh-' + p.id}>
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}
@@ -467,6 +469,54 @@ function AddNoteForm({
       </div>
     </div>
   );
+}
+
+/**
+ * Compact chip showing the effective scan recency window. Mirrors the
+ * resolveScanRecency() backend logic so users can see at a glance which
+ * window will be used and where it came from (auto vs override vs global).
+ */
+function RecencyChip({ brand, product }: { brand: Brand; product?: Product }) {
+  // Resolve (product.override → product.auto → brand.override → brand.auto → null)
+  // We don't have access to global setting here so we show "global" when
+  // nothing else is set.
+  type Resolved = { value: string; source: string } | null;
+  const r: Resolved = (() => {
+    if (product?.scan_recency_override) return { value: product.scan_recency_override, source: 'product override' };
+    if (product?.scan_recency_auto)     return { value: product.scan_recency_auto,     source: 'product auto' };
+    if (brand.scan_recency_override)    return { value: brand.scan_recency_override,   source: 'brand override' };
+    if (brand.scan_recency_auto)        return { value: brand.scan_recency_auto,       source: 'brand auto' };
+    return null;
+  })();
+  if (!r) {
+    return (
+      <span
+        className="chip chip-muted"
+        title="No per-brand or per-product recency set. Scans will use the global Settings → Recency window."
+      >
+        recency: global
+      </span>
+    );
+  }
+  const isOverride = r.source.includes('override');
+  return (
+    <span
+      className={`chip ${isOverride ? 'chip-brand' : 'chip-qualified'}`}
+      title={`Scan recency window for this ${product ? 'product' : 'brand'}, set by ${r.source}. Edit via the Edit button.`}
+    >
+      recency: {shortRecency(r.value)} {isOverride ? '(override)' : '(auto)'}
+    </span>
+  );
+}
+
+function shortRecency(r: string): string {
+  switch (r) {
+    case 'day':   return '24h';
+    case 'week':  return '7d';
+    case 'month': return '30d';
+    case 'year':  return '12mo';
+    default: return r;
+  }
 }
 
 function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: KnowledgeItem[] }) {

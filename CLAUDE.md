@@ -545,6 +545,11 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.8.1 (2026-05-25):** Recency at-a-glance. v1.8.0 stored the auto/override values but only surfaced them deep inside Edit modals and scan logs. Now visible everywhere:
+- New `RecencyChip` component on BrandsProducts: rendered next to the `scans on/paused` chip on the brand header and on every product card. Shows the short label + `(auto)` vs `(override)` indicator.
+- Scan Jobs → Scan inclusion card: each brand row and each product row now shows an inline recency pill (purple = override, green = auto, grey muted = global fallback). Tooltip explains the source.
+- Mirrors the backend `resolveScanRecency()` precedence: product override → product auto → brand override → brand auto → global.
+
 **v1.8.0 (2026-05-25):** Per-brand / per-product scan recency with auto-recommendation from research.
 
 Problem solved: forcing one global `scanRecency` across the whole portfolio is fundamentally wrong. Zyeta (workspace design) needs 12-month windows for premises decisions; a cybersecurity brand needs 7-day windows for breaches. v1.8 lets each brand and product pick its own — auto-derived from research, with a manual override slot.

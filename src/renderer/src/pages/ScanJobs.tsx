@@ -129,6 +129,35 @@ export function ScanJobs() {
   );
 }
 
+function resolveRecencyForRow(brand: Brand, product?: Product): { value: string; source: string } | null {
+  if (product?.scan_recency_override) return { value: product.scan_recency_override, source: 'product override' };
+  if (product?.scan_recency_auto)     return { value: product.scan_recency_auto,     source: 'product auto' };
+  if (brand.scan_recency_override)    return { value: brand.scan_recency_override,   source: 'brand override' };
+  if (brand.scan_recency_auto)        return { value: brand.scan_recency_auto,       source: 'brand auto' };
+  return null;
+}
+function shortRecency(r: string): string {
+  switch (r) { case 'day': return '24h'; case 'week': return '7d'; case 'month': return '30d'; case 'year': return '12mo'; default: return r; }
+}
+function RecencyCell({ brand, product }: { brand: Brand; product?: Product }) {
+  const r = resolveRecencyForRow(brand, product);
+  if (!r) return <span style={{ fontSize: 12, color: '#9ca3af' }} title="No per-brand or per-product recency set — scans use Settings → Recency window">global</span>;
+  const isOverride = r.source.includes('override');
+  return (
+    <span
+      style={{
+        fontSize: 12, fontWeight: 500,
+        color: isOverride ? '#5b21b6' : '#065f46',
+        background: isOverride ? '#ede9fe' : '#d1fae5',
+        padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap'
+      }}
+      title={`Window: ${r.value} — source: ${r.source}. Change via the brand or product Edit modal on Brands & Products.`}
+    >
+      {shortRecency(r.value)} ({isOverride ? 'override' : 'auto'})
+    </span>
+  );
+}
+
 function ScanInclusionCard({
   brands, products, onChanged
 }: {
@@ -164,9 +193,12 @@ function ScanInclusionCard({
             const brandOn = b.scan_enabled === 1;
             return (
               <div key={b.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: brandOn ? 'white' : '#fafafa' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>{b.name}</span>
+                      <RecencyCell brand={b} />
+                    </div>
                     {b.description && (
                       <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
                         {b.description.slice(0, 120)}{b.description.length > 120 ? '…' : ''}
@@ -182,12 +214,13 @@ function ScanInclusionCard({
                 {brandProducts.length > 0 && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #e5e7eb', display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {brandProducts.map((p) => (
-                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 6 }}>
-                        <div style={{ fontSize: 13, color: brandOn ? '#1f2937' : '#9ca3af' }}>
-                          {p.name}
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 6, gap: 10 }}>
+                        <div style={{ fontSize: 13, color: brandOn ? '#1f2937' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                          <span>{p.name}</span>
                           {p.research_status !== 'ready' && (
-                            <span style={{ marginLeft: 8, fontSize: 11, color: '#92400e' }}>(not researched)</span>
+                            <span style={{ fontSize: 11, color: '#92400e' }}>(not researched)</span>
                           )}
+                          <RecencyCell brand={b} product={p} />
                         </div>
                         <Switch
                           checked={p.scan_enabled === 1 && brandOn}
