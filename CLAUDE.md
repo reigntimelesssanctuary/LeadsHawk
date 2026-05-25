@@ -545,6 +545,12 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.7.5 (2026-05-25):** Architectural: deep scan no longer runs Pass 2 (custom topics).
+
+Rationale: custom topics are broad thematic searches that don't anchor on product knowledge, don't benefit from multi-step deep research, are failure-prone on `sonar-deep-research` (every custom topic timed out in v1.7.0–v1.7.3 deep runs), and are already covered by every-6h manual scans. Letting deep scans focus on per-product Pass 1 keeps the expensive model's budget on the work where it actually pays off.
+
+`ScanOpts` gains `skipCustomTopics?: boolean`. `runDeepScan` sets it to `true`. `runScan` logs `Pass 2 (custom topics) skipped — not run in deep scans (they run in manual scans only).` when the flag is set. Manual scan is unchanged — still runs both passes.
+
 **v1.7.4 (2026-05-25):** Crit fix — sonar-deep-research calls were failing at ~125s with `fetch failed` even after v1.7.3 extended the local timeout. Root cause: Perplexity's **synchronous** `/chat/completions` endpoint has a server-side gateway timeout (~120s) that kills long deep-research calls before the model finishes. Our local timeout extension didn't help because the connection was being closed by Perplexity's edge.
 
 Fix: route any model matching `/deep-research/i` through Perplexity's async API instead:

@@ -21,6 +21,15 @@ export type ScanOpts = {
   maxTokens?: number;
   /** Prefix line written to the scan_runs log so it's clear which engine ran. */
   label?: string;
+  /**
+   * v1.7.5: skip Pass 2 (custom topics from signal_sources). Default false.
+   * The deep-scan wrapper sets this true: custom topics are broad thematic
+   * searches that don't benefit from multi-step research, are failure-prone
+   * on the deep endpoint, and are already covered by the cheap manual scan
+   * every 6 h. Keeping deep scans focused on per-product Pass 1 lets the
+   * expensive model spend its budget where it earns the lift.
+   */
+  skipCustomTopics?: boolean;
 };
 
 /**
@@ -323,9 +332,13 @@ short descriptor if it's a knowledge-grounded match outside the listed signals).
     // ─────────────────────────────────────────────────────────────
     // Pass 2 — manual custom topics (optional, for power users)
     // ─────────────────────────────────────────────────────────────
-    const customSources = db
-      .prepare('SELECT * FROM signal_sources WHERE enabled = 1')
-      .all() as SignalSource[];
+    const customSources = opts.skipCustomTopics
+      ? []
+      : (db.prepare('SELECT * FROM signal_sources WHERE enabled = 1').all() as SignalSource[]);
+
+    if (opts.skipCustomTopics) {
+      log('Pass 2 (custom topics) skipped — not run in deep scans (they run in manual scans only).');
+    }
 
     if (customSources.length > 0) {
       // Only show the LLM brands + products that are currently scan-enabled.
@@ -572,7 +585,8 @@ export async function runDeepScan(): Promise<{ runId: number; created: number; s
     stage: 'deep_scan',
     kind: 'deep',
     maxTokens: 9000,
-    label: '== Deep Research scan =='
+    label: '== Deep Research scan ==',
+    skipCustomTopics: true   // v1.7.5: deep scan focuses on per-product Pass 1 only
   });
 }
 
