@@ -613,6 +613,20 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.10.1 (2026-05-27):** Patch for Opus temperature deprecation + per-stage status surfacing + dossier signal cleanup.
+
+User installed v1.10.0, ran brand re-research on Zyeta, dossier text refreshed but none of the new Opus features appeared. Terminal log showed `400 invalid_request_error: "temperature is deprecated for this model"` from `claude-opus-4-7`. Anthropic deprecated the `temperature` parameter for Opus 4.7+; my v1.10.0 code was passing `temperature: 0.2` / `0.3` and getting 400'd. Stage 2 caught the error and returned null → Stage 3 skipped → no Opus features rendered. v1.10.0 had no visible indicator of the failure — the silent-failure pattern.
+
+Three fixes:
+
+1. **`modelSupportsTemperature` predicate in `llm.ts`** — exported pure function gated by a regex allowlist `[/^claude-opus-4-7/i]`. Both `complete()` in `llm.ts` and the direct Anthropic call in `monitor/triage.ts` now conditionally include `temperature` only when the predicate returns true. Future deprecations: add to the allowlist.
+2. **`dossier-verify.ts` + `dossier-strategic.ts` return discriminated unions** — `StageResult<T> = { ok: true; output: T } | { ok: false; error: string }`. Error reasons now flow from Opus API → caller → DB → UI instead of being lost in a null return value.
+3. **`research_status_detail` column on `brands` and `products`** (idempotent migration) — JSON-serialised per-stage outcomes (`stage1`, `stage2`, `stage3`, `last_attempt_at`). Populated at the end of every research run regardless of success/failure. Captures: `completed`, `skipped: <reason>` (toggle off or no API key), or `failed: <reason>` (the actual error string from `StageResult.error`).
+4. **`ResearchStatusChip` component** rendered on the brand panel and per-product card. Three colour states: green (all three stages OK), amber (Stage 2 skipped — toggle off or no key), red (any failure). Click expands to show the full per-stage status object. Always visible — no need to expand the dossier to see what happened.
+5. **Signal fields removed from dossier panels** — the v1.9.2 cleanup oversight you flagged. Brand-level signals and product-level signals are managed only in Signal Config now. `BrandResearchPanel` and the product dossier render no longer show the signal Field.
+
+Smoke tests grew 46 → 50. Four new tests cover `modelSupportsTemperature` (Opus 4.7 deprecated; Sonnet 4.6 / Haiku 4.5 still supported; unknown future model defaults-allow).
+
 **v1.10.0 (2026-05-27):** Opus dossier verification + strategic intelligence.
 
 Brand and product research are LeadsHawk's foundational asset — everything downstream is bottlenecked by dossier quality. v1.10.0 chains Claude Opus after the Perplexity Stage 1 research to:

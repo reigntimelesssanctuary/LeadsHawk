@@ -114,6 +114,17 @@ function shouldRetryResponse(r, opts) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPY from src/main/llm.ts (v1.10.1)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function modelSupportsTemperature(modelId) {
+  const TEMPERATURE_DEPRECATED = [
+    /^claude-opus-4-7/i
+  ];
+  return !TEMPERATURE_DEPRECATED.some((re) => re.test(modelId));
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/signal-research.ts (v1.9.3)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -444,6 +455,20 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[modelSupportsTemperature — v1.10.1]');
+test('Claude Opus 4.7 returns false (deprecated)', () => {
+  falsy(modelSupportsTemperature('claude-opus-4-7'));
+});
+test('Claude Sonnet 4.6 returns true', () => {
+  truthy(modelSupportsTemperature('claude-sonnet-4-6'));
+});
+test('Claude Haiku 4.5 returns true', () => {
+  truthy(modelSupportsTemperature('claude-haiku-4-5-20251001'));
+});
+test('Unknown future model returns true (default-allow)', () => {
+  truthy(modelSupportsTemperature('claude-sonnet-5-0-future'));
 });
 
 console.log('\n[signal-research — v1.9.3 shape-tolerant parsing]');

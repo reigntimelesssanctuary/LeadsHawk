@@ -271,12 +271,15 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'brands', 'unknowns', 'TEXT');
   addColumnIfMissing(db, 'brands', 'strategic_intel', 'TEXT');
   addColumnIfMissing(db, 'brands', 'last_advanced_research_at', 'TEXT');
+  // v1.10.1: per-stage status surfacing so silent failures are visible.
+  addColumnIfMissing(db, 'brands', 'research_status_detail', 'TEXT');
   addColumnIfMissing(db, 'products', 'raw_dossier', 'TEXT');
   addColumnIfMissing(db, 'products', 'verified_dossier', 'TEXT');
   addColumnIfMissing(db, 'products', 'confidence_levels', 'TEXT');
   addColumnIfMissing(db, 'products', 'unknowns', 'TEXT');
   addColumnIfMissing(db, 'products', 'strategic_intel', 'TEXT');
   addColumnIfMissing(db, 'products', 'last_advanced_research_at', 'TEXT');
+  addColumnIfMissing(db, 'products', 'research_status_detail', 'TEXT');
 
   // v1.9.2: reviewer feedback for dossier and signal re-research.
   // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'

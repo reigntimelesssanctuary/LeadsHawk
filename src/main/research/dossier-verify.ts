@@ -20,6 +20,16 @@ import { tryParseJson } from '../perplexity.js';
 import { buildFeedbackBlock } from '../feedback.js';
 import type { ConfidenceLevels } from '@shared/types';
 
+/**
+ * v1.10.1: result envelope so callers can surface error reasons in the UI
+ * status chip instead of just seeing a null. ok=true carries the parsed
+ * output; ok=false carries a short human-readable error string suitable
+ * for display next to the stage status.
+ */
+export type StageResult<T> =
+  | { ok: true; output: T }
+  | { ok: false; error: string };
+
 export type Stage2BrandInput = {
   brandId: number;
   name: string;
@@ -123,7 +133,7 @@ function fmt(v: string | null | undefined): string {
 
 export async function verifyBrandDossier(
   input: Stage2BrandInput
-): Promise<Stage2BrandOutput | null> {
+): Promise<StageResult<Stage2BrandOutput>> {
   const feedbackBlock = buildFeedbackBlock('brand', input.brandId);
 
   const prompt = `# Brand
@@ -185,13 +195,16 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
     raw = await complete(VERIFY_SYSTEM, prompt, {
       model: 'claude-opus-4-7',
       maxTokens: 6000,
+      // v1.10.1: temperature is deprecated on Opus 4.7 — llm.ts gates it
+      // automatically via modelSupportsTemperature.
       temperature: 0.2,
       stage: 'brand_research_verify',
       relatedId: input.brandId
     });
   } catch (e: any) {
-    console.warn(`[dossier-verify:brand ${input.brandId}] Opus error: ${String(e?.message || e).slice(0, 300)}`);
-    return null;
+    const err = String(e?.message || e).slice(0, 300);
+    console.warn(`[dossier-verify:brand ${input.brandId}] Opus error: ${err}`);
+    return { ok: false, error: `Opus API error: ${err}` };
   }
 
   const parsed = tryParseJson<Stage2BrandOutput>(raw);
@@ -199,27 +212,30 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
     const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
     console.warn(`[dossier-verify:brand ${input.brandId}] unparseable Stage 2 response`);
     console.warn(`  head: ${head}`);
-    return null;
+    return { ok: false, error: 'Unparseable Stage 2 response (check console log for head/tail preview)' };
   }
   // Coerce missing string fields to safe defaults so downstream DB write
   // doesn't violate NOT NULL.
   return {
-    fields: {
-      category: parsed.fields.category || input.stage1.category || '',
-      positioning: parsed.fields.positioning || input.stage1.positioning || '',
-      target_icp: parsed.fields.target_icp || input.stage1.target_icp || '',
-      competitive_summary: parsed.fields.competitive_summary || input.stage1.competitive_summary || '',
-      research_summary: parsed.fields.research_summary || input.stage1.research_summary || ''
-    },
-    confidence_levels: parsed.confidence_levels,
-    unknowns: parsed.unknowns || '',
-    flagged_claims: parsed.flagged_claims || []
+    ok: true,
+    output: {
+      fields: {
+        category: parsed.fields.category || input.stage1.category || '',
+        positioning: parsed.fields.positioning || input.stage1.positioning || '',
+        target_icp: parsed.fields.target_icp || input.stage1.target_icp || '',
+        competitive_summary: parsed.fields.competitive_summary || input.stage1.competitive_summary || '',
+        research_summary: parsed.fields.research_summary || input.stage1.research_summary || ''
+      },
+      confidence_levels: parsed.confidence_levels,
+      unknowns: parsed.unknowns || '',
+      flagged_claims: parsed.flagged_claims || []
+    }
   };
 }
 
 export async function verifyProductDossier(
   input: Stage2ProductInput
-): Promise<Stage2ProductOutput | null> {
+): Promise<StageResult<Stage2ProductOutput>> {
   const feedbackBlock = buildFeedbackBlock('product', input.productId);
 
   const prompt = `# Brand context
@@ -296,8 +312,9 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
       relatedId: input.productId
     });
   } catch (e: any) {
-    console.warn(`[dossier-verify:product ${input.productId}] Opus error: ${String(e?.message || e).slice(0, 300)}`);
-    return null;
+    const err = String(e?.message || e).slice(0, 300);
+    console.warn(`[dossier-verify:product ${input.productId}] Opus error: ${err}`);
+    return { ok: false, error: `Opus API error: ${err}` };
   }
 
   const parsed = tryParseJson<Stage2ProductOutput>(raw);
@@ -305,19 +322,22 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
     const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
     console.warn(`[dossier-verify:product ${input.productId}] unparseable Stage 2 response`);
     console.warn(`  head: ${head}`);
-    return null;
+    return { ok: false, error: 'Unparseable Stage 2 response (check console log for head/tail preview)' };
   }
   return {
-    fields: {
-      description: parsed.fields.description || input.stage1.description || '',
-      category: parsed.fields.category || input.stage1.category || '',
-      use_cases: parsed.fields.use_cases || input.stage1.use_cases || '',
-      competitors: parsed.fields.competitors || input.stage1.competitors || '',
-      differentiators: parsed.fields.differentiators || input.stage1.differentiators || '',
-      research_summary: parsed.fields.research_summary || input.stage1.research_summary || ''
-    },
-    confidence_levels: parsed.confidence_levels,
-    unknowns: parsed.unknowns || '',
-    flagged_claims: parsed.flagged_claims || []
+    ok: true,
+    output: {
+      fields: {
+        description: parsed.fields.description || input.stage1.description || '',
+        category: parsed.fields.category || input.stage1.category || '',
+        use_cases: parsed.fields.use_cases || input.stage1.use_cases || '',
+        competitors: parsed.fields.competitors || input.stage1.competitors || '',
+        differentiators: parsed.fields.differentiators || input.stage1.differentiators || '',
+        research_summary: parsed.fields.research_summary || input.stage1.research_summary || ''
+      },
+      confidence_levels: parsed.confidence_levels,
+      unknowns: parsed.unknowns || '',
+      flagged_claims: parsed.flagged_claims || []
+    }
   };
 }

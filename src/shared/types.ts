@@ -23,6 +23,7 @@ export type Brand = {
   unknowns: string | null;             // Stage 2 "What we don't know" markdown
   strategic_intel: string | null;      // Stage 3 output JSON (icp_segments, buying_cycle_scenarios, competitive_plays)
   last_advanced_research_at: string | null;
+  research_status_detail: string | null; // v1.10.1: per-stage status JSON for UI surfacing
   created_at: string;
   updated_at: string;
 };
@@ -52,8 +53,18 @@ export type Product = {
   unknowns: string | null;
   strategic_intel: string | null;
   last_advanced_research_at: string | null;
+  research_status_detail: string | null; // v1.10.1: per-stage status JSON
   created_at: string;
   updated_at: string;
+};
+
+// v1.10.1: per-stage status persisted to brands.research_status_detail
+// / products.research_status_detail (JSON-serialised).
+export type ResearchStatusDetail = {
+  stage1: string;        // 'completed' | 'failed: <reason>'
+  stage2: string;        // 'completed' | 'skipped: <reason>' | 'failed: <reason>'
+  stage3: string;        // 'completed' | 'skipped: <reason>' | 'failed: <reason>'
+  last_attempt_at: string;
 };
 
 // v1.10.0: shared types for Stage 3 strategic intel output.

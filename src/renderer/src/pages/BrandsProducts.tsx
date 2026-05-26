@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, ConfidenceLevels, ConfidenceLevel } from '../../../shared/types';
+import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, ConfidenceLevels, ConfidenceLevel, ResearchStatusDetail } from '../../../shared/types';
 import type { Page } from '../components/Sidebar';
 import { Modal } from '../components/Modal';
 import { FeedbackModal } from '../components/FeedbackModal';
@@ -112,6 +112,91 @@ function StrategicIntelBlock({ intel }: { intel: StrategicIntel | null }) {
     </div>
   );
 }
+// v1.10.1 — surface per-stage research status so silent Opus failures
+// are visible without checking the terminal log.
+function parseStatusDetail(raw: string | null): ResearchStatusDetail | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object') return null;
+    return j as ResearchStatusDetail;
+  } catch { return null; }
+}
+function ResearchStatusChip({ raw }: { raw: string | null }) {
+  const [expanded, setExpanded] = useState(false);
+  const parsed = parseStatusDetail(raw);
+  if (!parsed) return null;
+
+  const isFail = (s: string) => /^failed:/.test(s);
+  const isSkip = (s: string) => /^skipped:/.test(s);
+  const isOk = (s: string) => s === 'completed';
+
+  const anyFailed = isFail(parsed.stage2) || isFail(parsed.stage3);
+  const stage2Skipped = isSkip(parsed.stage2);
+  const allOk = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3);
+
+  const palette = anyFailed
+    ? { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }
+    : stage2Skipped
+    ? { bg: '#fef3c7', fg: '#92400e', border: '#fde68a' }
+    : allOk
+    ? { bg: '#d1fae5', fg: '#065f46', border: '#a7f3d0' }
+    : { bg: '#f3f4f6', fg: '#4b5563', border: '#e5e7eb' };
+
+  const summary = anyFailed
+    ? `Stage 2 ${isOk(parsed.stage2) ? '✓' : '✗'} · Stage 3 ${isOk(parsed.stage3) ? '✓' : '✗'}`
+    : stage2Skipped
+    ? `Stage 1 only · Opus skipped`
+    : allOk
+    ? `Stage 1 ✓ · Stage 2 ✓ · Stage 3 ✓`
+    : 'pending';
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: 12,
+          background: palette.bg,
+          color: palette.fg,
+          border: `1px solid ${palette.border}`,
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: 'pointer'
+        }}
+        title="Click for full per-stage status"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {summary}
+      </button>
+      {expanded && (
+        <div style={{
+          marginTop: 6,
+          padding: 10,
+          background: '#fafafa',
+          border: '1px solid #e5e7eb',
+          borderRadius: 6,
+          fontSize: 12,
+          color: '#374151',
+          lineHeight: 1.5,
+          maxWidth: 720
+        }}>
+          <div><b>Stage 1 (Perplexity):</b> {parsed.stage1}</div>
+          <div><b>Stage 2 (Opus verify):</b> {parsed.stage2}</div>
+          <div><b>Stage 3 (Opus strategic):</b> {parsed.stage3}</div>
+          <div style={{ marginTop: 6, color: '#6b7280' }}>
+            Last attempt: {parsed.last_attempt_at}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IcpSegmentCard({ segment }: { segment: IcpSegment }) {
   return (
     <div style={{ padding: 12, background: 'white', border: '1px solid #e0e7ff', borderRadius: 8 }}>
@@ -438,10 +523,10 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                       )}
                     </summary>
                     <div style={{ marginTop: 8, fontSize: 13, display: 'grid', gap: 10 }}>
+                      {/* v1.10.1: signals removed from dossier — managed in Signal Config. */}
                       {p.use_cases && <Field label="Use cases" value={p.use_cases} confidence={conf?.use_cases} />}
                       {p.competitors && <Field label="Competitors" value={p.competitors} confidence={conf?.competitors} />}
                       {p.differentiators && <Field label="Differentiators" value={p.differentiators} confidence={conf?.differentiators} />}
-                      {p.signals && <Field label="Signals to watch" value={p.signals} />}
                       <Field label="Summary" value={p.research_summary} confidence={conf?.research_summary} />
                       <UnknownsBlock unknowns={p.unknowns} />
                       <StrategicIntelBlock intel={strategic} />
@@ -449,6 +534,8 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                   </details>
                 );
               })()}
+              {/* v1.10.1: per-stage status (visible at-a-glance even when dossier is collapsed). */}
+              <ResearchStatusChip raw={p.research_status_detail} />
               {/* v1.9.2: signals are managed separately now — flag empty signals here. */}
               {p.research_status === 'ready' && !(p.signals && p.signals.trim()) && (
                 <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, fontSize: 12, color: '#7c2d12', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -778,10 +865,10 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
               )}
             </summary>
             <div style={{ marginTop: 10, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937', display: 'grid', gap: 12 }}>
+              {/* v1.10.1: brand-level signals removed from dossier — managed in Signal Config. */}
               {brand.category && <Field label="Market category" value={brand.category} confidence={conf?.category} />}
               {brand.positioning && <Field label="Positioning" value={brand.positioning} confidence={conf?.positioning} />}
               {brand.target_icp && <Field label="Target ICP (ideal customer profile)" value={brand.target_icp} confidence={conf?.target_icp} />}
-              {brand.signals && <Field label="Brand-level signals" value={brand.signals} />}
               {brand.competitive_summary && <Field label="Competitive summary" value={brand.competitive_summary} confidence={conf?.competitive_summary} />}
               {brand.research_summary && <Field label="Research summary" value={brand.research_summary} confidence={conf?.research_summary} />}
               <UnknownsBlock unknowns={brand.unknowns} />
@@ -790,6 +877,8 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
           </details>
         );
       })()}
+      {/* v1.10.1: per-stage status (visible at-a-glance even when dossier is collapsed). */}
+      <ResearchStatusChip raw={brand.research_status_detail} />
     </div>
   );
 }

@@ -15,6 +15,7 @@
 import { complete } from '../llm.js';
 import { tryParseJson } from '../perplexity.js';
 import { buildFeedbackBlock } from '../feedback.js';
+import type { StageResult } from './dossier-verify.js';
 import type { StrategicIntel } from '@shared/types';
 
 export type Stage3BrandInput = {
@@ -95,7 +96,7 @@ function buildOutputSchemaInstruction(): string {
 
 export async function strategicIntelForBrand(
   input: Stage3BrandInput
-): Promise<StrategicIntel | null> {
+): Promise<StageResult<StrategicIntel>> {
   const feedbackBlock = buildFeedbackBlock('brand', input.brandId);
 
   const prompt = `# Brand — verified dossier
@@ -126,13 +127,15 @@ ${buildOutputSchemaInstruction()}`;
     raw = await complete(STRATEGIC_SYSTEM, prompt, {
       model: 'claude-opus-4-7',
       maxTokens: 6000,
+      // v1.10.1: temperature is deprecated on Opus 4.7 — gated in llm.ts.
       temperature: 0.3,
       stage: 'brand_research_strategic',
       relatedId: input.brandId
     });
   } catch (e: any) {
-    console.warn(`[dossier-strategic:brand ${input.brandId}] Opus error: ${String(e?.message || e).slice(0, 300)}`);
-    return null;
+    const err = String(e?.message || e).slice(0, 300);
+    console.warn(`[dossier-strategic:brand ${input.brandId}] Opus error: ${err}`);
+    return { ok: false, error: `Opus API error: ${err}` };
   }
 
   const parsed = tryParseJson<StrategicIntel>(raw);
@@ -140,18 +143,21 @@ ${buildOutputSchemaInstruction()}`;
     const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
     console.warn(`[dossier-strategic:brand ${input.brandId}] unparseable Stage 3 response`);
     console.warn(`  head: ${head}`);
-    return null;
+    return { ok: false, error: 'Unparseable Stage 3 response (check console log for head/tail preview)' };
   }
   return {
-    icp_segments: parsed.icp_segments,
-    buying_cycle_scenarios: parsed.buying_cycle_scenarios || '',
-    competitive_plays: parsed.competitive_plays || ''
+    ok: true,
+    output: {
+      icp_segments: parsed.icp_segments,
+      buying_cycle_scenarios: parsed.buying_cycle_scenarios || '',
+      competitive_plays: parsed.competitive_plays || ''
+    }
   };
 }
 
 export async function strategicIntelForProduct(
   input: Stage3ProductInput
-): Promise<StrategicIntel | null> {
+): Promise<StageResult<StrategicIntel>> {
   const feedbackBlock = buildFeedbackBlock('product', input.productId);
 
   const prompt = `# Brand context
@@ -197,8 +203,9 @@ ${buildOutputSchemaInstruction()}`;
       relatedId: input.productId
     });
   } catch (e: any) {
-    console.warn(`[dossier-strategic:product ${input.productId}] Opus error: ${String(e?.message || e).slice(0, 300)}`);
-    return null;
+    const err = String(e?.message || e).slice(0, 300);
+    console.warn(`[dossier-strategic:product ${input.productId}] Opus error: ${err}`);
+    return { ok: false, error: `Opus API error: ${err}` };
   }
 
   const parsed = tryParseJson<StrategicIntel>(raw);
@@ -206,11 +213,14 @@ ${buildOutputSchemaInstruction()}`;
     const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
     console.warn(`[dossier-strategic:product ${input.productId}] unparseable Stage 3 response`);
     console.warn(`  head: ${head}`);
-    return null;
+    return { ok: false, error: 'Unparseable Stage 3 response (check console log for head/tail preview)' };
   }
   return {
-    icp_segments: parsed.icp_segments,
-    buying_cycle_scenarios: parsed.buying_cycle_scenarios || '',
-    competitive_plays: parsed.competitive_plays || ''
+    ok: true,
+    output: {
+      icp_segments: parsed.icp_segments,
+      buying_cycle_scenarios: parsed.buying_cycle_scenarios || '',
+      competitive_plays: parsed.competitive_plays || ''
+    }
   };
 }

@@ -11,7 +11,21 @@ import {
   strategicIntelForBrand,
   strategicIntelForProduct
 } from './research/dossier-strategic.js';
-import type { Product, Brand, KnowledgeItem } from '@shared/types';
+import type { Product, Brand, KnowledgeItem, ResearchStatusDetail } from '@shared/types';
+
+/**
+ * v1.10.1: track per-stage status so the UI can surface what actually happened.
+ * Returns the JSON-serialisable status object for persistence into the
+ * brands.research_status_detail / products.research_status_detail column.
+ */
+function newStatus(): ResearchStatusDetail {
+  return {
+    stage1: 'pending',
+    stage2: 'pending',
+    stage3: 'pending',
+    last_attempt_at: new Date().toISOString()
+  };
+}
 
 const SYSTEM = `You are a senior B2B competitive-intelligence analyst conducting
 deep web research on a specific product and its brand. You have live search;
@@ -177,10 +191,19 @@ result as JSON matching the schema you've been given.`;
     // side-effect of product research. Use `researchBrand(id)` for that.
 
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
+    // v1.10.1: track per-stage status for UI surfacing.
+    const status = newStatus();
+    status.stage1 = 'completed';
     const settings = getSettings();
-    if (settings.productResearchAdvanced && settings.anthropicApiKey) {
+    if (!settings.productResearchAdvanced) {
+      status.stage2 = 'skipped: productResearchAdvanced toggle is off';
+      status.stage3 = 'skipped: stage2 skipped';
+    } else if (!settings.anthropicApiKey) {
+      status.stage2 = 'skipped: no Anthropic API key configured';
+      status.stage3 = 'skipped: stage2 skipped';
+    } else {
       try {
-        const verified = await verifyProductDossier({
+        const verifiedRes = await verifyProductDossier({
           productId,
           name: product.name,
           stage1: {
@@ -200,7 +223,9 @@ result as JSON matching the schema you've been given.`;
           knowledgeBlob,
           freshFeedback: options.feedback
         });
-        if (verified) {
+        if (verifiedRes.ok) {
+          status.stage2 = 'completed';
+          const verified = verifiedRes.output;
           db.prepare(
             `UPDATE products SET
                description = ?,
@@ -230,7 +255,7 @@ result as JSON matching the schema you've been given.`;
 
           // ─── Stage 3 — Opus strategic intel ─────────────────────
           try {
-            const strategic = await strategicIntelForProduct({
+            const strategicRes = await strategicIntelForProduct({
               productId,
               name: product.name,
               brandName: brand.name,
@@ -240,21 +265,37 @@ result as JSON matching the schema you've been given.`;
                 positioning: brand.positioning
               }
             });
-            if (strategic) {
+            if (strategicRes.ok) {
+              status.stage3 = 'completed';
               db.prepare(
                 "UPDATE products SET strategic_intel = ?, updated_at = datetime('now') WHERE id = ?"
-              ).run(JSON.stringify(strategic), productId);
+              ).run(JSON.stringify(strategicRes.output), productId);
+            } else {
+              status.stage3 = `failed: ${strategicRes.error}`;
+              console.warn(`[researchProduct ${productId}] Stage 3:`, strategicRes.error);
             }
           } catch (e: any) {
-            console.warn(`[researchProduct ${productId}] Stage 3 failed (non-fatal):`, e?.message || e);
+            const msg = String(e?.message || e).slice(0, 300);
+            status.stage3 = `failed: ${msg}`;
+            console.warn(`[researchProduct ${productId}] Stage 3 threw:`, msg);
           }
         } else {
-          console.warn(`[researchProduct ${productId}] Stage 2 returned null — keeping Stage 1 output only`);
+          status.stage2 = `failed: ${verifiedRes.error}`;
+          status.stage3 = 'skipped: stage2 failed';
+          console.warn(`[researchProduct ${productId}] Stage 2:`, verifiedRes.error);
         }
       } catch (e: any) {
-        console.warn(`[researchProduct ${productId}] Stage 2 threw (non-fatal):`, e?.message || e);
+        const msg = String(e?.message || e).slice(0, 300);
+        status.stage2 = `failed: ${msg}`;
+        status.stage3 = 'skipped: stage2 failed';
+        console.warn(`[researchProduct ${productId}] Stage 2 threw:`, msg);
       }
     }
+
+    // Persist per-stage status for UI surfacing.
+    db.prepare(
+      "UPDATE products SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(JSON.stringify(status), productId);
 
     if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
@@ -413,10 +454,19 @@ matching the schema you've been given.`;
     );
 
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
+    // v1.10.1: track per-stage status for UI surfacing.
+    const status = newStatus();
+    status.stage1 = 'completed';
     const settings = getSettings();
-    if (settings.brandResearchAdvanced && settings.anthropicApiKey) {
+    if (!settings.brandResearchAdvanced) {
+      status.stage2 = 'skipped: brandResearchAdvanced toggle is off';
+      status.stage3 = 'skipped: stage2 skipped';
+    } else if (!settings.anthropicApiKey) {
+      status.stage2 = 'skipped: no Anthropic API key configured';
+      status.stage3 = 'skipped: stage2 skipped';
+    } else {
       try {
-        const verified = await verifyBrandDossier({
+        const verifiedRes = await verifyBrandDossier({
           brandId,
           name: brand.name,
           stage1: {
@@ -430,7 +480,9 @@ matching the schema you've been given.`;
           knowledgeBlob,
           freshFeedback: options.feedback
         });
-        if (verified) {
+        if (verifiedRes.ok) {
+          status.stage2 = 'completed';
+          const verified = verifiedRes.output;
           db.prepare(
             `UPDATE brands SET
                category = ?,
@@ -458,26 +510,42 @@ matching the schema you've been given.`;
 
           // ─── Stage 3 — Opus strategic intel ─────────────────────
           try {
-            const strategic = await strategicIntelForBrand({
+            const strategicRes = await strategicIntelForBrand({
               brandId,
               name: brand.name,
               verified: verified.fields
             });
-            if (strategic) {
+            if (strategicRes.ok) {
+              status.stage3 = 'completed';
               db.prepare(
                 "UPDATE brands SET strategic_intel = ?, updated_at = datetime('now') WHERE id = ?"
-              ).run(JSON.stringify(strategic), brandId);
+              ).run(JSON.stringify(strategicRes.output), brandId);
+            } else {
+              status.stage3 = `failed: ${strategicRes.error}`;
+              console.warn(`[researchBrand ${brandId}] Stage 3:`, strategicRes.error);
             }
           } catch (e: any) {
-            console.warn(`[researchBrand ${brandId}] Stage 3 failed (non-fatal):`, e?.message || e);
+            const msg = String(e?.message || e).slice(0, 300);
+            status.stage3 = `failed: ${msg}`;
+            console.warn(`[researchBrand ${brandId}] Stage 3 threw:`, msg);
           }
         } else {
-          console.warn(`[researchBrand ${brandId}] Stage 2 returned null — keeping Stage 1 output only`);
+          status.stage2 = `failed: ${verifiedRes.error}`;
+          status.stage3 = 'skipped: stage2 failed';
+          console.warn(`[researchBrand ${brandId}] Stage 2:`, verifiedRes.error);
         }
       } catch (e: any) {
-        console.warn(`[researchBrand ${brandId}] Stage 2 threw (non-fatal):`, e?.message || e);
+        const msg = String(e?.message || e).slice(0, 300);
+        status.stage2 = `failed: ${msg}`;
+        status.stage3 = 'skipped: stage2 failed';
+        console.warn(`[researchBrand ${brandId}] Stage 2 threw:`, msg);
       }
     }
+
+    // Persist per-stage status for UI surfacing.
+    db.prepare(
+      "UPDATE brands SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(JSON.stringify(status), brandId);
 
     if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 

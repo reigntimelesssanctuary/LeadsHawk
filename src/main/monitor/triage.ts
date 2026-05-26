@@ -3,6 +3,7 @@ import { getSettings } from '../settings.js';
 import { getDb } from '../db.js';
 import { recordApiCall } from '../spend.js';
 import { buildDisqualificationsBlock } from '../learning.js';
+import { modelSupportsTemperature } from '../llm.js';
 import type { Brand, Product, SignalItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales analyst. You will be given ONE news /
@@ -89,13 +90,17 @@ Lean conservative — "strong" should only fire when the fit is clearly real
 and concrete. "weak" means topical but a stretch. "rejected" means clearly
 unrelated or noise.`;
 
-  const resp = await c.messages.create({
+  // v1.10.1: skip `temperature` on Claude Opus 4.7 (deprecated by Anthropic).
+  const req: Anthropic.MessageCreateParamsNonStreaming = {
     model: modelId,
     max_tokens: 250,
-    temperature: 0.1,
     system: SYSTEM,
     messages: [{ role: 'user', content: prompt }]
-  });
+  };
+  if (modelSupportsTemperature(modelId)) {
+    req.temperature = 0.1;
+  }
+  const resp = await c.messages.create(req);
   recordApiCall({
     provider: 'anthropic',
     model: modelId,

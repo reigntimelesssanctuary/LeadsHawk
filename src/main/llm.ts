@@ -11,6 +11,22 @@ export function getClient(): Anthropic {
   return new Anthropic({ apiKey: anthropicApiKey });
 }
 
+/**
+ * v1.10.1: Anthropic deprecated the `temperature` parameter for Claude Opus
+ * 4.7 — passing it returns HTTP 400 `temperature is deprecated for this
+ * model`. Future 4.7+ models may follow. Gate by an explicit known-deprecated
+ * allowlist rather than guessing; add IDs here as Anthropic updates.
+ *
+ * Exported for smoke testing — kept simple (pure function) so the smoke
+ * suite can inline a byte-identical copy per the existing convention.
+ */
+export function modelSupportsTemperature(modelId: string): boolean {
+  const TEMPERATURE_DEPRECATED: RegExp[] = [
+    /^claude-opus-4-7/i
+  ];
+  return !TEMPERATURE_DEPRECATED.some((re) => re.test(modelId));
+}
+
 type CompleteOpts = {
   maxTokens?: number;
   temperature?: number;
@@ -32,13 +48,18 @@ export async function complete(
   const client = getClient();
   const { model } = getSettings();
   const modelId = opts.model || model || 'claude-opus-4-7';
-  const resp = await client.messages.create({
+  // v1.10.1: Anthropic deprecated `temperature` on Opus 4.7. Only set it
+  // for models where it's still supported.
+  const req: Anthropic.MessageCreateParamsNonStreaming = {
     model: modelId,
     max_tokens: opts.maxTokens ?? 2000,
-    temperature: opts.temperature ?? 0.2,
     system,
     messages: [{ role: 'user', content: prompt }]
-  });
+  };
+  if (modelSupportsTemperature(modelId)) {
+    req.temperature = opts.temperature ?? 0.2;
+  }
+  const resp = await client.messages.create(req);
   recordApiCall({
     provider: 'anthropic',
     model: modelId,
