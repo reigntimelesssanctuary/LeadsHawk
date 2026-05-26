@@ -20,7 +20,9 @@ export type LlmStage =
   | 'brand_summary'      // Perplexity, 150-word brand rollup (legacy; phased out by brand_research)
   | 'refresh_signals'    // Perplexity sonar-pro, signals-only refresh
   | 'manual_scan'        // Perplexity sonar-pro, Pass 1 + Pass 2 (cheap cron)
-  | 'deep_scan'          // Perplexity sonar-deep-research, twice-daily heavy cron
+  | 'deep_scan'          // Perplexity sonar-deep-research, single-stage deep scan (v1.8.x fallback)
+  | 'deep_scan_discovery'// v1.9: Perplexity sonar-deep-research, Stage 1 of two-stage deep scan
+  | 'deep_scan_qualify'  // v1.9: Anthropic Sonnet, Stage 2 of two-stage deep scan
   | 'triage'             // Anthropic Sonnet, live-monitor stage 3
   | 'qualify'            // Perplexity sonar-pro, live-monitor stage 4
   | 'brief'              // Anthropic Opus, sales-brief generation

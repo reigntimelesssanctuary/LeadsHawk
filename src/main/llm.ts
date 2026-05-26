@@ -16,6 +16,12 @@ type CompleteOpts = {
   temperature?: number;
   stage?: LlmStage;
   relatedId?: number | null;
+  /**
+   * v1.9: optional model override so callers (e.g. the two-stage deep
+   * scan's qualifier) can pick a Claude model independent of the
+   * user's brief-generation default in Settings.
+   */
+  model?: string;
 };
 
 export async function complete(
@@ -25,7 +31,7 @@ export async function complete(
 ): Promise<string> {
   const client = getClient();
   const { model } = getSettings();
-  const modelId = model || 'claude-opus-4-7';
+  const modelId = opts.model || model || 'claude-opus-4-7';
   const resp = await client.messages.create({
     model: modelId,
     max_tokens: opts.maxTokens ?? 2000,

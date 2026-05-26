@@ -107,7 +107,7 @@ NON-NEGOTIABLES:
 Reasoning may be extensive — it counts against your output budget — but
 research and JSON output are mandatory.`;
 
-type PplxOpportunity = {
+export type PplxOpportunity = {
   company: string;
   industry: string;
   country: string | null;
@@ -123,7 +123,7 @@ type PplxOpportunity = {
   confidence: number;
 };
 
-const OPPS_SCHEMA = {
+export const OPPS_SCHEMA = {
   type: 'object',
   required: ['opportunities'],
   properties: {
@@ -549,7 +549,7 @@ brand/product names that appear in our portfolio.`;
  * Idempotent on (product_id, source_url): if a cross-match for the same
  * url+product already exists, it's skipped.
  */
-async function crossMatchRecent(
+export async function crossMatchRecent(
   originalProductId: number,
   scanProducts: Product[],
   allBrands: Brand[],
@@ -641,15 +641,19 @@ async function crossMatchRecent(
 }
 
 /**
- * Thin wrapper around runScan that uses Perplexity's heavy deep-research
- * model. Designed for a low-frequency cron (default twice daily) so the
- * higher per-call cost is amortized across discovery quality.
+ * Top-level deep-scan entrypoint. Routes to either the v1.9.0 two-stage
+ * orchestrator (Perplexity discovery → Claude qualify) or the v1.8.7
+ * monolithic single-call path, depending on `settings.deepScanTwoStage`.
  *
- * The token budget is roughly 2× the regular scan because deep-research
- * generates longer reasoning before its final answer.
+ * The single-stage path remains for safety: if the two-stage path ever
+ * underperforms in real use, the user can flip it off in Settings and
+ * revert instantly. Do not remove the fallback until v1.10 at earliest.
  */
 export async function runDeepScan(): Promise<{ runId: number; created: number; scanned: number }> {
   const settings = getSettings();
+  if (settings.deepScanTwoStage) {
+    return runDeepScanTwoStage();
+  }
   return runScan({
     model: settings.deepScanModel || 'sonar-deep-research',
     stage: 'deep_scan',
@@ -659,9 +663,141 @@ export async function runDeepScan(): Promise<{ runId: number; created: number; s
     // 10-15K tokens just thinking — without enough headroom, the model
     // runs out before producing JSON and we get an unparseable response.
     maxTokens: 24000,
-    label: '== Deep Research scan ==',
+    label: '== Deep Research scan (single-stage fallback) ==',
     skipCustomTopics: true   // v1.7.5: deep scan focuses on per-product Pass 1 only
   });
+}
+
+/**
+ * v1.9.0 — two-stage deep scan orchestrator.
+ *
+ *   Stage 1 (Perplexity sonar-deep-research, loose schema)
+ *     casts a wide net of named-company candidates with citations.
+ *   Stage 2 (Claude Sonnet, structured schema, no web search)
+ *     filters / scores / dedupes against ICP + scan rules + own brands +
+ *     past disqualifications + pipeline, and emits full opportunity records.
+ *
+ * Reuses the existing v1.8.4-hardened insertCandidates path for persistence
+ * (URL hygiene, brand-self post-filter, confidence threshold, NOT-NULL
+ * coercion all still apply), and cross-match still runs after Stage 2
+ * inserts to preserve v1.7.0's bidirectional matching.
+ */
+export async function runDeepScanTwoStage(): Promise<{ runId: number; created: number; scanned: number }> {
+  const { stage1Discovery } = await import('./scanner/stage1-discovery.js');
+  const { stage2Qualify } = await import('./scanner/stage2-qualify.js');
+  const db = getDb();
+  const startStmt = db.prepare("INSERT INTO scan_runs(status, kind) VALUES ('running', ?)");
+  const runId = Number(startStmt.run('deep').lastInsertRowid);
+  const logLines: string[] = [];
+  const log: ScanLog = (line) => {
+    logLines.push(`[${new Date().toISOString()}] ${line}`);
+  };
+  log('== Deep Research scan (two-stage v1.9) ==');
+
+  let created = 0;
+  let scanned = 0;
+  try {
+    const settings = getSettings();
+    if (!settings.perplexityApiKey) {
+      throw new Error('Perplexity API key not configured. Open Settings and paste your key.');
+    }
+    if (!settings.anthropicApiKey) {
+      throw new Error('Anthropic API key not configured (needed for the two-stage deep scan qualifier). Open Settings and paste your key, or uncheck "Two-stage deep scan" to fall back to single-call mode.');
+    }
+    log(`engine: discovery=${settings.deepScanModel || 'sonar-deep-research'} qualify=${settings.triageModel || 'claude-sonnet-4-6'}`);
+
+    const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
+    const allProducts = db.prepare('SELECT * FROM products').all() as Product[];
+    const enabledBrandIds = new Set(
+      brands.filter((b) => b.scan_enabled === 1).map((b) => b.id)
+    );
+    const scanProducts = allProducts.filter(
+      (p) =>
+        p.research_status === 'ready' &&
+        p.scan_enabled === 1 &&
+        enabledBrandIds.has(p.brand_id) &&
+        p.signals &&
+        p.signals.trim().length > 0
+    );
+
+    if (scanProducts.length === 0) {
+      throw new Error(
+        'No products are ready to scan. Run research on at least one product, and make sure both the product and its brand are included in scans (Scan Jobs tab → Scan inclusion).'
+      );
+    }
+
+    const seenStmt = db.prepare('SELECT 1 FROM seen_urls WHERE url = ?');
+    const insertSeen = db.prepare('INSERT OR IGNORE INTO seen_urls(url) VALUES (?)');
+    const insertOpp = db.prepare(`
+      INSERT INTO opportunities(
+        brand_id, product_id, company, industry, country, headline, source_url, source_title,
+        source_published_at, confidence, status, background, use_case, angle,
+        signal_summary, raw_signal
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+    `);
+
+    for (const product of scanProducts) {
+      const brand = brands.find((b) => b.id === product.brand_id);
+      if (!brand) continue;
+      log(`Product scan (two-stage): ${brand.name} / ${product.name}`);
+
+      // ── Stage 1 — Perplexity discovery ───────────────────────────
+      let stage1;
+      try {
+        stage1 = await stage1Discovery(brand, product, settings, log);
+      } catch (e: any) {
+        log(`  ! Stage 1 error: ${String(e?.message || e).slice(0, 300)}`);
+        continue;
+      }
+      log(`  Stage 1: ${stage1.candidates.length} raw candidates, ${stage1.citations.length} citations`);
+      if (stage1.candidates.length === 0) {
+        log('  → 0 raw candidates from discovery — nothing to qualify');
+        continue;
+      }
+
+      // ── Stage 2 — Claude qualify ─────────────────────────────────
+      const stage2 = await stage2Qualify(stage1, brand, product, settings, log, brands);
+      log(`  Stage 2: ${stage2.opportunities.length} qualified, ${stage2.rejected.length} rejected`);
+
+      // ── Persist via the v1.8.4-hardened insertCandidates ─────────
+      const inserted = insertCandidates(
+        stage2.opportunities,
+        {
+          brand,
+          product,
+          sourceLabel: `auto:${product.name}`,
+          brands,
+          citations: stage1.citations
+        },
+        { settings, seenStmt, insertSeen, insertOpp, log }
+      );
+      created += inserted;
+      scanned += stage1.candidates.length;
+
+      // v1.7: cross-match still runs after Stage 2 inserts.
+      if (inserted > 0 && settings.crossMatchEnabled) {
+        const xmCount = await crossMatchRecent(product.id, scanProducts, brands, log);
+        created += xmCount;
+      }
+    }
+
+    db.prepare(
+      `UPDATE scan_runs SET finished_at = datetime('now'), status = 'completed',
+       items_scanned = ?, opportunities_created = ?, log = ? WHERE id = ?`
+    ).run(scanned, created, logLines.join('\n'), runId);
+  } catch (e: any) {
+    log(`FATAL: ${e.message || e}`);
+    db.prepare(
+      `UPDATE scan_runs SET finished_at = datetime('now'), status = 'error',
+       items_scanned = ?, opportunities_created = ?, log = ? WHERE id = ?`
+    ).run(scanned, created, logLines.join('\n'), runId);
+    throw e;
+  }
+
+  db.prepare(
+    `UPDATE scan_jobs SET last_run_at = datetime('now'), last_status = 'completed', last_results = ?`
+  ).run(created);
+  return { runId, created, scanned };
 }
 
 const OPPS_SCHEMA_CUSTOM = {
@@ -718,7 +854,7 @@ ${ps
     .slice(0, 20_000);
 }
 
-type InsertCtx = {
+export type InsertCtx = {
   settings: ReturnType<typeof getSettings>;
   seenStmt: any;
   insertSeen: any;
@@ -726,7 +862,7 @@ type InsertCtx = {
   log: ScanLog;
 };
 
-function insertCandidates(
+export function insertCandidates(
   candidates: PplxOpportunity[],
   attrib: { brand: Brand | null; product: Product | null; sourceLabel: string; brands: Brand[]; citations: string[] },
   ctx: InsertCtx

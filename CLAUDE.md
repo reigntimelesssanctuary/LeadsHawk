@@ -594,7 +594,10 @@ test or the production code, don't skip.
 | Feature | API | Default model | Why |
 |---|---|---|---|
 | Product *Run research* | **Perplexity** | `sonar-deep-research` | Multi-step, live web search; cites sources |
-| Autonomous scan jobs | **Perplexity** | `sonar-pro` | One call per researched product, anchored to that product's own auto-derived signals (no manual signal configuration required) |
+| Autonomous scan jobs (manual / hourly) | **Perplexity** | `sonar-pro` | One call per researched product, anchored to that product's own auto-derived signals (no manual signal configuration required) |
+| Deep scan — Stage 1 (discovery) | **Perplexity** | `sonar-deep-research` | v1.9: casts a wide net of named-company candidates with citations. Loose schema. No filtering. |
+| Deep scan — Stage 2 (qualify) | **Anthropic Claude** | `claude-sonnet-4-6` | v1.9: applies ICP fit, scan rules, brand-self hygiene, pipeline dedupe, confidence. No web search. |
+| Deep scan (single-stage fallback) | **Perplexity** | `sonar-deep-research` | v1.8.7 monolithic path. Still routed via `settings.deepScanTwoStage=false`. Kept as safety net through at least v1.9.x. |
 | Brand competitive summary roll-up | **Perplexity** | `sonar-deep-research` | Shares context with research |
 | Sales brief (*Generate brief*) | **Anthropic Claude** | `claude-opus-4-7` | Pure writing task, no research needed |
 
@@ -609,6 +612,27 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 **v1.1.2 (2026-05-23):** Custom app icon — gold circuit-pattern hawk on black. Source at `build/icon.png` (1254×1254), compiled to `build/icon.icns` and wired into `package.json > build.mac.icon` so electron-builder bakes it into the bundle and DMG. Sidebar version string bumped from v1.0.0 → v1.1.2.
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
+
+**v1.9.0 (2026-05-27):** Two-stage deep scan. The v1.8.x deep scan was technically robust (no timeouts, no parse failures, no crashes) but Run #21 showed both products doing real research (48-50 citations, 15K completion tokens each) and returning 0 candidates each — Perplexity surfaced educational / generic content instead of specific named-company buying events. Stacking research + scoring + ICP fit + schema strictness + brand-self hygiene + scan rules into ONE model pushed it toward safe-and-empty.
+
+Architecture (only `runDeepScan` changes; manual scan / Live Monitor / research untouched):
+
+- **Stage 1 — Perplexity discovery** (`src/main/scanner/stage1-discovery.ts`).
+  `sonar-deep-research`, 24k token budget, loose schema (only `company`, `event`, `source_url` required). Open prompt: cast a wide net of 15-30 named-company candidates with citations. No scoring, no filtering, no ICP. New `'deep_scan_discovery'` LlmStage; added to `SEARCH_REQUIRED_STAGES` so a 0-citation response triggers the v1.8.7 retry.
+- **Stage 2 — Claude qualify** (`src/main/scanner/stage2-qualify.ts`).
+  `claude-sonnet-4-6` (override via `settings.triageModel`), 6k token budget. Receives Stage 1's candidate list plus full brand+product dossier, target ICP, hard constraints (include/exclude rules), brand-self hygiene, recent disqualifications, and a list of companies already in the pipeline for this product in the last 30 days. Returns `{ opportunities: PplxOpportunity[], rejected: { company, reason }[] }`. Sonnet does no web search — works only on what Stage 1 surfaced; if a candidate is too thin to judge, it's dropped as unqualified rather than guessed at. New `'deep_scan_qualify'` LlmStage; deliberately NOT in `SEARCH_REQUIRED_STAGES` (no search expected).
+- **Orchestrator**: `runDeepScanTwoStage()` in `scanner.ts` iterates scan-enabled products, runs Stage 1 → Stage 2 per product, and persists via the existing v1.8.4 `insertCandidates` path so URL hygiene + brand-self post-filter + confidence threshold + NOT NULL coercion all still apply. Cross-match (v1.7.0) still fires after Stage 2 inserts. `runDeepScan()` now routes by `settings.deepScanTwoStage` (default true); unchecking flips back to the v1.8.7 monolithic path as a safety net.
+
+Settings:
+- New `deepScanTwoStage: boolean` (default `true`) on the Deep Research Scan card with a help blurb. Uncheck reverts instantly to single-call mode.
+
+Smoke tests grew 30 → 32:
+- `shouldRetryResponse: deep_scan_discovery + 0 citations → retry`
+- `shouldRetryResponse: deep_scan_qualify + 0 citations → keep` (no search expected)
+
+`scanner.ts` exports `ScanLog`, `OPPS_SCHEMA`, `PplxOpportunity`, `insertCandidates`, `crossMatchRecent`, `InsertCtx` so the new stage modules can reuse them without duplication. `llm.ts complete()` accepts an optional `model` override so Stage 2 can pick Sonnet independently of the user's brief-generation default.
+
+Cost: per-product per deep scan is ~$0.25-0.35 (Stage 1 ~$0.20-0.30 sonar-deep-research, Stage 2 ~$0.045 Sonnet) — roughly the same as v1.8.7's ~$0.20-0.40 monolithic call. For a 3-product portfolio twice daily, ~$1.50-2.10/day.
 
 **v1.8.7 (2026-05-25):** Fix model lazy-refusal in deep scan + 7 new smoke tests.
 
@@ -985,14 +1009,8 @@ These came directly from the original request:
 
 ## 10a. Pending architectural work
 
-- **v1.9.0 — two-stage deep scan.** Spec'd in `docs/v1.9.0-two-stage-deep-scan.md`.
-  Splits `runDeepScan` into a Perplexity-led discovery pass + a Claude-led
-  qualification pass. Originated by the user after Run #21 (2026-05-25)
-  showed the monolithic deep scan researching well but surfacing zero
-  candidates because of over-constrained prompt. Spec includes full
-  prompt text, schemas, file inventory, cost analysis, implementation
-  order, smoke-test cases, and verification checklist. Should be the next
-  release after v1.8.7. Read the spec end-to-end before starting.
+- (Empty — v1.9.0 two-stage deep scan shipped 2026-05-27. The spec at
+  `docs/v1.9.0-two-stage-deep-scan.md` is preserved for historical reference.)
 
 ## 11. Live links
 

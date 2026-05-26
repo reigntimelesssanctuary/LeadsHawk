@@ -104,7 +104,7 @@ function shouldRetryResponse(r, opts) {
   }
   const SEARCH_REQUIRED_STAGES = new Set([
     'research', 'brand_research', 'brand_summary', 'refresh_signals',
-    'manual_scan', 'deep_scan', 'qualify'
+    'manual_scan', 'deep_scan', 'deep_scan_discovery', 'qualify'
   ]);
   if (opts.stage && SEARCH_REQUIRED_STAGES.has(opts.stage) && r.citations.length === 0) {
     const ct = Number(r.usage?.completion_tokens ?? 0);
@@ -298,6 +298,29 @@ test('no stage provided → no retry on 0 citations (be conservative)', () => {
     citations: []
   };
   eq(shouldRetryResponse(r, {}), null);
+});
+test('v1.9: deep_scan_discovery + 0 citations → RETRY (search required)', () => {
+  // Stage 1 of the two-stage deep scan goes through Perplexity and MUST
+  // search the web. Zero citations means lazy refusal — retry.
+  const r = {
+    text: '{"candidates": []}',
+    usage: { completion_tokens: 10 },
+    citations: []
+  };
+  truthy(shouldRetryResponse(r, { stage: 'deep_scan_discovery' }));
+});
+test('v1.9: deep_scan_qualify + 0 citations → keep (Claude, no search expected)', () => {
+  // Stage 2 of the two-stage deep scan goes through Claude (no web
+  // search). It legitimately has 0 citations because it works only on
+  // the candidate list Stage 1 surfaced. Note: deep_scan_qualify never
+  // calls completePerplexity in production — this is a belt-and-braces
+  // check that even if it were misrouted, no retry would fire.
+  const r = {
+    text: '{"opportunities":[],"rejected":[]}',
+    usage: { completion_tokens: 200 },
+    citations: []
+  };
+  eq(shouldRetryResponse(r, { stage: 'deep_scan_qualify' }), null);
 });
 
 console.log('\n[cleanUrl + pickBestSourceUrl]');

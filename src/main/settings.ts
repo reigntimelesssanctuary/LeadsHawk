@@ -16,6 +16,9 @@ const defaults: Settings = {
   deepScanCron: '0 9,21 * * *',
   deepScanEnabled: false,
   deepScanModel: 'sonar-deep-research',
+  // v1.9: two-stage deep scan ON by default; uncheck in Settings to revert
+  // to the v1.8.7 monolithic single-call path.
+  deepScanTwoStage: true,
   minConfidence: 0.55,
   maxItemsPerScan: 30,
   liveMonitoringEnabled: false,
@@ -41,6 +44,7 @@ export function getSettings(): Settings {
     deepScanCron: (store as any).get('deepScanCron') as string,
     deepScanEnabled: (store as any).get('deepScanEnabled') as boolean,
     deepScanModel: (store as any).get('deepScanModel') as string,
+    deepScanTwoStage: (store as any).get('deepScanTwoStage') as boolean,
     minConfidence: (store as any).get('minConfidence') as number,
     maxItemsPerScan: (store as any).get('maxItemsPerScan') as number,
     liveMonitoringEnabled: (store as any).get('liveMonitoringEnabled') as boolean,

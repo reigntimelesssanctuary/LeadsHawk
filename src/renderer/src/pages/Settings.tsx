@@ -3,9 +3,13 @@ import type { Settings as Sett, SpendSummary } from '../../../shared/types';
 
 const STAGE_LABELS: Record<string, string> = {
   research: 'Product research',
+  brand_research: 'Brand research',
   brand_summary: 'Brand summary',
   refresh_signals: 'Refresh signals',
   manual_scan: 'Manual scan',
+  deep_scan: 'Deep scan (single-stage)',
+  deep_scan_discovery: 'Deep scan — Stage 1 discovery',
+  deep_scan_qualify: 'Deep scan — Stage 2 qualify',
   triage: 'Live Monitor — triage',
   qualify: 'Live Monitor — qualify',
   brief: 'Sales brief',
@@ -215,6 +219,19 @@ export function Settings() {
             onChange={(e) => setS({ ...s, deepScanEnabled: e.target.checked })}
           /> Enable deep research scans on schedule
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 6 }}>
+          <input
+            type="checkbox"
+            checked={s.deepScanTwoStage}
+            onChange={(e) => setS({ ...s, deepScanTwoStage: e.target.checked })}
+          /> Use two-stage deep scan (recommended)
+        </label>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          Splits the call into Perplexity-led discovery (wide net of named
+          companies + citations) and Claude-led qualification (ICP fit, scan
+          rules, dedupe, confidence). Better leads at roughly the same cost.
+          Uncheck to fall back to the v1.8 monolithic single-call path.
+        </div>
         <label className="label">Cron expression</label>
         <input
           className="input"

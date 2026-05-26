@@ -159,6 +159,10 @@ export type Settings = {
   deepScanCron: string;
   deepScanEnabled: boolean;
   deepScanModel: string;
+  // v1.9: when true, runDeepScan() splits the call into Perplexity-led
+  // discovery (Stage 1) + Claude-led qualification (Stage 2). When false,
+  // falls back to the v1.8.7 monolithic single-call path.
+  deepScanTwoStage: boolean;
   minConfidence: number;
   maxItemsPerScan: number;
   // Live monitor

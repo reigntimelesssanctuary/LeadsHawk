@@ -225,7 +225,7 @@ function shouldRetryResponse<T>(r: PplxResponse<T>, opts: PplxOptions): string |
   //    citations, so they're excluded here.
   const SEARCH_REQUIRED_STAGES = new Set([
     'research', 'brand_research', 'brand_summary', 'refresh_signals',
-    'manual_scan', 'deep_scan', 'qualify'
+    'manual_scan', 'deep_scan', 'deep_scan_discovery', 'qualify'
   ]);
   if (opts.stage && SEARCH_REQUIRED_STAGES.has(opts.stage) && r.citations.length === 0) {
     const ct = Number(r.usage?.completion_tokens ?? 0);
