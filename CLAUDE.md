@@ -613,6 +613,18 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.9.3 (2026-05-27):** Signal-research parsing hardened. v1.9.2's `researchBrandSignals` and `researchProductSignals` consistently failed against `sonar-pro` with *"Perplexity returned an unparseable signals response. Try again."* — the new prescriptive SYSTEM prompt (with GOOD/BAD signal examples) was making the model emit bullets as raw text instead of in the JSON wrapper.
+
+Five defensive fixes in `src/main/signal-research.ts`:
+
+1. **Simplified SYSTEM prompt** back to the v1.8.x form (`"You are a senior B2B competitive-intelligence analyst. You produce sharp, concrete buying-signal lists."`) plus a one-sentence reminder to return strict JSON. Quality guidance now lives only in the schema field description.
+2. **`extractSignalsField`** — shape-tolerant: accepts `signals`, `signal`, `bullets`, `signal_list`, `signals_list`, `buying_signals` keys, AND coerces array values to bulleted strings.
+3. **`extractBulletsFromText`** — fallback that pulls markdown bullets out of raw response text when JSON parsing fails entirely. Normalizes `•` and `*` markers to `-`.
+4. **One retry on parse failure** — pause 2s, try again. Diagnostic head/tail preview logged to main-process console on each failed attempt so future failures are inspectable.
+5. **maxTokens bumped 1500 → 2500** — brand-level signal lists were tight against the old ceiling.
+
+Smoke tests grew 37 → 46. 9 new tests cover `extractSignalsField` (canonical, array coercion, key variants, empty/null edge cases) and `extractBulletsFromText` (markdown extraction, bullet-marker normalization, no-bullets returns null).
+
 **v1.9.2 (2026-05-27):** Signal research decoupled into its own job.
 
 Previously, `brands.signals` and `products.signals` were side-effects of dossier research — every time you re-ran research on a product, the entire dossier (including signals) was regenerated, even if all you wanted was a fresh signal list. Conversely, there was no way to iterate on signals with reviewer feedback without paying for full re-research.

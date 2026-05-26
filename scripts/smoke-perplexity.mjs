@@ -114,6 +114,41 @@ function shouldRetryResponse(r, opts) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPIES from src/main/signal-research.ts (v1.9.3)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function extractSignalsField(json) {
+  if (!json || typeof json !== 'object') return null;
+  const candidateKeys = ['signals', 'signal', 'bullets', 'signal_list', 'signals_list', 'buying_signals'];
+  for (const key of candidateKeys) {
+    const v = json[key];
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+    if (Array.isArray(v)) {
+      const strings = v
+        .filter((x) => typeof x === 'string')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (strings.length === 0) continue;
+      return strings.map((s) => (/^[-•*]\s+/.test(s) ? s : `- ${s}`)).join('\n');
+    }
+  }
+  return null;
+}
+
+function extractBulletsFromText(text) {
+  if (!text) return null;
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^[-•*]\s+\S/.test(l));
+  if (lines.length === 0) return null;
+  return lines.map((l) => l.replace(/^[•*]\s+/, '- ')).join('\n');
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/feedback.ts (v1.9.2)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -409,6 +444,40 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[signal-research — v1.9.3 shape-tolerant parsing]');
+test('extractSignalsField pulls canonical { signals: "..." }', () => {
+  eq(extractSignalsField({ signals: '- a\n- b' }), '- a\n- b');
+});
+test('extractSignalsField coerces array signals to bullets', () => {
+  eq(extractSignalsField({ signals: ['a', 'b'] }), '- a\n- b');
+});
+test('extractSignalsField accepts variant key names (bullets)', () => {
+  eq(extractSignalsField({ bullets: '- one\n- two' }), '- one\n- two');
+});
+test('extractSignalsField accepts variant key names (signal singular)', () => {
+  eq(extractSignalsField({ signal: '- x' }), '- x');
+});
+test('extractSignalsField returns null when no usable shape', () => {
+  eq(extractSignalsField({ description: 'no signals here' }), null);
+  eq(extractSignalsField(null), null);
+  eq(extractSignalsField('a string'), null);
+});
+test('extractSignalsField skips empty string and empty array', () => {
+  eq(extractSignalsField({ signals: '   ' }), null);
+  eq(extractSignalsField({ signals: [] }), null);
+});
+test('extractBulletsFromText pulls markdown bullets out of raw text', () => {
+  const text = 'Here are the signals:\n- alpha\n- beta\nThanks!';
+  eq(extractBulletsFromText(text), '- alpha\n- beta');
+});
+test('extractBulletsFromText normalizes • and * bullets to -', () => {
+  eq(extractBulletsFromText('• one\n* two\n- three'), '- one\n- two\n- three');
+});
+test('extractBulletsFromText returns null when no bullets present', () => {
+  eq(extractBulletsFromText('just prose, no bullets'), null);
+  eq(extractBulletsFromText(''), null);
 });
 
 console.log('\n[feedback — v1.9.2]');
