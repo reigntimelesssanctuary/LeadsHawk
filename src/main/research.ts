@@ -46,7 +46,7 @@ const RESEARCH_SCHEMA = {
     use_cases: { type: 'string', description: 'Markdown bulleted list of high-fit customer situations (lines starting with -)' },
     competitors: { type: 'string', description: 'Markdown bulleted list. Each line: "Competitor — short positioning"' },
     differentiators: { type: 'string', description: 'Markdown bulleted list of this product\'s unique angles vs competitors' },
-    signals: { type: 'string', description: 'Markdown bulleted list of concrete news/event signals that indicate a buying opportunity' },
+    signals: { type: 'string', description: 'Markdown bulleted list of concrete news/event signals that indicate a buying opportunity for this product. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones.' },
     research_summary: { type: 'string', description: '300-500 word holistic narrative tying the above together' },
     recommended_scan_recency: {
       type: 'string',
@@ -192,7 +192,7 @@ export async function refreshProductSignals(productId: number): Promise<Product>
       signals: {
         type: 'string',
         description:
-          "Markdown bulleted list of concrete news/event signals (lines starting with '- ') that indicate a buying opportunity for this product."
+          "Markdown bulleted list of concrete news/event signals (lines starting with '- ') that indicate a buying opportunity for this product. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones."
       }
     }
   };
@@ -292,7 +292,7 @@ const BRAND_RESEARCH_SCHEMA = {
     positioning: { type: 'string', description: 'How this brand positions itself in market — its core promise / wedge / differentiation in 2-4 sentences.' },
     target_icp: { type: 'string', description: 'The brand\'s ideal customer profile (ICP). Be specific about company size, sector, geography, maturity stage, and the buying-team persona who typically initiates the deal.' },
     competitive_summary: { type: 'string', description: 'Tight 150-200 word competitive narrative — where the brand wins, where it\'s vulnerable, who the main alternatives are.' },
-    signals: { type: 'string', description: 'Markdown bulleted list of brand-LEVEL buying signals — events that indicate ANY of this brand\'s products may be needed (e.g. for a workspace-design brand: "company announces APAC HQ expansion", "lease renewal due", "post-acquisition consolidation"). Distinct from product-specific signals. 5-10 bullets.' },
+    signals: { type: 'string', description: 'Markdown bulleted list of brand-LEVEL buying signals — events that indicate ANY of this brand\'s products may be needed (e.g. for a workspace-design brand: "company announces APAC HQ expansion", "lease renewal due", "post-acquisition consolidation"). Distinct from product-specific signals. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones.' },
     research_summary: { type: 'string', description: '400-600 word narrative tying positioning + ICP + signals + market context together. The single most useful paragraph a salesperson new to this brand could read.' },
     recommended_scan_recency: {
       type: 'string',

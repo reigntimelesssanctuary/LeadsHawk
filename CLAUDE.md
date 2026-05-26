@@ -613,6 +613,19 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.9.1 (2026-05-27):** Widen signal-count range in research schemas.
+
+User noticed every researched brand was landing at exactly 10 brand-level signals — that came from the `BRAND_RESEARCH_SCHEMA.signals` description in `research.ts` saying `"5-10 bullets."`. The model was honouring the upper bound. The product-level signals schema had no count hint and was converging at ~10 by LLM default.
+
+Three schema-description rewrites in `src/main/research.ts`:
+- `RESEARCH_SCHEMA.signals` (product research)
+- `BRAND_RESEARCH_SCHEMA.signals` (brand research)
+- `SIGNALS_SCHEMA.signals` (cheap refresh-signals call)
+
+All three now say: *"List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones."*
+
+No DB / runtime change — `brands.signals` and `products.signals` are free-text Markdown columns with no count constraint, so the "10" was purely a prompt artefact. Existing stored signals are untouched; next time the user clicks **Run Brand Research / Run research / Refresh signals**, the new wider range takes effect.
+
 **v1.9.0 (2026-05-27):** Two-stage deep scan. The v1.8.x deep scan was technically robust (no timeouts, no parse failures, no crashes) but Run #21 showed both products doing real research (48-50 citations, 15K completion tokens each) and returning 0 candidates each — Perplexity surfaced educational / generic content instead of specific named-company buying events. Stacking research + scoring + ICP fit + schema strictness + brand-self hygiene + scan rules into ONE model pushed it toward safe-and-empty.
 
 Architecture (only `runDeepScan` changes; manual scan / Live Monitor / research untouched):
