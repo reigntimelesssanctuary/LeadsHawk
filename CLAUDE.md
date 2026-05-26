@@ -613,6 +613,21 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.9.4 (2026-05-27):** Drop `response_format: json_schema` for signal research entirely.
+
+v1.9.3's shape-tolerant parsing + retry didn't fix the bug. Failures came back with *"twice in a row"* in the error message — meaning both attempts produced responses that neither `extractSignalsField` nor `extractBulletsFromText` could parse. Diagnosis: `sonar-pro` + sync `/chat/completions` + `response_format: json_schema` mode appears to return empty or near-empty content payloads for this prompt shape. (Why it works for `sonar-deep-research` via the async endpoint, but not for sonar-pro via sync: unknown — likely a Perplexity-side schema-enforcement quirk.)
+
+Fix in `src/main/signal-research.ts`:
+
+- **Drop `jsonSchema` from both `callWithRetry` invocations.** No `response_format` header sent.
+- **SYSTEM prompt rewritten** to ask explicitly for a markdown bulleted list with no preamble/commentary.
+- **Per-call prompt** ends with explicit `Output format:` instructions repeating the bullets-only requirement, plus inline quality-guidance examples (since the schema description that previously carried this no longer reaches the model).
+- **Extractor order reversed.** `extractBulletsFromText` is the primary path now; the JSON-field extractor runs as a fallback in case the model wraps its output anyway. Both helpers + retry + diagnostic logging from v1.9.3 are unchanged.
+
+Signals are inherently a markdown bullet list — the JSON wrapper was always overhead, and apparently unreliable overhead at that. This is the cleaner architecture.
+
+Smoke tests unchanged at 46 (the extractor helpers and their tests didn't change). Manual launch + verification deferred to user.
+
 **v1.9.3 (2026-05-27):** Signal-research parsing hardened. v1.9.2's `researchBrandSignals` and `researchProductSignals` consistently failed against `sonar-pro` with *"Perplexity returned an unparseable signals response. Try again."* — the new prescriptive SYSTEM prompt (with GOOD/BAD signal examples) was making the model emit bullets as raw text instead of in the JSON wrapper.
 
 Five defensive fixes in `src/main/signal-research.ts`:

@@ -1,10 +1,14 @@
 /**
  * v1.9.2 — Signal research as a separate job, decoupled from dossier research.
- * v1.9.3 — Hardened parsing: shape-tolerant field extraction + bullet-list
- *          fallback + retry-once + diagnostic logging. The v1.9.2 implementation
- *          consistently failed against sonar-pro because the prescriptive
- *          SYSTEM prompt (with GOOD/BAD examples) was making the model emit
- *          bullets as raw text instead of in the JSON wrapper.
+ * v1.9.3 — Shape-tolerant JSON-field extraction + bullet-list fallback +
+ *          retry-once + diagnostic logging. Still failed in practice.
+ * v1.9.4 — Drop `response_format: json_schema` entirely for signal research.
+ *          sonar-pro + json_schema was returning empty content payloads
+ *          even with the v1.9.3 fallbacks in place. The architecture is
+ *          cleaner without it anyway — signals are inherently a markdown
+ *          bullet list, the JSON wrapper added nothing useful. Bullets are
+ *          now the primary expected output; extractSignalsField stays as
+ *          a secondary fallback in case the model wraps in JSON anyway.
  *
  * Two entrypoints:
  *   researchBrandSignals(brandId, { feedback? })
@@ -27,36 +31,14 @@ import { embedSignalsForProduct } from './monitor/embed.js';
 import { addFeedback, buildFeedbackBlock, markFeedbackApplied } from './feedback.js';
 import type { Brand, Product } from '@shared/types';
 
-// v1.9.3: simplified SYSTEM prompt. The v1.9.2 version had GOOD/BAD
-// examples that, against sonar-pro, frequently made the model emit a
-// raw bullet list instead of structured JSON. Quality guidance now
-// lives in the schema field description only.
+// v1.9.4: Ask for bullets directly. No JSON wrapper. The model returns a
+// markdown bulleted list — that's the data; no transformation needed.
+//
+// Quality guidance (minimum 1, no upper cap, quality over quantity) is now
+// embedded in the prompt text rather than a schema description, since
+// without json_schema the description field doesn't reach the model.
 const SIGNAL_RESEARCH_SYSTEM =
-  'You are a senior B2B competitive-intelligence analyst. You produce sharp, concrete buying-signal lists. Always return strictly valid JSON matching the schema you have been given — no preamble, no closing remarks.';
-
-const PRODUCT_SIGNALS_SCHEMA = {
-  type: 'object',
-  required: ['signals'],
-  properties: {
-    signals: {
-      type: 'string',
-      description:
-        "Markdown bulleted list of concrete news/event signals (lines starting with '- ') that indicate a buying opportunity for THIS specific product. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones."
-    }
-  }
-};
-
-const BRAND_SIGNALS_SCHEMA = {
-  type: 'object',
-  required: ['signals'],
-  properties: {
-    signals: {
-      type: 'string',
-      description:
-        "Markdown bulleted list of BRAND-LEVEL buying signals (lines starting with '- ') — events that indicate ANY product from this brand may be needed. Cross-cutting, not product-specific. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones."
-    }
-  }
-};
+  'You are a senior B2B competitive-intelligence analyst. You produce sharp, concrete buying-signal lists for sales teams.\n\nRespond ONLY with a markdown bulleted list — one signal per line, each line starting with "- ". No preamble. No commentary. No closing remarks. Just the bullets.';
 
 // ─── v1.9.3 shape-tolerant parsing ──────────────────────────────────
 
@@ -112,15 +94,34 @@ export function extractBulletsFromText(text: string): string | null {
 }
 
 /**
- * Three-tier extractor: try JSON-field, then bullet-list fallback.
- * Returns null only when both fail.
+ * Two-tier extractor: v1.9.4 expects raw markdown bullets, but tries a
+ * JSON-field extraction first in case the model wraps the output in
+ * JSON anyway (some sonar variants do this even without json_schema).
+ * Returns null only when both shapes fail.
  */
 function extractSignalsAnyShape(r: PplxResponse<unknown>): string | null {
-  return extractSignalsField(r.json) || extractBulletsFromText(r.text);
+  // Bullets directly out of the text is now the primary expected shape.
+  const fromText = extractBulletsFromText(r.text);
+  if (fromText) return fromText;
+  // Fall back: if the model wrapped output in JSON despite our request,
+  // tryParseJson would have populated r.json — even without jsonSchema set,
+  // extractFromCompletion in perplexity.ts only parses when jsonSchema is
+  // set, so r.json will be null here. Try parsing raw text as JSON ourselves.
+  if (r.text) {
+    try {
+      const parsed = JSON.parse(r.text.trim());
+      const fromJson = extractSignalsField(parsed);
+      if (fromJson) return fromJson;
+    } catch {
+      // Not JSON. Already tried text bullets above.
+    }
+  }
+  return null;
 }
 
 /**
  * Run a signal-research Perplexity call with one retry on parse failure.
+ * v1.9.4: no jsonSchema — we ask for markdown bullets directly.
  * Both attempts log a head/tail preview on failure so the main-process
  * console captures what Perplexity actually returned.
  */
@@ -129,7 +130,6 @@ async function callWithRetry(
   prompt: string,
   opts: {
     model: string;
-    jsonSchema: Record<string, any>;
     stage: 'brand_signals' | 'product_signals';
     relatedId: number;
   }
@@ -137,11 +137,11 @@ async function callWithRetry(
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await completePerplexity<unknown>(system, prompt, {
       model: opts.model,
-      // v1.9.3: bumped 1500 → 2500. Brand-level signal lists for chunky
-      // brands were tight against the 1500-token ceiling.
       maxTokens: 2500,
       temperature: 0.2,
-      jsonSchema: opts.jsonSchema,
+      // v1.9.4: NO jsonSchema. sonar-pro + json_schema was returning empty
+      // payloads. Markdown bullets out of free-form text is far more
+      // reliable.
       stage: opts.stage,
       relatedId: opts.relatedId
     });
@@ -219,7 +219,17 @@ ${feedbackBlock ? `\n${feedbackBlock}` : ''}
 # Task
 Re-derive a fresh list of buying-signal bullets for THIS product. Lean on
 live web search to incorporate anything that's changed in the market over
-the last few weeks. Return JSON matching the schema.
+the last few weeks.
+
+Output format: a markdown bulleted list, one signal per line starting
+with "- ". Minimum 1 bullet, no upper cap. Each signal should describe a
+concrete observable event a salesperson could literally Google-alert for
+(e.g. "Company announces multi-year office expansion", "CISO appointment
+or departure"). Avoid generic statements ("company in growth mode",
+"industry trend toward digital transformation"). Quality over quantity:
+one sharp signal beats ten generic ones.
+
+No preamble, no commentary, no closing remarks. Bullets only.
 
 If reviewer feedback above directs specific changes (focus areas, signals
 to drop, signals to add), apply it — feedback outranks your own judgment
@@ -228,7 +238,6 @@ for items it covers.`;
   const { perplexityScanModel } = getSettings();
   const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
     model: perplexityScanModel || 'sonar-pro',
-    jsonSchema: PRODUCT_SIGNALS_SCHEMA,
     stage: 'product_signals',
     relatedId: productId
   });
@@ -298,15 +307,21 @@ indicate ANY product from this brand may be needed. These are cross-cutting
 signals, distinct from product-specific signals. Use live web search to
 incorporate anything that's shifted in the market for this brand recently.
 
-If reviewer feedback above directs specific changes, apply it — feedback
-outranks your own judgment for items it covers.
+Output format: a markdown bulleted list, one signal per line starting
+with "- ". Minimum 1 bullet, no upper cap. Each signal should describe a
+concrete observable event a salesperson could literally Google-alert for
+(e.g. "Company announces APAC HQ expansion", "Lease renewal due",
+"Post-acquisition consolidation"). Avoid generic statements. Quality over
+quantity: one sharp signal beats ten generic ones.
 
-Return JSON matching the schema.`;
+No preamble, no commentary, no closing remarks. Bullets only.
+
+If reviewer feedback above directs specific changes, apply it — feedback
+outranks your own judgment for items it covers.`;
 
   const { perplexityScanModel } = getSettings();
   const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
     model: perplexityScanModel || 'sonar-pro',
-    jsonSchema: BRAND_SIGNALS_SCHEMA,
     stage: 'brand_signals',
     relatedId: brandId
   });
