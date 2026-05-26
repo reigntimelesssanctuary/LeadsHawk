@@ -983,6 +983,17 @@ These came directly from the original request:
 
 ---
 
+## 10a. Pending architectural work
+
+- **v1.9.0 — two-stage deep scan.** Spec'd in `docs/v1.9.0-two-stage-deep-scan.md`.
+  Splits `runDeepScan` into a Perplexity-led discovery pass + a Claude-led
+  qualification pass. Originated by the user after Run #21 (2026-05-25)
+  showed the monolithic deep scan researching well but surfacing zero
+  candidates because of over-constrained prompt. Spec includes full
+  prompt text, schemas, file inventory, cost analysis, implementation
+  order, smoke-test cases, and verification checklist. Should be the next
+  release after v1.8.7. Read the spec end-to-end before starting.
+
 ## 11. Live links
 
 - **Repo:** https://github.com/reigntimelesssanctuary/LeadsHawk
