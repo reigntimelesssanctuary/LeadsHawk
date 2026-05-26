@@ -15,6 +15,14 @@ export type Brand = {
   scan_recency_auto: 'day' | 'week' | 'month' | 'year' | null;
   scan_recency_override: 'day' | 'week' | 'month' | 'year' | null;
   scan_enabled: number; // 0 | 1 — when 0, all of this brand's products are excluded from scans
+  // v1.10.0: Opus dossier verification (Stage 2) + strategic intel (Stage 3).
+  // All null when the advanced pipeline hasn't run (Stage 1 only).
+  raw_dossier: string | null;          // Stage 1 raw text, preserved when Stage 2 overwrites canonical fields
+  verified_dossier: string | null;     // Stage 2 output JSON (full audit)
+  confidence_levels: string | null;    // JSON: { field_name → 'high'|'medium'|'low' }
+  unknowns: string | null;             // Stage 2 "What we don't know" markdown
+  strategic_intel: string | null;      // Stage 3 output JSON (icp_segments, buying_cycle_scenarios, competitive_plays)
+  last_advanced_research_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -36,9 +44,35 @@ export type Product = {
   scan_recency_auto: 'day' | 'week' | 'month' | 'year' | null;
   scan_recency_override: 'day' | 'week' | 'month' | 'year' | null;
   scan_enabled: number; // 0 | 1 — when 1, autonomous scans include this product
+  // v1.10.0: Opus dossier verification (Stage 2) + strategic intel (Stage 3).
+  // All null when the advanced pipeline hasn't run (Stage 1 only).
+  raw_dossier: string | null;
+  verified_dossier: string | null;
+  confidence_levels: string | null;
+  unknowns: string | null;
+  strategic_intel: string | null;
+  last_advanced_research_at: string | null;
   created_at: string;
   updated_at: string;
 };
+
+// v1.10.0: shared types for Stage 3 strategic intel output.
+export type IcpSegment = {
+  name: string;
+  description: string;
+  decision_maker: string;
+  cycle_length: string;
+  key_signals: string;
+};
+
+export type StrategicIntel = {
+  icp_segments: IcpSegment[];
+  buying_cycle_scenarios: string;  // markdown
+  competitive_plays: string;       // markdown
+};
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low';
+export type ConfidenceLevels = Record<string, ConfidenceLevel>;
 
 export type KnowledgeItem = {
   id: number;
@@ -191,6 +225,11 @@ export type Settings = {
   // additional opportunities for them. Uses embedSimilarityThreshold + 0.10
   // (so only strong cross-matches fire).
   crossMatchEnabled: boolean;
+  // v1.10.0: when true, brand/product research chains Claude Opus
+  // Stage 2 (verify + sharpen) and Stage 3 (strategic intel) after the
+  // Perplexity Stage 1 call. Uncheck to revert to v1.9.x Stage-1-only.
+  brandResearchAdvanced: boolean;
+  productResearchAdvanced: boolean;
 };
 
 export type MonitorSource = {

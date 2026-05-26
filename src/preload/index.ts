@@ -14,7 +14,8 @@ const api = {
     create: (p: any) => ipcRenderer.invoke('brands:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('brands:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('brands:delete', id),
-    research: (id: number) => ipcRenderer.invoke('brands:research', id),
+    research: (id: number, opts?: { feedback?: string }) =>
+      ipcRenderer.invoke('brands:research', id, opts),
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('brands:researchSignals', id, opts),
     setScanEnabled: (id: number, enabled: boolean) =>
@@ -26,7 +27,8 @@ const api = {
     create: (p: any) => ipcRenderer.invoke('products:create', p),
     update: (id: number, p: any) => ipcRenderer.invoke('products:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('products:delete', id),
-    research: (id: number) => ipcRenderer.invoke('products:research', id),
+    research: (id: number, opts?: { feedback?: string }) =>
+      ipcRenderer.invoke('products:research', id, opts),
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('products:researchSignals', id, opts),
     reembed: (id: number) => ipcRenderer.invoke('products:reembed', id),

@@ -1,26 +1,65 @@
 /**
- * v1.9.2 — Shared "Re-research signals with feedback" modal.
+ * v1.9.2 — Shared "Re-research with feedback" modal (signal kinds).
+ * v1.10.0 — Generalised to all four kinds:
+ *             'brand'           → window.lh.brands.research(id, { feedback })
+ *             'product'         → window.lh.products.research(id, { feedback })
+ *             'brand_signals'   → window.lh.brands.researchSignals(id, { feedback })
+ *             'product_signals' → window.lh.products.researchSignals(id, { feedback })
  *
- * Used by Signal Config for both brand-level and product-level signal
- * re-research. The kind/target props determine which feedback history
- * is loaded and which research handler is called on submit.
+ * The kind/target props determine which feedback history is loaded and
+ * which research IPC is called on submit. Same modal shell, different
+ * routing — one source of truth for the feedback UX.
  */
 
 import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
-import type { DossierFeedback } from '../../../shared/types';
+import type { DossierFeedback, FeedbackTargetKind } from '../../../shared/types';
 import { fmtDateShort } from '../lib/api';
 
 const FEEDBACK_MAX = 4000;
 
-export type SignalFeedbackKind = 'brand_signals' | 'product_signals';
+export type FeedbackKind = FeedbackTargetKind;
 
-export function SignalFeedbackModal({
+// v1.9.x back-compat alias for any caller still using the old name.
+export type SignalFeedbackKind = Extract<FeedbackKind, 'brand_signals' | 'product_signals'>;
+
+const TITLES: Record<FeedbackKind, (name: string) => string> = {
+  brand: (name) => `Re-research ${name} (full dossier) with feedback`,
+  product: (name) => `Re-research ${name} (full dossier) with feedback`,
+  brand_signals: (name) => `Re-research signals for ${name} with feedback`,
+  product_signals: (name) => `Re-research signals for ${name} with feedback`
+};
+
+const DURATIONS: Record<FeedbackKind, string> = {
+  brand: 'Takes a few minutes — full Stage 1 + Stage 2 + Stage 3 re-research with feedback injected at every stage.',
+  product: 'Takes a few minutes — full Stage 1 + Stage 2 + Stage 3 re-research with feedback injected at every stage.',
+  brand_signals: 'Cheap (~$0.01–0.02), takes a few seconds.',
+  product_signals: 'Cheap (~$0.01–0.02), takes a few seconds.'
+};
+
+async function dispatch(kind: FeedbackKind, targetId: number, feedback: string): Promise<void> {
+  switch (kind) {
+    case 'brand':
+      await window.lh.brands.research(targetId, { feedback });
+      return;
+    case 'product':
+      await window.lh.products.research(targetId, { feedback });
+      return;
+    case 'brand_signals':
+      await window.lh.brands.researchSignals(targetId, { feedback });
+      return;
+    case 'product_signals':
+      await window.lh.products.researchSignals(targetId, { feedback });
+      return;
+  }
+}
+
+export function FeedbackModal({
   open, onClose, kind, targetId, targetName, onCompleted
 }: {
   open: boolean;
   onClose: () => void;
-  kind: SignalFeedbackKind;
+  kind: FeedbackKind;
   targetId: number;
   targetName: string;
   /** Called after a successful re-research run so the parent can refresh. */
@@ -51,11 +90,7 @@ export function SignalFeedbackModal({
     setBusy(true);
     setError(null);
     try {
-      if (kind === 'brand_signals') {
-        await window.lh.brands.researchSignals(targetId, { feedback: trimmed });
-      } else {
-        await window.lh.products.researchSignals(targetId, { feedback: trimmed });
-      }
+      await dispatch(kind, targetId, trimmed);
       onCompleted();
       onClose();
     } catch (e: any) {
@@ -78,13 +113,11 @@ export function SignalFeedbackModal({
   const overCap = charCount > FEEDBACK_MAX;
   const nearCap = charCount > FEEDBACK_MAX * 0.95;
 
+  const title = TITLES[kind](targetName);
+  const duration = DURATIONS[kind];
+
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={`Re-research signals for ${targetName} with feedback`}
-      width={680}
-    >
+    <Modal open={open} onClose={onClose} title={title} width={680}>
       <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 14 }}>
         Tell the model what to change. Useful for correcting factual errors,
         adding context the AI missed, or steering focus. Prior feedback is
@@ -164,9 +197,7 @@ export function SignalFeedbackModal({
           color: overCap ? '#b91c1c' : (nearCap ? '#c2410c' : '#9ca3af')
         }}
       >
-        <span>
-          Empty feedback won't submit. Re-research is cheap (~$0.01–0.02).
-        </span>
+        <span>Empty feedback won't submit. {duration}</span>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>{charCount} / {FEEDBACK_MAX}</span>
       </div>
 
@@ -189,3 +220,6 @@ export function SignalFeedbackModal({
     </Modal>
   );
 }
+
+// v1.9.x back-compat — old import name still works.
+export const SignalFeedbackModal = FeedbackModal;

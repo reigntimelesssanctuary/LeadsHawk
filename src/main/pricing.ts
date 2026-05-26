@@ -15,8 +15,12 @@
  */
 
 export type LlmStage =
-  | 'research'           // Perplexity sonar-deep-research, product dossier
-  | 'brand_research'     // v1.6: Perplexity sonar-deep-research, brand dossier
+  | 'research'                   // Perplexity sonar-deep-research, product Stage 1 dossier
+  | 'brand_research'             // v1.6: Perplexity sonar-deep-research, brand Stage 1 dossier
+  | 'brand_research_verify'      // v1.10.0: Claude Opus, brand Stage 2 (verify + sharpen)
+  | 'brand_research_strategic'   // v1.10.0: Claude Opus, brand Stage 3 (strategic intel)
+  | 'product_research_verify'    // v1.10.0: Claude Opus, product Stage 2
+  | 'product_research_strategic' // v1.10.0: Claude Opus, product Stage 3
   | 'brand_summary'      // Perplexity, 150-word brand rollup (legacy; phased out by brand_research)
   | 'refresh_signals'    // Perplexity sonar-pro, signals-only refresh (legacy; v1.9.2 replaced by brand_signals / product_signals — kept so historical spend rows still label correctly)
   | 'brand_signals'      // v1.9.2: Perplexity sonar-pro, brand-level signal research

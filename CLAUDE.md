@@ -613,6 +613,46 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.10.0 (2026-05-27):** Opus dossier verification + strategic intelligence.
+
+Brand and product research are LeadsHawk's foundational asset — everything downstream is bottlenecked by dossier quality. v1.10.0 chains Claude Opus after the Perplexity Stage 1 research to:
+
+1. **Verify and sharpen** — strip generic marketing language, annotate per-field confidence (high/medium/low), produce a "What we don't know" markdown subsection.
+2. **Add a strategic intelligence layer** — 3-5 ICP segments (name, description, decision-maker, cycle length, key signals), a buying-cycle scenarios narrative, a competitive plays narrative.
+
+Architecture (only `researchBrand` and `researchProduct` change; signal-research / scanner / live monitor / deep scan all untouched):
+
+- **Stage 1 — Perplexity sonar-deep-research** (unchanged from v1.9.x). Now writes to a new `raw_dossier` audit column so Stage 2 can overwrite the canonical fields without losing the raw text.
+- **Stage 2 — Claude Opus verify** (`src/main/research/dossier-verify.ts`). `claude-opus-4-7`, 6k tokens, NO web search — works only with Stage 1's output + the user's knowledge blob + reviewer feedback. Returns sharpened field values, per-field confidence levels, and an unknowns list. Persists into `verified_dossier`, `confidence_levels`, `unknowns` columns and overwrites canonical `category` / `positioning` / `target_icp` / etc. with sharpened versions. New `'brand_research_verify'` / `'product_research_verify'` LlmStage tags.
+- **Stage 3 — Claude Opus strategic intel** (`src/main/research/dossier-strategic.ts`). Same model, 6k tokens, no web search. Input is Stage 2's verified dossier; output is `{ icp_segments[], buying_cycle_scenarios, competitive_plays }` persisted to `strategic_intel`. New `'brand_research_strategic'` / `'product_research_strategic'` LlmStage tags.
+- **Failure handling**: Stage 2 failure preserves Stage 1's output and skips Stage 3. Stage 3 failure preserves Stage 2's output. Partial success is always better than rollback. Anthropic key not configured → skip Stages 2+3 with a logged warning.
+
+**Feedback wiring extended.** The v1.9.2 `dossier_feedback` table's `target_kind` already supported `'brand'` and `'product'` for forward-compat. v1.10.0 wires them up: `brands:research(id, { feedback? })` and `products:research(id, { feedback? })` accept feedback that's injected into ALL three stages' prompts. The shared `FeedbackModal` (renamed from `SignalFeedbackModal`, generalised to all four kinds) now drives "Re-research with feedback" buttons on the brand panel and per-product card too. Past feedback re-applies automatically on subsequent runs.
+
+**Schema additions on both `brands` and `products`** (idempotent migrations):
+- `raw_dossier TEXT` — Stage 1 audit when Stage 2 overwrites canonical fields
+- `verified_dossier TEXT` — Stage 2 JSON output (full audit)
+- `confidence_levels TEXT` — JSON `{ field_name → 'high'|'medium'|'low' }`
+- `unknowns TEXT` — Stage 2 "What we don't know" markdown
+- `strategic_intel TEXT` — Stage 3 JSON (`icp_segments[]`, `buying_cycle_scenarios`, `competitive_plays`)
+- `last_advanced_research_at TEXT` — timestamp; null until Stages 2+3 successfully ran
+
+**Settings** — new "Research depth" card with two toggles, both default `true`:
+- `brandResearchAdvanced` — enable Opus chain on brand research
+- `productResearchAdvanced` — enable on product research
+Uncheck either to fall back to v1.9.x's Stage-1-only behaviour. Settings → Spend shows the four new stages as separate rows.
+
+**UI (option a — inline)** on `BrandResearchPanel` and per-product dossier:
+- Confidence pills (green=high, amber=med, red=low) next to each field when `confidence_levels` is populated
+- "What we don't know" subsection in an amber callout when `unknowns` is non-empty
+- "Strategic Intelligence (Claude Opus)" collapsible section rendering `icp_segments` as a grid of cards + the two markdown narratives
+- "Opus verified" mini-tag next to the dossier expand summary when `last_advanced_research_at` is set
+- `Re-research with feedback` button next to existing `Re-research` button on brand panel and per-product card
+
+**Cost**: per-call jumps from ~$0.10-0.30 (Stage 1 only) to ~$0.55-1.10 (Stages 1+2+3). For 10 brands + 30 products refreshed monthly: ~$25/month. Negligible at portfolio scale.
+
+**What stays the same**: scanner (manual + deep scan), live monitor, signal research, cross-match, URL hygiene, brand-self filter, confidence threshold, scan rules, recency, smoke tests (46 still pass — no new pure-function logic; the new modules are prompt orchestration which doesn't fit the inline-copy smoke pattern).
+
 **v1.9.4 (2026-05-27):** Drop `response_format: json_schema` for signal research entirely.
 
 v1.9.3's shape-tolerant parsing + retry didn't fix the bug. Failures came back with *"twice in a row"* in the error message — meaning both attempts produced responses that neither `extractSignalsField` nor `extractBulletsFromText` could parse. Diagnosis: `sonar-pro` + sync `/chat/completions` + `response_format: json_schema` mode appears to return empty or near-empty content payloads for this prompt shape. (Why it works for `sonar-deep-research` via the async endpoint, but not for sonar-pro via sync: unknown — likely a Perplexity-side schema-enforcement quirk.)

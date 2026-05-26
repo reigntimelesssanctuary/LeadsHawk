@@ -117,7 +117,10 @@ export function registerIpc() {
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
   });
   // v1.6: brand becomes a first-class research subject.
-  ipcMain.handle('brands:research', async (_e, id: number) => researchBrand(id));
+  // v1.10.0: accepts { feedback? } for reviewer-feedback-aware re-research.
+  ipcMain.handle('brands:research', async (_e, id: number, opts?: { feedback?: string }) =>
+    researchBrand(id, opts || {})
+  );
   // v1.9.2: brand-level signal research (separate job, optional feedback).
   ipcMain.handle('brands:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
     researchBrandSignals(id, opts || {})
@@ -177,7 +180,10 @@ export function registerIpc() {
     db.prepare('DELETE FROM products WHERE id = ?').run(id);
     return true;
   });
-  ipcMain.handle('products:research', async (_e, id: number) => researchProduct(id));
+  // v1.10.0: products:research accepts { feedback? } for reviewer-feedback-aware re-research.
+  ipcMain.handle('products:research', async (_e, id: number, opts?: { feedback?: string }) =>
+    researchProduct(id, opts || {})
+  );
   // v1.9.2: product-level signal research (separate job, optional feedback).
   // Replaces the old products:refreshSignals handler.
   ipcMain.handle('products:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>

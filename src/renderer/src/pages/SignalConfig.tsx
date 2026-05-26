@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Modal } from '../components/Modal';
-import { SignalFeedbackModal, type SignalFeedbackKind } from '../components/SignalFeedbackModal';
+import { FeedbackModal } from '../components/FeedbackModal';
+import type { FeedbackTargetKind } from '../../../shared/types';
+type SignalFeedbackKind = Extract<FeedbackTargetKind, 'brand_signals' | 'product_signals'>;
 import type { SignalSource, Product, Brand, ScanRule } from '../../../shared/types';
 import {
   Plus, Trash2, Sparkles, ChevronDown, ChevronRight,
@@ -300,7 +302,7 @@ export function SignalConfig() {
       </Modal>
 
       {feedbackTarget && (
-        <SignalFeedbackModal
+        <FeedbackModal
           open={!!feedbackTarget}
           onClose={() => setFeedbackTarget(null)}
           kind={feedbackTarget.kind}

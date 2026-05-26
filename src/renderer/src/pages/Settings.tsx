@@ -2,9 +2,13 @@ import { useEffect, useState } from 'react';
 import type { Settings as Sett, SpendSummary } from '../../../shared/types';
 
 const STAGE_LABELS: Record<string, string> = {
-  research: 'Product research',
-  brand_research: 'Brand research',
-  brand_summary: 'Brand summary',
+  research: 'Product research — Stage 1 (Perplexity)',
+  brand_research: 'Brand research — Stage 1 (Perplexity)',
+  brand_research_verify: 'Brand research — Stage 2 (Opus verify)',
+  brand_research_strategic: 'Brand research — Stage 3 (Opus strategic)',
+  product_research_verify: 'Product research — Stage 2 (Opus verify)',
+  product_research_strategic: 'Product research — Stage 3 (Opus strategic)',
+  brand_summary: 'Brand summary (legacy)',
   refresh_signals: 'Refresh signals (legacy)',
   brand_signals: 'Signal research — brand',
   product_signals: 'Signal research — product',
@@ -206,6 +210,31 @@ export function Settings() {
             checked={s.openAtLogin}
             onChange={(e) => setS({ ...s, openAtLogin: e.target.checked })}
           /> Start LeadsHawk automatically when you log in (recommended for 24/7 monitoring)
+        </label>
+      </div>
+
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <div className="h-card" style={{ marginBottom: 6 }}>Research depth (v1.10)</div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          When enabled, brand/product research chains Claude Opus after Perplexity to:
+          (1) verify and sharpen the dossier — strip generic language, annotate per-field confidence, surface gaps as a "What we don't know" list;
+          (2) produce a strategic-intelligence layer — ICP segments, buying-cycle scenarios, competitive plays.
+          Adds ~$0.50–$0.80 per research run on top of the Perplexity cost. Needs an Anthropic API key (set above).
+          Uncheck to revert to v1.9.x's Perplexity-only research.
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={s.brandResearchAdvanced}
+            onChange={(e) => setS({ ...s, brandResearchAdvanced: e.target.checked })}
+          /> Opus verification + strategic intel on <b style={{ margin: '0 4px' }}>brand</b> research
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={s.productResearchAdvanced}
+            onChange={(e) => setS({ ...s, productResearchAdvanced: e.target.checked })}
+          /> Opus verification + strategic intel on <b style={{ margin: '0 4px' }}>product</b> research
         </label>
       </div>
 

@@ -1,9 +1,141 @@
 import { useEffect, useState } from 'react';
-import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
+import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, ConfidenceLevels, ConfidenceLevel } from '../../../shared/types';
 import type { Page } from '../components/Sidebar';
 import { Modal } from '../components/Modal';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, Pencil, AlertTriangle } from 'lucide-react';
+import { FeedbackModal } from '../components/FeedbackModal';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, Pencil, AlertTriangle, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
+
+// v1.10.0 — helpers for rendering Opus Stage 2 + Stage 3 output.
+function parseConfidenceLevels(raw: string | null): ConfidenceLevels | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    return j && typeof j === 'object' ? j as ConfidenceLevels : null;
+  } catch { return null; }
+}
+function parseStrategicIntel(raw: string | null): StrategicIntel | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object' || !Array.isArray(j.icp_segments)) return null;
+    return j as StrategicIntel;
+  } catch { return null; }
+}
+function ConfidencePill({ level }: { level: ConfidenceLevel | undefined }) {
+  if (!level) return null;
+  const styles: Record<ConfidenceLevel, { bg: string; fg: string; label: string }> = {
+    high:   { bg: '#d1fae5', fg: '#065f46', label: 'high confidence' },
+    medium: { bg: '#fef3c7', fg: '#92400e', label: 'medium confidence' },
+    low:    { bg: '#fee2e2', fg: '#991b1b', label: 'low confidence' }
+  };
+  const s = styles[level];
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        padding: '2px 6px',
+        borderRadius: 4,
+        background: s.bg,
+        color: s.fg,
+        marginLeft: 8,
+        verticalAlign: 'middle'
+      }}
+      title="Confidence assigned by the Opus verification pass (Stage 2)."
+    >
+      {s.label}
+    </span>
+  );
+}
+function UnknownsBlock({ unknowns }: { unknowns: string | null }) {
+  if (!unknowns || !unknowns.trim()) return null;
+  return (
+    <div style={{
+      marginTop: 14, padding: 12,
+      background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8
+    }}>
+      <div className="label" style={{ marginBottom: 6, color: '#92400e' }}>
+        <AlertTriangle size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+        What we don't know
+      </div>
+      <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: '#1f2937', lineHeight: 1.5 }}>{unknowns}</div>
+    </div>
+  );
+}
+function StrategicIntelBlock({ intel }: { intel: StrategicIntel | null }) {
+  const [open, setOpen] = useState(false);
+  if (!intel) return null;
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: '#f3f4ff', borderRadius: 8 }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span style={{ fontWeight: 600, fontSize: 13, color: '#4c1d95' }}>
+          Strategic Intelligence (Claude Opus)
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
+          {intel.icp_segments.length} ICP segment{intel.icp_segments.length === 1 ? '' : 's'}
+        </span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 12, display: 'grid', gap: 14 }}>
+          {intel.icp_segments.length > 0 && (
+            <div>
+              <div className="label" style={{ marginBottom: 8 }}>ICP segments</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {intel.icp_segments.map((seg, i) => (
+                  <IcpSegmentCard key={i} segment={seg} />
+                ))}
+              </div>
+            </div>
+          )}
+          {intel.buying_cycle_scenarios && (
+            <div>
+              <div className="label" style={{ marginBottom: 6 }}>Buying cycle scenarios</div>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: '#1f2937', lineHeight: 1.6 }}>{intel.buying_cycle_scenarios}</div>
+            </div>
+          )}
+          {intel.competitive_plays && (
+            <div>
+              <div className="label" style={{ marginBottom: 6 }}>Competitive plays</div>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: '#1f2937', lineHeight: 1.6 }}>{intel.competitive_plays}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+function IcpSegmentCard({ segment }: { segment: IcpSegment }) {
+  return (
+    <div style={{ padding: 12, background: 'white', border: '1px solid #e0e7ff', borderRadius: 8 }}>
+      <div style={{ fontWeight: 600, fontSize: 13, color: '#1f2937', marginBottom: 6 }}>{segment.name}</div>
+      <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5, marginBottom: 8 }}>{segment.description}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, fontSize: 12 }}>
+        <div>
+          <div className="label" style={{ marginBottom: 2 }}>Decision maker</div>
+          <div style={{ color: '#1f2937' }}>{segment.decision_maker}</div>
+        </div>
+        <div>
+          <div className="label" style={{ marginBottom: 2 }}>Cycle length</div>
+          <div style={{ color: '#1f2937' }}>{segment.cycle_length}</div>
+        </div>
+      </div>
+      {segment.key_signals && (
+        <div style={{ marginTop: 8 }}>
+          <div className="label" style={{ marginBottom: 4 }}>Key signals</div>
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#1f2937', lineHeight: 1.5 }}>{segment.key_signals}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function BrandsProducts({ onNavigate }: { onNavigate?: (p: Page) => void }) {
   const [brands, setBrands] = useState<Brand[]>([]);
@@ -117,6 +249,10 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
   const [noteTarget, setNoteTarget] = useState<ModalTarget>(false);
   const [linkTarget, setLinkTarget] = useState<ModalTarget>(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // v1.10.0: dossier-feedback modal target. null = closed.
+  const [feedbackTarget, setFeedbackTarget] = useState<
+    { kind: 'brand' | 'product'; id: number; name: string } | null
+  >(null);
 
   // v1.9.2: signals are now managed in Signal Config. Empty signals on a
   // researched brand or product are surfaced as a banner pointing there.
@@ -193,6 +329,17 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                 ? 'Researching brand…'
                 : brand.research_status === 'ready' ? 'Re-research brand' : 'Run brand research'}
             </button>
+            {brand.research_status === 'ready' && (
+              <button
+                className="btn-ghost"
+                onClick={() => setFeedbackTarget({ kind: 'brand', id: brand.id, name: brand.name })}
+                disabled={busy === 'research-brand'}
+                title="Re-research the brand dossier with reviewer feedback injected at every stage."
+              >
+                <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
+                Re-research with feedback
+              </button>
+            )}
             <button className="btn-ghost" onClick={() => setEditingBrand(true)}>
               <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} /> Edit
             </button>
@@ -256,6 +403,17 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}
                   </button>
+                  {p.research_status === 'ready' && (
+                    <button
+                      className="btn-ghost"
+                      onClick={() => setFeedbackTarget({ kind: 'product', id: p.id, name: p.name })}
+                      disabled={busy === 'research-' + p.id}
+                      title="Re-research this product's dossier with reviewer feedback injected at every stage."
+                    >
+                      <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
+                      Re-research with feedback
+                    </button>
+                  )}
                   <button
                     className="btn-ghost"
                     onClick={() => setEditingProduct(p)}
@@ -268,18 +426,29 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                   }}><Trash2 size={13} /></button>
                 </div>
               </div>
-              {p.research_summary && (
-                <details style={{ marginTop: 10 }}>
-                  <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>View research dossier</summary>
-                  <div style={{ marginTop: 8, fontSize: 13, display: 'grid', gap: 10 }}>
-                    {p.use_cases && <Field label="Use cases" value={p.use_cases} />}
-                    {p.competitors && <Field label="Competitors" value={p.competitors} />}
-                    {p.differentiators && <Field label="Differentiators" value={p.differentiators} />}
-                    {p.signals && <Field label="Signals to watch" value={p.signals} />}
-                    <Field label="Summary" value={p.research_summary} />
-                  </div>
-                </details>
-              )}
+              {p.research_summary && (() => {
+                const conf = parseConfidenceLevels(p.confidence_levels);
+                const strategic = parseStrategicIntel(p.strategic_intel);
+                return (
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
+                      View research dossier
+                      {p.last_advanced_research_at && (
+                        <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>· Opus verified</span>
+                      )}
+                    </summary>
+                    <div style={{ marginTop: 8, fontSize: 13, display: 'grid', gap: 10 }}>
+                      {p.use_cases && <Field label="Use cases" value={p.use_cases} confidence={conf?.use_cases} />}
+                      {p.competitors && <Field label="Competitors" value={p.competitors} confidence={conf?.competitors} />}
+                      {p.differentiators && <Field label="Differentiators" value={p.differentiators} confidence={conf?.differentiators} />}
+                      {p.signals && <Field label="Signals to watch" value={p.signals} />}
+                      <Field label="Summary" value={p.research_summary} confidence={conf?.research_summary} />
+                      <UnknownsBlock unknowns={p.unknowns} />
+                      <StrategicIntelBlock intel={strategic} />
+                    </div>
+                  </details>
+                );
+              })()}
               {/* v1.9.2: signals are managed separately now — flag empty signals here. */}
               {p.research_status === 'ready' && !(p.signals && p.signals.trim()) && (
                 <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, fontSize: 12, color: '#7c2d12', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -416,6 +585,18 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
           onDone={async () => { setLinkTarget(false); await refresh(); }}
         />
       </Modal>
+
+      {/* v1.10.0: dossier feedback modal for brand + product re-research. */}
+      {feedbackTarget && (
+        <FeedbackModal
+          open={!!feedbackTarget}
+          onClose={() => setFeedbackTarget(null)}
+          kind={feedbackTarget.kind}
+          targetId={feedbackTarget.id}
+          targetName={feedbackTarget.name}
+          onCompleted={async () => { await refresh(); onChanged(); }}
+        />
+      )}
     </div>
   );
 }
@@ -441,10 +622,13 @@ function KnowledgeRow({ item, onDelete }: { item: KnowledgeItem; onDelete: () =>
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value, confidence }: { label: string; value: string; confidence?: ConfidenceLevel }) {
   return (
     <div>
-      <div className="label" style={{ marginBottom: 4 }}>{label}</div>
+      <div className="label" style={{ marginBottom: 4 }}>
+        {label}
+        <ConfidencePill level={confidence} />
+      </div>
       <div style={{ whiteSpace: 'pre-wrap', color: '#1f2937', fontSize: 13 }}>{value}</div>
     </div>
   );
@@ -582,19 +766,30 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
         </div>
       )}
 
-      {brand.research_status === 'ready' && (
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>View brand dossier</summary>
-          <div style={{ marginTop: 10, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937', display: 'grid', gap: 12 }}>
-            {brand.category && <Field label="Market category" value={brand.category} />}
-            {brand.positioning && <Field label="Positioning" value={brand.positioning} />}
-            {brand.target_icp && <Field label="Target ICP (ideal customer profile)" value={brand.target_icp} />}
-            {brand.signals && <Field label="Brand-level signals" value={brand.signals} />}
-            {brand.competitive_summary && <Field label="Competitive summary" value={brand.competitive_summary} />}
-            {brand.research_summary && <Field label="Research summary" value={brand.research_summary} />}
-          </div>
-        </details>
-      )}
+      {brand.research_status === 'ready' && (() => {
+        const conf = parseConfidenceLevels(brand.confidence_levels);
+        const strategic = parseStrategicIntel(brand.strategic_intel);
+        return (
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
+              View brand dossier
+              {brand.last_advanced_research_at && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>· Opus verified</span>
+              )}
+            </summary>
+            <div style={{ marginTop: 10, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937', display: 'grid', gap: 12 }}>
+              {brand.category && <Field label="Market category" value={brand.category} confidence={conf?.category} />}
+              {brand.positioning && <Field label="Positioning" value={brand.positioning} confidence={conf?.positioning} />}
+              {brand.target_icp && <Field label="Target ICP (ideal customer profile)" value={brand.target_icp} confidence={conf?.target_icp} />}
+              {brand.signals && <Field label="Brand-level signals" value={brand.signals} />}
+              {brand.competitive_summary && <Field label="Competitive summary" value={brand.competitive_summary} confidence={conf?.competitive_summary} />}
+              {brand.research_summary && <Field label="Research summary" value={brand.research_summary} confidence={conf?.research_summary} />}
+              <UnknownsBlock unknowns={brand.unknowns} />
+              <StrategicIntelBlock intel={strategic} />
+            </div>
+          </details>
+        );
+      })()}
     </div>
   );
 }

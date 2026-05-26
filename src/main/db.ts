@@ -260,6 +260,24 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_chunks_item ON knowledge_chunks(item_id);
   `);
 
+  // v1.10.0: Opus dossier verification + strategic intelligence.
+  // Stage 1 (Perplexity) still writes the canonical columns. Stage 2 (Opus)
+  // overwrites canonical fields with sharpened versions; the raw Stage 1 text
+  // is preserved in raw_dossier for audit. confidence_levels + unknowns track
+  // Stage 2's metadata. strategic_intel holds Stage 3's structured output.
+  addColumnIfMissing(db, 'brands', 'raw_dossier', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'verified_dossier', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'confidence_levels', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'unknowns', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'strategic_intel', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'last_advanced_research_at', 'TEXT');
+  addColumnIfMissing(db, 'products', 'raw_dossier', 'TEXT');
+  addColumnIfMissing(db, 'products', 'verified_dossier', 'TEXT');
+  addColumnIfMissing(db, 'products', 'confidence_levels', 'TEXT');
+  addColumnIfMissing(db, 'products', 'unknowns', 'TEXT');
+  addColumnIfMissing(db, 'products', 'strategic_intel', 'TEXT');
+  addColumnIfMissing(db, 'products', 'last_advanced_research_at', 'TEXT');
+
   // v1.9.2: reviewer feedback for dossier and signal re-research.
   // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'
   // applied_at is set when the research run that consumed this feedback

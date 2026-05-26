@@ -2,6 +2,15 @@ import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
 import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
+import { addFeedback, markFeedbackApplied } from './feedback.js';
+import {
+  verifyBrandDossier,
+  verifyProductDossier
+} from './research/dossier-verify.js';
+import {
+  strategicIntelForBrand,
+  strategicIntelForProduct
+} from './research/dossier-strategic.js';
 import type { Product, Brand, KnowledgeItem } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B competitive-intelligence analyst conducting
@@ -57,13 +66,23 @@ const RESEARCH_SCHEMA = {
   }
 };
 
-export async function researchProduct(productId: number): Promise<Product> {
+export async function researchProduct(
+  productId: number,
+  options: { feedback?: string } = {}
+): Promise<Product> {
   const db = getDb();
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product | undefined;
   if (!product) throw new Error('Product not found');
   const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(product.brand_id) as Brand;
 
   db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('researching', productId);
+
+  // v1.10.0: persist new feedback (if any) before Stage 1 so it's available
+  // to every stage's prompt.
+  let pendingFeedbackId: number | null = null;
+  if (options.feedback && options.feedback.trim()) {
+    pendingFeedbackId = addFeedback('product', productId, options.feedback);
+  }
 
   try {
     // Pull this brand's knowledge, prioritising items tied to THIS product,
@@ -125,8 +144,9 @@ result as JSON matching the schema you've been given.`;
     }
 
     // v1.9.2: signals deliberately not written here — they're managed by
-    // the separate Signal Config job (see researchProductSignals in
-    // signal-research.ts). Existing signals stay untouched on re-research.
+    // the separate Signal Config job. v1.10.0: Stage 1 writes canonical
+    // columns + raw_dossier; Stage 2 (Opus verify) may overwrite the
+    // canonical fields with sharpened versions while preserving raw_dossier.
     db.prepare(
       `UPDATE products SET
          description = COALESCE(NULLIF(?, ''), description),
@@ -135,6 +155,7 @@ result as JSON matching the schema you've been given.`;
          competitors = ?,
          differentiators = ?,
          research_summary = ?,
+         raw_dossier = ?,
          scan_recency_auto = ?,
          research_status = 'ready',
          last_researched_at = datetime('now'),
@@ -147,14 +168,95 @@ result as JSON matching the schema you've been given.`;
       json.competitors,
       json.differentiators,
       json.research_summary,
+      JSON.stringify({ stage1: json, citations: [] }),
       json.recommended_scan_recency || null,
       productId
     );
 
     // v1.6: brand competitive_summary is no longer regenerated as a
-    // side-effect of product research. Use `researchBrand(id)` for that —
-    // see below. This stops the historical bug where the brand summary
-    // got overwritten every time any product was re-researched.
+    // side-effect of product research. Use `researchBrand(id)` for that.
+
+    // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
+    const settings = getSettings();
+    if (settings.productResearchAdvanced && settings.anthropicApiKey) {
+      try {
+        const verified = await verifyProductDossier({
+          productId,
+          name: product.name,
+          stage1: {
+            description: json.description,
+            category: json.category,
+            use_cases: json.use_cases,
+            competitors: json.competitors,
+            differentiators: json.differentiators,
+            research_summary: json.research_summary
+          },
+          brand: {
+            name: brand.name,
+            category: brand.category,
+            target_icp: brand.target_icp
+          },
+          citations: [],
+          knowledgeBlob,
+          freshFeedback: options.feedback
+        });
+        if (verified) {
+          db.prepare(
+            `UPDATE products SET
+               description = ?,
+               category = ?,
+               use_cases = ?,
+               competitors = ?,
+               differentiators = ?,
+               research_summary = ?,
+               verified_dossier = ?,
+               confidence_levels = ?,
+               unknowns = ?,
+               last_advanced_research_at = datetime('now'),
+               updated_at = datetime('now')
+             WHERE id = ?`
+          ).run(
+            verified.fields.description,
+            verified.fields.category,
+            verified.fields.use_cases,
+            verified.fields.competitors,
+            verified.fields.differentiators,
+            verified.fields.research_summary,
+            JSON.stringify(verified),
+            JSON.stringify(verified.confidence_levels),
+            verified.unknowns,
+            productId
+          );
+
+          // ─── Stage 3 — Opus strategic intel ─────────────────────
+          try {
+            const strategic = await strategicIntelForProduct({
+              productId,
+              name: product.name,
+              brandName: brand.name,
+              verified: verified.fields,
+              brand: {
+                target_icp: brand.target_icp,
+                positioning: brand.positioning
+              }
+            });
+            if (strategic) {
+              db.prepare(
+                "UPDATE products SET strategic_intel = ?, updated_at = datetime('now') WHERE id = ?"
+              ).run(JSON.stringify(strategic), productId);
+            }
+          } catch (e: any) {
+            console.warn(`[researchProduct ${productId}] Stage 3 failed (non-fatal):`, e?.message || e);
+          }
+        } else {
+          console.warn(`[researchProduct ${productId}] Stage 2 returned null — keeping Stage 1 output only`);
+        }
+      } catch (e: any) {
+        console.warn(`[researchProduct ${productId}] Stage 2 threw (non-fatal):`, e?.message || e);
+      }
+    }
+
+    if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
     return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
   } catch (e) {
@@ -215,12 +317,22 @@ const BRAND_RESEARCH_SCHEMA = {
   }
 };
 
-export async function researchBrand(brandId: number): Promise<Brand> {
+export async function researchBrand(
+  brandId: number,
+  options: { feedback?: string } = {}
+): Promise<Brand> {
   const db = getDb();
   const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(brandId) as Brand | undefined;
   if (!brand) throw new Error('Brand not found');
 
   db.prepare("UPDATE brands SET research_status = 'researching' WHERE id = ?").run(brandId);
+
+  // v1.10.0: persist new feedback (if any) before Stage 1 so it's available
+  // to every stage's prompt.
+  let pendingFeedbackId: number | null = null;
+  if (options.feedback && options.feedback.trim()) {
+    pendingFeedbackId = addFeedback('brand', brandId, options.feedback);
+  }
 
   try {
     // Brand research prioritises brand-level material, then takes a sample
@@ -272,9 +384,10 @@ matching the schema you've been given.`;
       throw new Error('Perplexity returned an unparseable brand-research response. Try again.');
     }
 
-    // v1.9.2: brand signals deliberately not written here — they're now
-    // managed by the separate Signal Config job (researchBrandSignals in
-    // signal-research.ts). Existing signals stay untouched on re-research.
+    // v1.9.2: brand signals deliberately not written here — managed by
+    // Signal Config job. v1.10.0: Stage 1 writes canonical + raw_dossier;
+    // Stage 2 (Opus verify) may overwrite canonical fields with sharpened
+    // versions while preserving raw_dossier.
     db.prepare(
       `UPDATE brands SET
          category = COALESCE(NULLIF(?, ''), category),
@@ -282,6 +395,7 @@ matching the schema you've been given.`;
          target_icp = ?,
          competitive_summary = ?,
          research_summary = ?,
+         raw_dossier = ?,
          scan_recency_auto = ?,
          research_status = 'ready',
          last_researched_at = datetime('now'),
@@ -293,9 +407,79 @@ matching the schema you've been given.`;
       json.target_icp,
       json.competitive_summary,
       json.research_summary,
+      JSON.stringify({ stage1: json, citations: [] }),
       json.recommended_scan_recency || null,
       brandId
     );
+
+    // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
+    const settings = getSettings();
+    if (settings.brandResearchAdvanced && settings.anthropicApiKey) {
+      try {
+        const verified = await verifyBrandDossier({
+          brandId,
+          name: brand.name,
+          stage1: {
+            category: json.category,
+            positioning: json.positioning,
+            target_icp: json.target_icp,
+            competitive_summary: json.competitive_summary,
+            research_summary: json.research_summary
+          },
+          citations: [],
+          knowledgeBlob,
+          freshFeedback: options.feedback
+        });
+        if (verified) {
+          db.prepare(
+            `UPDATE brands SET
+               category = ?,
+               positioning = ?,
+               target_icp = ?,
+               competitive_summary = ?,
+               research_summary = ?,
+               verified_dossier = ?,
+               confidence_levels = ?,
+               unknowns = ?,
+               last_advanced_research_at = datetime('now'),
+               updated_at = datetime('now')
+             WHERE id = ?`
+          ).run(
+            verified.fields.category,
+            verified.fields.positioning,
+            verified.fields.target_icp,
+            verified.fields.competitive_summary,
+            verified.fields.research_summary,
+            JSON.stringify(verified),
+            JSON.stringify(verified.confidence_levels),
+            verified.unknowns,
+            brandId
+          );
+
+          // ─── Stage 3 — Opus strategic intel ─────────────────────
+          try {
+            const strategic = await strategicIntelForBrand({
+              brandId,
+              name: brand.name,
+              verified: verified.fields
+            });
+            if (strategic) {
+              db.prepare(
+                "UPDATE brands SET strategic_intel = ?, updated_at = datetime('now') WHERE id = ?"
+              ).run(JSON.stringify(strategic), brandId);
+            }
+          } catch (e: any) {
+            console.warn(`[researchBrand ${brandId}] Stage 3 failed (non-fatal):`, e?.message || e);
+          }
+        } else {
+          console.warn(`[researchBrand ${brandId}] Stage 2 returned null — keeping Stage 1 output only`);
+        }
+      } catch (e: any) {
+        console.warn(`[researchBrand ${brandId}] Stage 2 threw (non-fatal):`, e?.message || e);
+      }
+    }
+
+    if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(brandId) as Brand;
   } catch (e) {

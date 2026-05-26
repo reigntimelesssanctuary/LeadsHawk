@@ -19,6 +19,10 @@ const defaults: Settings = {
   // v1.9: two-stage deep scan ON by default; uncheck in Settings to revert
   // to the v1.8.7 monolithic single-call path.
   deepScanTwoStage: true,
+  // v1.10.0: Opus dossier verification + strategic intel ON by default for
+  // both brand and product research. Uncheck to revert to v1.9.x Stage-1-only.
+  brandResearchAdvanced: true,
+  productResearchAdvanced: true,
   minConfidence: 0.55,
   maxItemsPerScan: 30,
   liveMonitoringEnabled: false,
@@ -45,6 +49,8 @@ export function getSettings(): Settings {
     deepScanEnabled: (store as any).get('deepScanEnabled') as boolean,
     deepScanModel: (store as any).get('deepScanModel') as string,
     deepScanTwoStage: (store as any).get('deepScanTwoStage') as boolean,
+    brandResearchAdvanced: (store as any).get('brandResearchAdvanced') as boolean,
+    productResearchAdvanced: (store as any).get('productResearchAdvanced') as boolean,
     minConfidence: (store as any).get('minConfidence') as number,
     maxItemsPerScan: (store as any).get('maxItemsPerScan') as number,
     liveMonitoringEnabled: (store as any).get('liveMonitoringEnabled') as boolean,
