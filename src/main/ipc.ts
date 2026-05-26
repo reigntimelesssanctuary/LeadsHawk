@@ -2,7 +2,9 @@ import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
 import { getDb, dataDir } from './db.js';
 import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
-import { researchProduct, refreshProductSignals, researchBrand } from './research.js';
+import { researchProduct, researchBrand } from './research.js';
+import { researchBrandSignals, researchProductSignals } from './signal-research.js';
+import { listFeedback, type FeedbackTargetKind } from './feedback.js';
 import { runScan, runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
 import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
@@ -116,6 +118,10 @@ export function registerIpc() {
   });
   // v1.6: brand becomes a first-class research subject.
   ipcMain.handle('brands:research', async (_e, id: number) => researchBrand(id));
+  // v1.9.2: brand-level signal research (separate job, optional feedback).
+  ipcMain.handle('brands:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
+    researchBrandSignals(id, opts || {})
+  );
 
   // -------- Products --------
   ipcMain.handle('products:list', (_e, brandId?: number) => {
@@ -172,7 +178,11 @@ export function registerIpc() {
     return true;
   });
   ipcMain.handle('products:research', async (_e, id: number) => researchProduct(id));
-  ipcMain.handle('products:refreshSignals', async (_e, id: number) => refreshProductSignals(id));
+  // v1.9.2: product-level signal research (separate job, optional feedback).
+  // Replaces the old products:refreshSignals handler.
+  ipcMain.handle('products:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
+    researchProductSignals(id, opts || {})
+  );
   // Re-embed the product's signals string in-place — no Perplexity call.
   // Used after the user manually edits the signals via the product editor.
   ipcMain.handle('products:reembed', async (_e, id: number) => {
@@ -501,6 +511,15 @@ export function registerIpc() {
 
   // -------- Spend --------
   ipcMain.handle('spend:summary', () => getSpendSummary());
+
+  // -------- Feedback (v1.9.2) --------
+  // Read-only — feedback rows are inserted by the research handlers
+  // themselves when `opts.feedback` is provided, so the renderer never
+  // needs to call addFeedback directly. listFeedback drives the modal's
+  // history pane.
+  ipcMain.handle('feedback:list', (_e, kind: FeedbackTargetKind, targetId: number) =>
+    listFeedback(kind, targetId)
+  );
 }
 
 export function seedDefaults() {

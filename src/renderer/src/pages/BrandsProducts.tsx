@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { Brand, Product, KnowledgeItem } from '../../../shared/types';
+import type { Page } from '../components/Sidebar';
 import { Modal } from '../components/Modal';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, RefreshCw, Pencil, AlertTriangle } from 'lucide-react';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, Pencil, AlertTriangle } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
-export function BrandsProducts() {
+export function BrandsProducts({ onNavigate }: { onNavigate?: (p: Page) => void }) {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [active, setActive] = useState<Brand | null>(null);
   const [showAddBrand, setShowAddBrand] = useState(false);
@@ -56,7 +57,7 @@ export function BrandsProducts() {
 
         {active ? (
           <div style={{ flex: 1 }}>
-            <BrandPanel brand={active} onChanged={refresh} />
+            <BrandPanel brand={active} onChanged={refresh} onNavigate={onNavigate} />
           </div>
         ) : (
           <div className="card" style={{ flex: 1, padding: 24, color: '#6b7280' }}>
@@ -107,7 +108,7 @@ function AddBrandForm({ onDone }: { onDone: (b: Brand) => void }) {
 //   <number>   → modal open at product-level (this product id)
 type ModalTarget = false | null | number;
 
-function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void }) {
+function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged: () => void; onNavigate?: (p: Page) => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
   const [showAddProduct, setShowAddProduct] = useState(false);
@@ -116,6 +117,10 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
   const [noteTarget, setNoteTarget] = useState<ModalTarget>(false);
   const [linkTarget, setLinkTarget] = useState<ModalTarget>(false);
   const [busy, setBusy] = useState<string | null>(null);
+
+  // v1.9.2: signals are now managed in Signal Config. Empty signals on a
+  // researched brand or product are surfaced as a banner pointing there.
+  const goToSignals = () => onNavigate?.('signals');
 
   const researchBrand = async () => {
     setBusy('research-brand');
@@ -152,12 +157,8 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
     finally { setBusy(null); }
   };
 
-  const refreshSignals = async (productId: number) => {
-    setBusy('refresh-' + productId);
-    try { await window.lh.products.refreshSignals(productId); await refresh(); onChanged(); }
-    catch (e: any) { alert(e.message); }
-    finally { setBusy(null); }
-  };
+  // v1.9.2: refreshSignals removed — signal research is now a separate job
+  // in Signal Config. The dossier-research button no longer touches signals.
 
   const deleteBrand = async () => {
     if (!confirm(`Delete brand "${brand.name}" and all its products & knowledge?`)) return;
@@ -205,6 +206,26 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
         )}
         {/* v1.6: brand research status + dossier */}
         <BrandResearchPanel brand={brand} knowledge={knowledge} />
+        {/* v1.9.2: brand-level signals are managed separately — flag if empty. */}
+        {brand.research_status === 'ready' && !(brand.signals && brand.signals.trim()) && (
+          <div style={{ marginTop: 12, padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, fontSize: 12, color: '#7c2d12', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+            <span>
+              Brand-level signals not researched yet.
+              {onNavigate && (
+                <>
+                  {' '}
+                  <button
+                    onClick={goToSignals}
+                    style={{ background: 'transparent', border: 'none', padding: 0, color: '#6c5cf2', textDecoration: 'underline', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Go to Signal Config →
+                  </button>
+                </>
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ padding: 20 }}>
@@ -231,21 +252,10 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                     {p.scan_enabled === 1 && brand.scan_enabled === 1 ? 'scans on' : 'scans paused'}
                   </span>
                   <RecencyChip product={p} brand={brand} />
-                  <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id || busy === 'refresh-' + p.id}>
+                  <button className="btn-ghost" onClick={() => research(p.id)} disabled={busy === 'research-' + p.id}>
                     <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />
                     {busy === 'research-' + p.id ? 'Researching…' : (p.research_status === 'ready' ? 'Re-research' : 'Run research')}
                   </button>
-                  {p.research_status === 'ready' && (
-                    <button
-                      className="btn-ghost"
-                      onClick={() => refreshSignals(p.id)}
-                      disabled={busy === 'refresh-' + p.id || busy === 'research-' + p.id}
-                      title="Quick update: keeps the dossier, only re-derives buying signals (~10x cheaper than full research)."
-                    >
-                      <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} />
-                      {busy === 'refresh-' + p.id ? 'Refreshing…' : 'Refresh signals'}
-                    </button>
-                  )}
                   <button
                     className="btn-ghost"
                     onClick={() => setEditingProduct(p)}
@@ -269,6 +279,26 @@ function BrandPanel({ brand, onChanged }: { brand: Brand; onChanged: () => void 
                     <Field label="Summary" value={p.research_summary} />
                   </div>
                 </details>
+              )}
+              {/* v1.9.2: signals are managed separately now — flag empty signals here. */}
+              {p.research_status === 'ready' && !(p.signals && p.signals.trim()) && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, fontSize: 12, color: '#7c2d12', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                  <span>
+                    Signals not researched yet — scans won't produce leads for this product until you run signal research.
+                    {onNavigate && (
+                      <>
+                        {' '}
+                        <button
+                          onClick={goToSignals}
+                          style={{ background: 'transparent', border: 'none', padding: 0, color: '#6c5cf2', textDecoration: 'underline', cursor: 'pointer', fontSize: 12 }}
+                        >
+                          Go to Signal Config →
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </div>
               )}
               <ReResearchBadge
                 lastResearchedAt={p.last_researched_at}

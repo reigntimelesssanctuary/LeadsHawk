@@ -259,6 +259,23 @@ function migrate(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_chunks_item ON knowledge_chunks(item_id);
   `);
+
+  // v1.9.2: reviewer feedback for dossier and signal re-research.
+  // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'
+  // applied_at is set when the research run that consumed this feedback
+  // completes successfully; NULL means the feedback hasn't been applied yet.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dossier_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_kind TEXT NOT NULL,
+      target_id INTEGER NOT NULL,
+      feedback TEXT NOT NULL,
+      applied_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_target
+      ON dossier_feedback(target_kind, target_id, created_at DESC);
+  `);
 }
 
 function addColumnIfMissing(

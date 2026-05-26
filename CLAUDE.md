@@ -613,6 +613,37 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.9.2 (2026-05-27):** Signal research decoupled into its own job.
+
+Previously, `brands.signals` and `products.signals` were side-effects of dossier research — every time you re-ran research on a product, the entire dossier (including signals) was regenerated, even if all you wanted was a fresh signal list. Conversely, there was no way to iterate on signals with reviewer feedback without paying for full re-research.
+
+v1.9.2 separates these concerns:
+
+- **`signals` field is removed** from `RESEARCH_SCHEMA` and `BRAND_RESEARCH_SCHEMA`. Dossier re-research no longer writes to the signals column; existing stored signals are preserved untouched.
+- **New module** `src/main/signal-research.ts` exposes `researchProductSignals(id, {feedback?})` (mirrors+replaces the old `refreshProductSignals`) and `researchBrandSignals(id, {feedback?})` (new). Both are Perplexity sonar-pro calls, cheap (~$0.005–0.02), and the product variant re-embeds signals afterwards for the Live Monitor pre-filter.
+- **New IPC** `brands:researchSignals` + `products:researchSignals` (the old `products:refreshSignals` is removed — no back-compat alias since we control the only UI).
+- **New `LlmStage` tags** `brand_signals` and `product_signals`. The legacy `refresh_signals` tag stays in the enum so historical spend rows still label correctly.
+
+**Reviewer feedback infrastructure (introduced here, reused by v1.10.0).**
+New table `dossier_feedback(target_kind, target_id, feedback, applied_at, created_at)`. New module `src/main/feedback.ts` with `listFeedback`, `addFeedback` (4000-char-per-submission cap, validated server-side), `markFeedbackApplied`, and `buildFeedbackBlock` (newest-first, total cap 16000 chars — older entries drop entirely rather than partial-truncate so the model never sees a half-feedback). `target_kind` accepts `'brand'`, `'product'`, `'brand_signals'`, `'product_signals'` — v1.9.2 uses only the two `_signals` variants; v1.10.0 will extend to dossier feedback.
+
+**Signal Config UI rebuilt.** New top sections:
+- **Brand-level signals** — one row per researched brand with a `Research signals` button and a `Re-research with feedback` button. Signal preview shown inline below the action row.
+- **Product-level signals** — existing per-product expandable card gets `Research signals` + `Re-research with feedback` buttons on the action row. Scan-rule editing (include/exclude) stays in the expanded view, unchanged.
+
+Shared `src/renderer/src/components/SignalFeedbackModal.tsx` handles both. Modal shows: read-only history of past feedback applied (newest first, collapsible per entry); new-feedback textarea with live char counter (turns red at over-cap); submit button disabled until non-empty + under-cap. On submit, runs the corresponding research IPC with the feedback string and refreshes.
+
+**BrandsProducts page cleanup.** Removed the per-product `Refresh signals` button (consolidated to Signal Config). Added empty-signals banners on brand panels and product cards when `research_status='ready'` but `signals` is null/empty: *"Signals not researched yet — scans won't produce leads… Go to Signal Config →"*. App.tsx passes `onNavigate` down to BrandsProducts so the inline button can route to the Signal Config page.
+
+**Smoke tests grew 32 → 37.** Added inline copies of `validateFeedbackInput` (the trim+cap validation half of `addFeedback`) and `buildFeedbackBlockFrom` (the prompt-block assembler with the 16K-char total cap). 5 new tests:
+- empty-string feedback rejected
+- 4001-char feedback rejected
+- 4000-char feedback accepted exactly
+- empty-entries returns empty block
+- newest-first ordering + oldest-drop truncation when over 16K total
+
+Existing v1.8/v1.9 retry-on-no-citations logic untouched; deep scan two-stage path untouched; scanner / live monitor / cross-match all still read `brands.signals` and `products.signals` the same way as before — only WHO writes those columns moved.
+
 **v1.9.1 (2026-05-27):** Widen signal-count range in research schemas.
 
 User noticed every researched brand was landing at exactly 10 brand-level signals — that came from the `BRAND_RESEARCH_SCHEMA.signals` description in `research.ts` saying `"5-10 bullets."`. The model was honouring the upper bound. The product-level signals schema had no count hint and was converging at ~10 by LLM default.

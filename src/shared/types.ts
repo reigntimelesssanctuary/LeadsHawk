@@ -124,6 +124,22 @@ export type SpendSummary = {
   byModel: Array<{ model: string; calls: number; cost: number }>;
 };
 
+// v1.9.2: reviewer feedback for re-research runs.
+export type FeedbackTargetKind =
+  | 'brand'
+  | 'product'
+  | 'brand_signals'
+  | 'product_signals';
+
+export type DossierFeedback = {
+  id: number;
+  target_kind: FeedbackTargetKind;
+  target_id: number;
+  feedback: string;
+  applied_at: string | null;
+  created_at: string;
+};
+
 export type SourceHealth = {
   id: number;
   name: string;

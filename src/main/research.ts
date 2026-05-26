@@ -1,7 +1,6 @@
 import { getDb } from './db.js';
 import { completePerplexity } from './perplexity.js';
 import { getSettings } from './settings.js';
-import { embedSignalsForProduct } from './monitor/embed.js';
 import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import type { Product, Brand, KnowledgeItem } from '@shared/types';
 
@@ -21,13 +20,16 @@ Your deliverable is a sharp dossier a sales team can act on:
 Be specific. Cite real competitor names, real customers when known, real
 events. Avoid generic marketing language.`;
 
+// v1.9.2: `signals` is no longer part of dossier research — it's a separate
+// job triggered from Signal Config (see signal-research.ts). Existing
+// stored signals are preserved; re-running dossier research leaves them
+// untouched.
 type ResearchOutput = {
   description: string;
   category: string;
   use_cases: string;
   competitors: string;
   differentiators: string;
-  signals: string;
   research_summary: string;
   recommended_scan_recency: 'day' | 'week' | 'month' | 'year';
 };
@@ -38,7 +40,7 @@ const RESEARCH_SCHEMA = {
   type: 'object',
   required: [
     'description', 'category', 'use_cases', 'competitors',
-    'differentiators', 'signals', 'research_summary', 'recommended_scan_recency'
+    'differentiators', 'research_summary', 'recommended_scan_recency'
   ],
   properties: {
     description: { type: 'string', description: '1-paragraph crisp description of the product' },
@@ -46,7 +48,6 @@ const RESEARCH_SCHEMA = {
     use_cases: { type: 'string', description: 'Markdown bulleted list of high-fit customer situations (lines starting with -)' },
     competitors: { type: 'string', description: 'Markdown bulleted list. Each line: "Competitor — short positioning"' },
     differentiators: { type: 'string', description: 'Markdown bulleted list of this product\'s unique angles vs competitors' },
-    signals: { type: 'string', description: 'Markdown bulleted list of concrete news/event signals that indicate a buying opportunity for this product. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones.' },
     research_summary: { type: 'string', description: '300-500 word holistic narrative tying the above together' },
     recommended_scan_recency: {
       type: 'string',
@@ -123,6 +124,9 @@ result as JSON matching the schema you've been given.`;
       throw new Error('Perplexity returned an unparseable response. Try again or pick a different research model in Settings.');
     }
 
+    // v1.9.2: signals deliberately not written here — they're managed by
+    // the separate Signal Config job (see researchProductSignals in
+    // signal-research.ts). Existing signals stay untouched on re-research.
     db.prepare(
       `UPDATE products SET
          description = COALESCE(NULLIF(?, ''), description),
@@ -130,7 +134,6 @@ result as JSON matching the schema you've been given.`;
          use_cases = ?,
          competitors = ?,
          differentiators = ?,
-         signals = ?,
          research_summary = ?,
          scan_recency_auto = ?,
          research_status = 'ready',
@@ -143,16 +146,10 @@ result as JSON matching the schema you've been given.`;
       json.use_cases,
       json.competitors,
       json.differentiators,
-      json.signals,
       json.research_summary,
       json.recommended_scan_recency || null,
       productId
     );
-
-    // Fire-and-forget: recompute signal embeddings for live monitor use.
-    embedSignalsForProduct(productId).catch((e) => {
-      console.warn('[research] signal embedding failed for product', productId, e?.message || e);
-    });
 
     // v1.6: brand competitive_summary is no longer regenerated as a
     // side-effect of product research. Use `researchBrand(id)` for that —
@@ -164,90 +161,6 @@ result as JSON matching the schema you've been given.`;
     db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('error', productId);
     throw e;
   }
-}
-
-/**
- * Lightweight signals-only refresh. Reuses the existing dossier as context
- * instead of doing fresh deep web research, so it runs on the cheaper
- * `sonar-pro` model with a much smaller token budget (~10x cheaper than
- * researchProduct). Re-embeds the new signals afterwards so the live
- * monitor's pre-filter sees them immediately.
- *
- * Use this when you've tweaked the product description / category and want
- * the buying-signal list re-derived without paying for full re-research.
- */
-export async function refreshProductSignals(productId: number): Promise<Product> {
-  const db = getDb();
-  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product | undefined;
-  if (!product) throw new Error('Product not found');
-  if (product.research_status !== 'ready') {
-    throw new Error('Run full research first before refreshing signals.');
-  }
-  const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(product.brand_id) as Brand;
-
-  const SIGNALS_SCHEMA = {
-    type: 'object',
-    required: ['signals'],
-    properties: {
-      signals: {
-        type: 'string',
-        description:
-          "Markdown bulleted list of concrete news/event signals (lines starting with '- ') that indicate a buying opportunity for this product. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones."
-      }
-    }
-  };
-
-  const prompt = `# Brand
-${brand.name} — ${brand.description || ''}
-
-# Product
-Name: ${product.name}
-Category: ${product.category || ''}
-Description: ${product.description || ''}
-
-# Existing dossier context
-Use cases:
-${product.use_cases || '(none)'}
-
-Differentiators:
-${product.differentiators || '(none)'}
-
-Existing signals (for reference — refresh them, don't just copy):
-${product.signals || '(none)'}
-
-# Task
-Re-derive a fresh list of buying-signal bullets for this product. Lean on
-live web search to incorporate anything that's changed in the market over
-the last few weeks. Return JSON matching the schema.`;
-
-  const { perplexityScanModel } = getSettings();
-  const { json } = await completePerplexity<{ signals: string }>(
-    'You are a senior B2B competitive-intelligence analyst. You produce sharp, concrete buying-signal lists.',
-    prompt,
-    {
-      model: perplexityScanModel || 'sonar-pro',
-      maxTokens: 1500,
-      temperature: 0.2,
-      jsonSchema: SIGNALS_SCHEMA,
-      stage: 'refresh_signals',
-      relatedId: productId
-    }
-  );
-
-  if (!json || !json.signals) {
-    throw new Error('Perplexity returned an unparseable response. Try again.');
-  }
-
-  db.prepare(
-    "UPDATE products SET signals = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(json.signals, productId);
-
-  // Re-embed for the live monitor pre-filter.
-  await embedSignalsForProduct(productId).catch((e) => {
-    console.warn('[refreshProductSignals] embedding failed:', e?.message || e);
-  });
-
-  return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
 }
 
 /**
@@ -274,25 +187,25 @@ coverage, customer case studies, news, social media, and industry reports.
 Be specific and honest. Avoid generic marketing language. The dossier is
 internal — it will be invisible to the brand.`;
 
+// v1.9.2: `signals` removed — brand-level signals are now produced by the
+// separate signal-research job (researchBrandSignals in signal-research.ts).
 type BrandResearchOutput = {
   category: string;
   positioning: string;
   target_icp: string;
   competitive_summary: string;
-  signals: string;
   research_summary: string;
   recommended_scan_recency: 'day' | 'week' | 'month' | 'year';
 };
 
 const BRAND_RESEARCH_SCHEMA = {
   type: 'object',
-  required: ['category', 'positioning', 'target_icp', 'competitive_summary', 'signals', 'research_summary', 'recommended_scan_recency'],
+  required: ['category', 'positioning', 'target_icp', 'competitive_summary', 'research_summary', 'recommended_scan_recency'],
   properties: {
     category: { type: 'string', description: 'Short market category the brand operates in (e.g. "commercial interior design", "B2B SaaS observability", "managed network services").' },
     positioning: { type: 'string', description: 'How this brand positions itself in market — its core promise / wedge / differentiation in 2-4 sentences.' },
     target_icp: { type: 'string', description: 'The brand\'s ideal customer profile (ICP). Be specific about company size, sector, geography, maturity stage, and the buying-team persona who typically initiates the deal.' },
     competitive_summary: { type: 'string', description: 'Tight 150-200 word competitive narrative — where the brand wins, where it\'s vulnerable, who the main alternatives are.' },
-    signals: { type: 'string', description: 'Markdown bulleted list of brand-LEVEL buying signals — events that indicate ANY of this brand\'s products may be needed (e.g. for a workspace-design brand: "company announces APAC HQ expansion", "lease renewal due", "post-acquisition consolidation"). Distinct from product-specific signals. List as many as are GENUINELY useful — minimum 1, no upper cap. Do not pad to hit a number, and do not compress to fit one. Quality over quantity: a single sharp signal beats ten generic ones.' },
     research_summary: { type: 'string', description: '400-600 word narrative tying positioning + ICP + signals + market context together. The single most useful paragraph a salesperson new to this brand could read.' },
     recommended_scan_recency: {
       type: 'string',
@@ -359,13 +272,15 @@ matching the schema you've been given.`;
       throw new Error('Perplexity returned an unparseable brand-research response. Try again.');
     }
 
+    // v1.9.2: brand signals deliberately not written here — they're now
+    // managed by the separate Signal Config job (researchBrandSignals in
+    // signal-research.ts). Existing signals stay untouched on re-research.
     db.prepare(
       `UPDATE brands SET
          category = COALESCE(NULLIF(?, ''), category),
          positioning = COALESCE(NULLIF(?, ''), positioning),
          target_icp = ?,
          competitive_summary = ?,
-         signals = ?,
          research_summary = ?,
          scan_recency_auto = ?,
          research_status = 'ready',
@@ -377,7 +292,6 @@ matching the schema you've been given.`;
       json.positioning,
       json.target_icp,
       json.competitive_summary,
-      json.signals,
       json.research_summary,
       json.recommended_scan_recency || null,
       brandId

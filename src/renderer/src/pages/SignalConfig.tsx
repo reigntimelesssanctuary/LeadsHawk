@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Modal } from '../components/Modal';
+import { SignalFeedbackModal, type SignalFeedbackKind } from '../components/SignalFeedbackModal';
 import type { SignalSource, Product, Brand, ScanRule } from '../../../shared/types';
 import {
   Plus, Trash2, Sparkles, ChevronDown, ChevronRight,
-  AlertCircle, CheckCircle2, Ban, Globe
+  AlertCircle, CheckCircle2, Ban, Globe, MessageSquare, RefreshCw
 } from 'lucide-react';
 
 export function SignalConfig() {
@@ -14,6 +15,12 @@ export function SignalConfig() {
   const [showAdd, setShowAdd] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [globalOpen, setGlobalOpen] = useState(false);
+  // v1.9.2: per-row "research signals" busy state, keyed by `${kind}-${id}`.
+  const [busy, setBusy] = useState<string | null>(null);
+  // v1.9.2: feedback modal target. null = closed.
+  const [feedbackTarget, setFeedbackTarget] = useState<
+    { kind: SignalFeedbackKind; id: number; name: string } | null
+  >(null);
 
   const refresh = async () => {
     setProducts(await window.lh.products.list());
@@ -22,6 +29,21 @@ export function SignalConfig() {
     setGlobalRules(await window.lh.rules.listGlobal());
   };
   useEffect(() => { refresh(); }, []);
+
+  const researchBrandSignals = async (b: Brand) => {
+    const key = `brand-${b.id}`;
+    setBusy(key);
+    try { await window.lh.brands.researchSignals(b.id); await refresh(); }
+    catch (e: any) { alert(e.message); }
+    finally { setBusy(null); }
+  };
+  const researchProductSignals = async (p: Product) => {
+    const key = `product-${p.id}`;
+    setBusy(key);
+    try { await window.lh.products.researchSignals(p.id); await refresh(); }
+    catch (e: any) { alert(e.message); }
+    finally { setBusy(null); }
+  };
 
   const loadGlobalRules = async () => setGlobalRules(await window.lh.rules.listGlobal());
 
@@ -96,12 +118,12 @@ export function SignalConfig() {
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="h-section" style={{ marginBottom: 12 }}>
+        <div className="h-section" style={{ marginBottom: 6 }}>
           <Sparkles size={16} style={{ display: 'inline', marginRight: 8, verticalAlign: '-2px', color: '#6c5cf2' }} />
           Brand-level signals
         </div>
         <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-          Cross-cutting signals captured by brand research (v1.6). These apply across every product of the brand and are injected into every scan + live-monitor prompt. To edit, use the brand's Edit button on the Brands & Products page (Edit → Positioning) or re-run brand research.
+          Cross-cutting events that indicate ANY product from a brand may be needed (e.g. an APAC HQ relocation, lease renewals, post-M&A IT consolidation). Run signal research per brand to populate. Use "Re-research with feedback" when a brand owner reviews the dossier and asks for changes.
         </div>
         {brands.length === 0 ? (
           <div style={{ color: '#6b7280', fontSize: 13 }}>No brands yet.</div>
@@ -110,19 +132,44 @@ export function SignalConfig() {
             {brands.map((b) => {
               const lines = parseBullets(b.signals || '');
               const researched = b.research_status === 'ready';
+              const hasSignals = lines.length > 0;
+              const busyKey = `brand-${b.id}`;
+              const isBusy = busy === busyKey;
               return (
                 <div key={b.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: researched ? 'white' : '#fafafa' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
-                    {!researched ? (
-                      <span className="chip chip-muted">brand not researched yet</span>
-                    ) : lines.length === 0 ? (
-                      <span className="chip chip-muted">no brand signals captured</span>
-                    ) : (
-                      <span className="chip chip-qualified">{lines.length} signal{lines.length === 1 ? '' : 's'}</span>
-                    )}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 200 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
+                      {!researched ? (
+                        <span className="chip chip-muted" title="Run brand research from Brands & Products first.">brand not researched yet</span>
+                      ) : !hasSignals ? (
+                        <span className="chip chip-muted">no signals yet</span>
+                      ) : (
+                        <span className="chip chip-qualified">{lines.length} signal{lines.length === 1 ? '' : 's'}</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        className="btn-ghost"
+                        onClick={() => researchBrandSignals(b)}
+                        disabled={!researched || !!busy}
+                        title={researched ? 'Run signal research for this brand (Perplexity sonar-pro, cheap).' : 'Run brand research first from Brands & Products.'}
+                      >
+                        {hasSignals ? <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> : <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />}
+                        {isBusy ? 'Researching…' : (hasSignals ? 'Re-research signals' : 'Research signals')}
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        onClick={() => setFeedbackTarget({ kind: 'brand_signals', id: b.id, name: b.name })}
+                        disabled={!researched || !!busy}
+                        title="Re-research signals while injecting reviewer feedback into the prompt."
+                      >
+                        <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
+                        Re-research with feedback
+                      </button>
+                    </div>
                   </div>
-                  {lines.length > 0 && (
+                  {hasSignals && (
                     <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#1f2937', lineHeight: 1.5 }}>
                       {lines.map((line, i) => <li key={i} style={{ marginBottom: 2 }}>{line}</li>)}
                     </ul>
@@ -151,12 +198,19 @@ export function SignalConfig() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {productsReady.map((p) => {
               const brand = brands.find((b) => b.id === p.brand_id);
+              const busyKey = `product-${p.id}`;
               return (
                 <ProductSignals
                   key={p.id}
                   product={p}
                   brandName={brand?.name || ''}
                   onToggle={() => toggleProduct(p)}
+                  onResearchSignals={() => researchProductSignals(p)}
+                  onResearchSignalsWithFeedback={() =>
+                    setFeedbackTarget({ kind: 'product_signals', id: p.id, name: p.name })
+                  }
+                  isBusy={busy === busyKey}
+                  anyBusy={busy !== null}
                 />
               );
             })}
@@ -244,17 +298,36 @@ export function SignalConfig() {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Custom Topic">
         <AddSourceForm products={products} onDone={async () => { setShowAdd(false); refresh(); }} />
       </Modal>
+
+      {feedbackTarget && (
+        <SignalFeedbackModal
+          open={!!feedbackTarget}
+          onClose={() => setFeedbackTarget(null)}
+          kind={feedbackTarget.kind}
+          targetId={feedbackTarget.id}
+          targetName={feedbackTarget.name}
+          onCompleted={refresh}
+        />
+      )}
     </div>
   );
 }
 
 function ProductSignals({
-  product, brandName, onToggle
-}: { product: Product; brandName: string; onToggle: () => void }) {
+  product, brandName, onToggle,
+  onResearchSignals, onResearchSignalsWithFeedback, isBusy, anyBusy
+}: {
+  product: Product; brandName: string; onToggle: () => void;
+  onResearchSignals: () => void;
+  onResearchSignalsWithFeedback: () => void;
+  isBusy: boolean;
+  anyBusy: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [rules, setRules] = useState<ScanRule[]>([]);
   const signalLines = parseBullets(product.signals || '');
   const enabled = product.scan_enabled === 1;
+  const hasSignals = signalLines.length > 0;
 
   const loadRules = async () => setRules(await window.lh.rules.list(product.id));
   useEffect(() => { if (expanded) loadRules(); }, [expanded]);
@@ -264,7 +337,7 @@ function ProductSignals({
 
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14, background: enabled ? 'white' : '#fafafa' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
           <input
             type="checkbox"
@@ -275,7 +348,7 @@ function ProductSignals({
         </label>
         <button
           onClick={() => setExpanded(!expanded)}
-          style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+          style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', minWidth: 200 }}
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <div style={{ flex: 1 }}>
@@ -284,17 +357,37 @@ function ProductSignals({
               <span style={{ color: '#6b7280', fontWeight: 400 }}> · {brandName}</span>
             </div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-              {signalLines.length} signal{signalLines.length === 1 ? '' : 's'} {enabled ? 'tracked' : 'paused'}
+              {hasSignals ? `${signalLines.length} signal${signalLines.length === 1 ? '' : 's'} ${enabled ? 'tracked' : 'paused'}` : 'no signals yet'}
             </div>
           </div>
         </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className="btn-ghost"
+            onClick={onResearchSignals}
+            disabled={anyBusy}
+            title="Run signal research for this product (Perplexity sonar-pro, ~$0.01)."
+          >
+            {hasSignals ? <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> : <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />}
+            {isBusy ? 'Researching…' : (hasSignals ? 'Re-research signals' : 'Research signals')}
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={onResearchSignalsWithFeedback}
+            disabled={anyBusy}
+            title="Re-research signals while injecting reviewer feedback into the prompt."
+          >
+            <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
+            Re-research with feedback
+          </button>
+        </div>
       </div>
 
       {expanded && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
           <div className="label" style={{ marginBottom: 6 }}>Signals to watch for</div>
           {signalLines.length === 0 ? (
-            <div style={{ color: '#6b7280', fontSize: 13 }}>No signals captured. Try re-running research.</div>
+            <div style={{ color: '#6b7280', fontSize: 13 }}>No signals yet. Click <b>Research signals</b> above to populate.</div>
           ) : (
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#1f2937', lineHeight: 1.6 }}>
               {signalLines.map((line, i) => (
@@ -303,7 +396,7 @@ function ProductSignals({
             </ul>
           )}
           <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-            To change these signals, go to <b>Brands & Products</b> and re-run research.
+            To change these signals, use the <b>Research signals</b> or <b>Re-research with feedback</b> buttons above. Dossier re-research from Brands &amp; Products no longer touches signals.
           </div>
 
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #e5e7eb' }}>

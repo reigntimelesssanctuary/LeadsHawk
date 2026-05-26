@@ -15,6 +15,8 @@ const api = {
     update: (id: number, p: any) => ipcRenderer.invoke('brands:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('brands:delete', id),
     research: (id: number) => ipcRenderer.invoke('brands:research', id),
+    researchSignals: (id: number, opts?: { feedback?: string }) =>
+      ipcRenderer.invoke('brands:researchSignals', id, opts),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('brands:setScanEnabled', id, enabled)
   },
@@ -25,10 +27,15 @@ const api = {
     update: (id: number, p: any) => ipcRenderer.invoke('products:update', id, p),
     delete: (id: number) => ipcRenderer.invoke('products:delete', id),
     research: (id: number) => ipcRenderer.invoke('products:research', id),
-    refreshSignals: (id: number) => ipcRenderer.invoke('products:refreshSignals', id),
+    researchSignals: (id: number, opts?: { feedback?: string }) =>
+      ipcRenderer.invoke('products:researchSignals', id, opts),
     reembed: (id: number) => ipcRenderer.invoke('products:reembed', id),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('products:setScanEnabled', id, enabled)
+  },
+  feedback: {
+    list: (kind: 'brand' | 'product' | 'brand_signals' | 'product_signals', targetId: number) =>
+      ipcRenderer.invoke('feedback:list', kind, targetId)
   },
   knowledge: {
     list: (brandId?: number) => ipcRenderer.invoke('knowledge:list', brandId),

@@ -114,6 +114,47 @@ function shouldRetryResponse(r, opts) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPIES from src/main/feedback.ts (v1.9.2)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+const FEEDBACK_MAX_CHARS = 4000;
+const FEEDBACK_BLOCK_MAX_CHARS = 16_000;
+
+/** Validation half of addFeedback — same trim + length checks. */
+function validateFeedbackInput(feedback) {
+  const trimmed = (feedback || '').trim();
+  if (!trimmed) throw new Error('Feedback cannot be empty.');
+  if (trimmed.length > FEEDBACK_MAX_CHARS) {
+    throw new Error(
+      `Feedback is too long (${trimmed.length} / ${FEEDBACK_MAX_CHARS} chars). Trim it down or split across multiple submissions.`
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Mirror of buildFeedbackBlock but takes the entries directly (rather than
+ * reading from the DB) so we can test it under bare Node.
+ */
+function buildFeedbackBlockFrom(entries) {
+  if (!entries || entries.length === 0) return '';
+  const header =
+    '# Reviewer feedback to incorporate (apply these corrections)\n' +
+    "Brand or product owners reviewed previous research output and asked for the following changes. Honour them — they outrank the model's own judgment for the items they cover.\n";
+  const lines = [];
+  let used = header.length;
+  for (const entry of entries) {
+    const date = entry.created_at.slice(0, 10);
+    const block = `\n## Feedback from ${date}\n${entry.feedback}\n`;
+    if (used + block.length > FEEDBACK_BLOCK_MAX_CHARS) break;
+    lines.push(block);
+    used += block.length;
+  }
+  if (lines.length === 0) return '';
+  return header + lines.join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/url-hygiene.ts
 // ════════════════════════════════════════════════════════════════════════
 const PLACEHOLDER_HOSTS = new Set(['example.com', 'example.org', 'example.net', 'site.com']);
@@ -368,6 +409,52 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[feedback — v1.9.2]');
+test('validateFeedbackInput rejects empty string', () => {
+  try {
+    validateFeedbackInput('   ');
+    throw new Error('expected to throw');
+  } catch (e) {
+    truthy(/cannot be empty/i.test(e.message), `got: ${e.message}`);
+  }
+});
+test('validateFeedbackInput rejects 4001-char string', () => {
+  const long = 'x'.repeat(4001);
+  try {
+    validateFeedbackInput(long);
+    throw new Error('expected to throw');
+  } catch (e) {
+    truthy(/too long/i.test(e.message), `got: ${e.message}`);
+  }
+});
+test('validateFeedbackInput accepts 4000-char string exactly', () => {
+  const max = 'x'.repeat(4000);
+  eq(validateFeedbackInput(max), max);
+});
+test('buildFeedbackBlockFrom returns empty string when no entries', () => {
+  eq(buildFeedbackBlockFrom([]), '');
+  eq(buildFeedbackBlockFrom(null), '');
+});
+test('buildFeedbackBlockFrom truncates oldest entries when over budget', () => {
+  // Build 5 entries of ~4000 chars each = ~20K chars total.
+  // FEEDBACK_BLOCK_MAX_CHARS = 16000, so only the first ~3-4 newest entries
+  // should fit. Verify newest-first ordering and that older ones drop.
+  const entries = [];
+  for (let i = 0; i < 5; i++) {
+    entries.push({
+      feedback: 'F' + String(i) + ' '.repeat(3998),
+      created_at: `2026-05-${20 + i}T00:00:00`
+    });
+  }
+  // Sort newest-first like the DB query would.
+  entries.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const block = buildFeedbackBlockFrom(entries);
+  truthy(block.length <= FEEDBACK_BLOCK_MAX_CHARS, `block.length=${block.length}`);
+  truthy(block.includes('F4'), 'newest (F4) should be included');
+  // The oldest (F0) shouldn't fit in 16K when entries are ~4K each.
+  falsy(block.includes('F0 '), 'oldest (F0) should be truncated out');
 });
 
 console.log(`\nResult: ${passed} passed, ${failed} failed`);

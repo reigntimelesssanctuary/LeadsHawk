@@ -38,7 +38,7 @@ export default function App() {
               {page === 'scans' && <ScanJobs />}
               {page === 'signals' && <SignalConfig />}
               {page === 'dispatch' && <BrandDispatch onOpenOpp={(id) => setOppId(id)} />}
-              {page === 'brands' && <BrandsProducts />}
+              {page === 'brands' && <BrandsProducts onNavigate={(p) => setPage(p)} />}
               {page === 'archive' && <Archive onOpenOpp={(id) => setOppId(id)} />}
               {page === 'settings' && <Settings />}
             </>
