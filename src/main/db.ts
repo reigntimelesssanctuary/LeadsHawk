@@ -294,6 +294,20 @@ function migrate(db: Database.Database) {
   // promoted (trial_until cleared) or extended.
   addColumnIfMissing(db, 'monitor_sources', 'trial_until', 'TEXT');
 
+  // v1.13.2: persist pending source-research suggestions so closing the
+  // modal mid-research doesn't waste the Perplexity spend. One row per
+  // brand at most (UPSERT on brand_id). consumed_at marks rows the user
+  // has already reviewed + added (or dismissed) so they don't re-appear.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_source_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      brand_id INTEGER NOT NULL UNIQUE REFERENCES brands(id) ON DELETE CASCADE,
+      suggestions_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      consumed_at TEXT
+    );
+  `);
+
   // v1.9.2: reviewer feedback for dossier and signal re-research.
   // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'
   // applied_at is set when the research run that consumed this feedback

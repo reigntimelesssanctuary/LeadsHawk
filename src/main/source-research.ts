@@ -163,6 +163,23 @@ Return JSON matching the schema.`;
 
   if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
+  // v1.13.2: persist the suggestions so closing the modal mid-research
+  // doesn't waste the spend. UPSERT on brand_id (one pending result per
+  // brand). consumed_at NULL means "waiting for user review".
+  try {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO pending_source_suggestions(brand_id, suggestions_json, created_at, consumed_at)
+       VALUES (?, ?, datetime('now'), NULL)
+       ON CONFLICT(brand_id) DO UPDATE SET
+         suggestions_json = excluded.suggestions_json,
+         created_at = excluded.created_at,
+         consumed_at = NULL`
+    ).run(brandId, JSON.stringify(cleaned));
+  } catch (e: any) {
+    console.warn(`[source-research] failed to persist pending suggestions for brand ${brandId}:`, e?.message || e);
+  }
+
   return { suggestions: cleaned };
 }
 

@@ -24,6 +24,9 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
   const [brands, setBrands] = useState<Brand[]>([]);
   const [researchTarget, setResearchTarget] = useState<Brand | null>(null);
   const [showResearchPicker, setShowResearchPicker] = useState(false);
+  // v1.13.2: pending-suggestions summary (per-brand counts of unreviewed
+  // research results) for the banner above Sources.
+  const [pendingSummary, setPendingSummary] = useState<Array<{ brandId: number; count: number; createdAt: string }>>([]);
 
   const refresh = async () => {
     setStatus(await window.lh.monitor.status());
@@ -38,6 +41,7 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
       setSettings(await window.lh.settings.get());
       setEmbeddingStatus(await window.lh.products.embeddingStatus());
       setBrands(await window.lh.brands.list());
+      setPendingSummary(await window.lh.brands.pendingSourcesSummary());
     } catch { /* best-effort */ }
   };
   useEffect(() => {
@@ -245,6 +249,49 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
       </div>
 
       <div className="card" style={{ padding: 20, overflowX: 'auto' }}>
+        {/* v1.13.2: pending-suggestions banner — shows when research finished
+            but suggestions haven't been reviewed yet (e.g. modal was closed
+            mid-research or before user clicked Add). */}
+        {pendingSummary.length > 0 && (
+          <div style={{ marginBottom: 14, padding: 12, background: '#ede9fe', border: '1px solid #c4b5fd', borderRadius: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <Sparkles size={18} style={{ color: '#6c5cf2', flexShrink: 0, marginTop: 2 }} />
+              <div style={{ flex: 1, fontSize: 13, color: '#4c1d95' }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  Source suggestions ready to review
+                </div>
+                {pendingSummary.map((p) => {
+                  const brand = brands.find((b) => b.id === p.brandId);
+                  if (!brand) return null;
+                  return (
+                    <div key={p.brandId} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                      <span><b>{brand.name}</b>: {p.count} suggestion{p.count === 1 ? '' : 's'}</span>
+                      <button
+                        className="btn-ghost"
+                        style={{ fontSize: 12, padding: '2px 8px' }}
+                        onClick={() => setResearchTarget(brand)}
+                      >
+                        Review →
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        style={{ fontSize: 12, padding: '2px 8px', color: '#9ca3af' }}
+                        onClick={async () => {
+                          await window.lh.brands.dismissPendingSources(p.brandId);
+                          refresh();
+                        }}
+                        title="Discard these suggestions without reviewing"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
           <div className="h-section">Sources</div>
           <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
@@ -370,7 +417,7 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
       {researchTarget && (
         <ResearchSourcesModal
           open={!!researchTarget}
-          onClose={() => setResearchTarget(null)}
+          onClose={() => { setResearchTarget(null); refresh(); }}
           brandId={researchTarget.id}
           brandName={researchTarget.name}
           onCompleted={refresh}

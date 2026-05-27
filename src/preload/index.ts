@@ -25,6 +25,10 @@ const api = {
       suggestions: any[],
       opts?: { trialPeriod?: '24h' | '48h' | '7d' | 'permanent' }
     ) => ipcRenderer.invoke('brands:addSuggestedSources', id, suggestions, opts),
+    pendingSources: (id: number) => ipcRenderer.invoke('brands:pendingSources', id),
+    pendingSourcesSummary: () => ipcRenderer.invoke('brands:pendingSourcesSummary'),
+    dismissPendingSources: (id: number) =>
+      ipcRenderer.invoke('brands:dismissPendingSources', id),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('brands:setScanEnabled', id, enabled)
   },

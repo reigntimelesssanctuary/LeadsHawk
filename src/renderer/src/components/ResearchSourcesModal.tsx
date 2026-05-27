@@ -45,7 +45,6 @@ export function ResearchSourcesModal({
 
   useEffect(() => {
     if (!open) return;
-    setPhase('idle');
     setFeedback('');
     setSuggestions([]);
     setSelectedIdx(new Set());
@@ -54,6 +53,19 @@ export function ResearchSourcesModal({
     setMergedCount(0);
     setTrialPeriod('24h');
     window.lh.feedback.list('brand_sources', brandId).then(setHistory).catch(() => setHistory([]));
+
+    // v1.13.2: check for pending (unreviewed) suggestions from a previous
+    // research run that was closed mid-flight. If present, jump straight
+    // to review phase with those suggestions loaded — no new Perplexity
+    // call needed.
+    setPhase('idle');
+    window.lh.brands.pendingSources(brandId).then((pending) => {
+      if (pending && Array.isArray(pending.suggestions) && pending.suggestions.length > 0) {
+        setSuggestions(pending.suggestions);
+        setSelectedIdx(new Set(pending.suggestions.map((_: any, i: number) => i)));
+        setPhase('review');
+      }
+    }).catch(() => { /* ignore */ });
   }, [open, brandId]);
 
   const research = async () => {
@@ -127,7 +139,8 @@ export function ResearchSourcesModal({
           <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 14 }}>
             LeadsHawk will use Perplexity with live web access to suggest news sources
             (RSS feeds + Google News queries) that match this brand's signals and ICP.
-            Takes a couple of minutes. You'll review the suggestions before any get added.
+            Takes 1–3 minutes. You'll review the suggestions before any get added.
+            Closing the modal mid-research is safe — suggestions are saved and re-loaded next time you open this modal.
           </div>
 
           {history.length > 0 && (
@@ -174,7 +187,8 @@ export function ResearchSourcesModal({
       {phase === 'researching' && (
         <div style={{ padding: '40px 20px', textAlign: 'center', color: '#6b7280' }}>
           <div style={{ fontSize: 14, marginBottom: 8 }}>Researching relevant sources for <b>{brandName}</b>…</div>
-          <div style={{ fontSize: 12 }}>Takes 1–3 minutes. Perplexity is searching the web for industry-specific publications and crafting Google News queries.</div>
+          <div style={{ fontSize: 12, marginBottom: 12 }}>Takes 1–3 minutes. Perplexity is searching the web for industry-specific publications and crafting Google News queries.</div>
+          <div style={{ fontSize: 11, color: '#6c5cf2' }}>You can safely close this window — suggestions are saved and will appear when you open Research sources again for {brandName}.</div>
         </div>
       )}
 

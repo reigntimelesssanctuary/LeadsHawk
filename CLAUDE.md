@@ -613,6 +613,29 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.2 (2026-05-27):** Persist pending source-research suggestions so closing the modal mid-research doesn't waste the Perplexity spend.
+
+User noticed that during the 1-3 minute Perplexity call in `ResearchSourcesModal`, closing the modal would silently discard the result — the IPC call kept running in the main process and the spend was logged, but the returned suggestions had nowhere to land (React component unmounted). Net effect: $0.05-0.30 wasted per closed-mid-research.
+
+**Fix architecture:**
+
+- **New `pending_source_suggestions` table** (idempotent migration): `(id, brand_id UNIQUE, suggestions_json, created_at, consumed_at)`. One row per brand at most — UPSERT on `brand_id` so a new research run replaces the previous pending result.
+- **`researchBrandSources` writes its sanitised result** to the table right before returning. Runs regardless of whether the renderer is still listening.
+- **New IPCs**:
+  - `brands:pendingSources(brandId)` — returns `{ suggestions, created_at } | null`. Used by the modal's `useEffect` on open to auto-resume.
+  - `brands:pendingSourcesSummary()` — returns `Array<{ brandId, count, createdAt }>` for the Live Monitor banner.
+  - `brands:dismissPendingSources(brandId)` — marks `consumed_at = now`, suppresses the banner.
+- **Modal auto-resume**: when the modal opens, it checks for pending suggestions first. If present, jumps straight to the review phase with those suggestions pre-loaded — no new Perplexity call needed.
+- **Auto-consume on Add**: `addSuggestedSources` also stamps `consumed_at` after a successful insert/merge, so the banner clears.
+- **72h freshness window**: pending suggestions older than 72h are treated as stale and not returned by either IPC.
+- **Live Monitor banner**: above the Sources card, a purple banner lists brands with pending suggestions and offers `Review →` (opens the modal — which then auto-loads them) + `Dismiss` per brand.
+
+**Modal UX text updates:**
+- idle phase copy: *"Closing the modal mid-research is safe — suggestions are saved and re-loaded next time you open this modal."*
+- researching phase footer: *"You can safely close this window — suggestions are saved and will appear when you open Research sources again for [Brand]."*
+
+No smoke-test additions (the new logic is SQL + UPSERT, not pure-function). 81 tests still pass.
+
 **v1.13.1 (2026-05-27):** Trial mode + brand-grouped sources + Research-sources button moved to Live Monitor.
 
 User feedback on v1.13.0: wanted (a) a trial period for newly-discovered sources, (b) Live Monitor's Sources card grouped by brand instead of one flat list, (c) the Research-sources button on the Live Monitor tab where sources live.

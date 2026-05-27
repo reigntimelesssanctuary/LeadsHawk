@@ -127,10 +127,57 @@ export function registerIpc() {
     researchBrandSignals(id, opts || {})
   );
   // v1.13.0: brand-level auto-source-discovery. Returns suggestions WITHOUT
-  // persisting them — user reviews + picks via the modal.
+  // persisting them as live sources — user reviews + picks via the modal.
+  // v1.13.2: the result is ALSO cached in pending_source_suggestions so
+  // closing the modal mid-research doesn't waste the Perplexity spend.
   ipcMain.handle('brands:researchSources', async (_e, id: number, opts?: { feedback?: string }) =>
     researchBrandSources(id, opts || {})
   );
+  // v1.13.2: list pending (unconsumed, <72h old) source-research results.
+  // Returns null for brand if no pending result; otherwise the parsed
+  // suggestions array + created_at timestamp.
+  ipcMain.handle('brands:pendingSources', (_e, brandId: number) => {
+    const row = db.prepare(
+      `SELECT suggestions_json, created_at
+       FROM pending_source_suggestions
+       WHERE brand_id = ?
+         AND consumed_at IS NULL
+         AND datetime(created_at) > datetime('now', '-72 hours')`
+    ).get(brandId) as { suggestions_json: string; created_at: string } | undefined;
+    if (!row) return null;
+    try {
+      const suggestions = JSON.parse(row.suggestions_json);
+      return { suggestions, created_at: row.created_at };
+    } catch {
+      return null;
+    }
+  });
+  // v1.13.2: per-brand pending-suggestions summary used by the Live Monitor
+  // banner. Returns Array<{ brandId, count, createdAt }> for brands with
+  // unconsumed suggestions within 72h.
+  ipcMain.handle('brands:pendingSourcesSummary', () => {
+    const rows = db.prepare(
+      `SELECT brand_id, suggestions_json, created_at
+       FROM pending_source_suggestions
+       WHERE consumed_at IS NULL
+         AND datetime(created_at) > datetime('now', '-72 hours')`
+    ).all() as Array<{ brand_id: number; suggestions_json: string; created_at: string }>;
+    const out: Array<{ brandId: number; count: number; createdAt: string }> = [];
+    for (const r of rows) {
+      let count = 0;
+      try { const j = JSON.parse(r.suggestions_json); if (Array.isArray(j)) count = j.length; } catch { /* skip */ }
+      if (count > 0) out.push({ brandId: r.brand_id, count, createdAt: r.created_at });
+    }
+    return out;
+  });
+  // v1.13.2: mark a brand's pending suggestions as consumed (after user
+  // adds them or explicitly dismisses).
+  ipcMain.handle('brands:dismissPendingSources', (_e, brandId: number) => {
+    db.prepare(
+      "UPDATE pending_source_suggestions SET consumed_at = datetime('now') WHERE brand_id = ? AND consumed_at IS NULL"
+    ).run(brandId);
+    return true;
+  });
   // v1.13.0: bulk-add of selected source suggestions.
   // v1.13.1: dedup URLs (merge brand into serves_brand_ids on collision) +
   //          support optional trialPeriod ('24h' | '48h' | '7d' | 'permanent').
@@ -179,6 +226,12 @@ export function registerIpc() {
          VALUES (?, ?, ?, ?, 1, 900, ?)`
       ).run((s.name || '').slice(0, 80), s.kind, url, config, trialUntil);
       added.push(Number(info.lastInsertRowid));
+    }
+    // v1.13.2: mark pending suggestions as consumed once user has added.
+    if (added.length > 0 || merged.length > 0) {
+      db.prepare(
+        "UPDATE pending_source_suggestions SET consumed_at = datetime('now') WHERE brand_id = ? AND consumed_at IS NULL"
+      ).run(brandId);
     }
     return { added, merged, trialUntil };
   });
