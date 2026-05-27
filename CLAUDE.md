@@ -613,6 +613,18 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.11.1 (2026-05-27):** Per-scan-instance cost breakdown + Settings Spend card removed.
+
+User feedback after using v1.11.0: the Cost Management tab showed aggregated totals but not per-individual-scan cost. Also flagged that with the Cost Management tab live, the Spend card in Settings was redundant.
+
+**Per-scan-instance cost.** New `getRecentScanRunCosts(limit)` in `spend.ts` joins the `scan_runs` table to `api_calls` by time window (filtered to scan-related stages: `manual_scan`, `deep_scan`, `deep_scan_discovery`, `deep_scan_qualify`). Returns the most recent N runs from the last 30 days as `ScanRunCostRow[]` with: `run_id`, `kind`, `started_at`, `finished_at`, `status`, `items_scanned`, `opportunities_created`, `cost`, `api_calls`. Live Monitor and research api_calls that fire during a scan window are excluded by the stage filter, so attribution is accurate even when other operations run in parallel.
+
+Added to `CostSummary.recentScanRuns`. New "Recent scan runs — cost per instance" section in `CostManagement.tsx` between the operation table and the by-provider section. Columns: Started, Kind, Status, Items scanned, Opps, API calls, Cost, Cost/opp. Totals row at the bottom. Status + kind shown as chips.
+
+**Settings Spend card removed.** The Spend card with stage breakdown that was in Settings is gone — same data + more lives in the Cost Management tab now. Stripped: `SpendSummary` import + `spend` state + 30s polling effect + the Spend card block + the local `STAGE_LABELS` map + the local `SpendStat` helper component. Settings header sub-text updated to point users at the Cost Management tab. `getSpendSummary()` and the `spend:summary` IPC are kept (no other consumers, but harmless leftover for now — can prune in a future cleanup).
+
+No schema changes. No smoke-test additions (the new function is SQL, not pure logic). 71 smoke tests still pass.
+
 **v1.11.0 (2026-05-27):** New **Cost Management** tab in the sidebar.
 
 User asked for "a summary of how much API costing each type of scan incurs". The existing Settings → Spend card showed totals + by-stage and by-model breakdowns, but stages are too granular to read quickly — "brand_research_verify" + "brand_research_strategic" + "brand_research_factcheck" all relate to brand-research work but appear as separate rows. v1.11.0 aggregates them into user-facing operation buckets and gives the breakdown its own dedicated tab.

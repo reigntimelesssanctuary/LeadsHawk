@@ -1,41 +1,15 @@
 import { useEffect, useState } from 'react';
-import type { Settings as Sett, SpendSummary } from '../../../shared/types';
+import type { Settings as Sett } from '../../../shared/types';
 
-const STAGE_LABELS: Record<string, string> = {
-  research: 'Product research — Stage 1 (Perplexity)',
-  brand_research: 'Brand research — Stage 1 (Perplexity)',
-  brand_research_verify: 'Brand research — Stage 2 (Opus verify)',
-  brand_research_strategic: 'Brand research — Stage 3 (Opus strategic)',
-  brand_research_factcheck: 'Brand research — Stage 4 (Opus fact-check)',
-  product_research_verify: 'Product research — Stage 2 (Opus verify)',
-  product_research_strategic: 'Product research — Stage 3 (Opus strategic)',
-  product_research_factcheck: 'Product research — Stage 4 (Opus fact-check)',
-  brand_summary: 'Brand summary (legacy)',
-  refresh_signals: 'Refresh signals (legacy)',
-  brand_signals: 'Signal research — brand',
-  product_signals: 'Signal research — product',
-  manual_scan: 'Manual scan',
-  deep_scan: 'Deep scan (single-stage)',
-  deep_scan_discovery: 'Deep scan — Stage 1 discovery',
-  deep_scan_qualify: 'Deep scan — Stage 2 qualify',
-  triage: 'Live Monitor — triage',
-  qualify: 'Live Monitor — qualify',
-  brief: 'Sales brief',
-  unknown: 'Other / untagged'
-};
+// v1.11.1: Spend card removed from Settings. Same data + more lives in the
+// Cost Management tab. The STAGE_LABELS map and SpendStat component also
+// moved with it; the canonical labels are now defined in CostManagement.tsx.
 
 export function Settings() {
   const [s, setS] = useState<Sett | null>(null);
   const [saved, setSaved] = useState(false);
-  const [spend, setSpend] = useState<SpendSummary | null>(null);
 
   useEffect(() => { window.lh.settings.get().then(setS); }, []);
-  useEffect(() => {
-    const load = () => window.lh.spend.summary().then(setSpend).catch(() => {});
-    load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, []);
 
   if (!s) return <div style={{ padding: 24 }}>Loading…</div>;
 
@@ -51,45 +25,8 @@ export function Settings() {
       <div style={{ marginTop: 16, marginBottom: 16 }}>
         <div className="h-page">Settings</div>
         <div style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
-          API keys, models, and scanner tuning
+          API keys, models, and scanner tuning. (Spend details moved to the <b>Cost Management</b> tab in the sidebar.)
         </div>
-      </div>
-
-      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="h-card" style={{ marginBottom: 6 }}>Spend</div>
-        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
-          Estimated LLM cost (Perplexity + Anthropic). Rates are best-effort; consult provider invoices for the source of truth.
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 18 }}>
-          <SpendStat label="Today"     value={spend?.today  ?? 0} />
-          <SpendStat label="Last 7 d"  value={spend?.last7d ?? 0} />
-          <SpendStat label="Last 30 d" value={spend?.last30d ?? 0} />
-        </div>
-        {spend && spend.byStage.length > 0 && (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="lh" style={{ minWidth: 480 }}>
-              <thead>
-                <tr>
-                  <th>Stage (last 30 d)</th>
-                  <th style={{ textAlign: 'right' }}>Calls</th>
-                  <th style={{ textAlign: 'right' }}>Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {spend.byStage.map((row) => (
-                  <tr key={row.stage}>
-                    <td>{STAGE_LABELS[row.stage] || row.stage}</td>
-                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.calls}</td>
-                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${row.cost.toFixed(4)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {(!spend || spend.byStage.length === 0) && (
-          <div style={{ fontSize: 13, color: '#9ca3af' }}>No API calls logged yet — run a scan or research a product.</div>
-        )}
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
@@ -348,17 +285,6 @@ export function Settings() {
 
       <button className="btn-primary" onClick={save}>Save settings</button>
       {saved && <span style={{ marginLeft: 12, color: '#065f46', fontSize: 13 }}>Saved.</span>}
-    </div>
-  );
-}
-
-function SpendStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14 }}>
-      <div className="label" style={{ marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: '#111827', fontVariantNumeric: 'tabular-nums' }}>
-        ${value.toFixed(2)}
-      </div>
     </div>
   );
 }

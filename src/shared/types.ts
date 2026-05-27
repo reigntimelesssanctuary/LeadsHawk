@@ -231,6 +231,20 @@ export type CostSummary = {
   byModel30d: Array<{ model: string; calls: number; cost: number }>;
   byStage30d: Array<{ stage: string; calls: number; cost: number }>;
   byProvider30d: Array<{ provider: string; calls: number; cost: number }>;
+  recentScanRuns: ScanRunCostRow[];
+};
+
+// v1.11.1 — per-scan-instance cost row from joining scan_runs to api_calls.
+export type ScanRunCostRow = {
+  run_id: number;
+  kind: 'manual' | 'deep';
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  items_scanned: number;
+  opportunities_created: number;
+  cost: number;
+  api_calls: number;
 };
 
 // v1.9.2: reviewer feedback for re-research runs.

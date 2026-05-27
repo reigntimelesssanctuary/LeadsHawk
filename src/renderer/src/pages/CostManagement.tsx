@@ -8,7 +8,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { CostSummary, OperationBucket } from '../../../shared/types';
+import type { CostSummary, OperationBucket, ScanRunCostRow } from '../../../shared/types';
+import { fmtDateShort } from '../lib/api';
 
 const STAGE_LABELS: Record<string, string> = {
   research: 'Product research — Stage 1 (Perplexity)',
@@ -112,6 +113,17 @@ export function CostManagement() {
             />
           </div>
 
+          {/* ── Recent scan runs (per-instance cost) ─────────── */}
+          <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+            <div className="h-card" style={{ marginBottom: 6 }}>Recent scan runs — cost per instance</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
+              Each row is one manual or deep-scan invocation from the last 30 days.
+              Cost is the sum of all scan-related API calls (Perplexity + Opus Stage 2) that fired during the run's start-to-finish window.
+              Live Monitor and research costs are excluded from this column.
+            </div>
+            <ScanRunsTable runs={data.recentScanRuns} />
+          </div>
+
           {/* ── By provider (last 30d) ────────────────────────── */}
           <div className="card" style={{ padding: 20, marginBottom: 16 }}>
             <div className="h-card" style={{ marginBottom: 6 }}>By provider (last 30 days)</div>
@@ -200,6 +212,66 @@ export function CostManagement() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function ScanRunsTable({ runs }: { runs: ScanRunCostRow[] }) {
+  if (!runs || runs.length === 0) {
+    return <div style={{ color: '#9ca3af', fontSize: 13 }}>No scan runs in the last 30 days.</div>;
+  }
+  const totalCost = runs.reduce((s, r) => s + r.cost, 0);
+  const totalOpps = runs.reduce((s, r) => s + (r.opportunities_created || 0), 0);
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="lh">
+        <thead>
+          <tr>
+            <th>Started</th>
+            <th>Kind</th>
+            <th>Status</th>
+            <th style={{ textAlign: 'right' }}>Items scanned</th>
+            <th style={{ textAlign: 'right' }}>Opps</th>
+            <th style={{ textAlign: 'right' }}>API calls</th>
+            <th style={{ textAlign: 'right' }}>Cost</th>
+            <th style={{ textAlign: 'right' }}>Cost / opp</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r) => {
+            const costPerOpp = r.opportunities_created > 0 ? r.cost / r.opportunities_created : null;
+            const statusChip =
+              r.status === 'completed' ? 'chip-qualified' :
+              r.status === 'running'   ? 'chip-open' :
+              r.status === 'error'     ? 'chip-disqualified' : 'chip-muted';
+            const kindChip = r.kind === 'deep' ? 'chip-brand' : 'chip-muted';
+            return (
+              <tr key={r.run_id}>
+                <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtDateShort(r.started_at)}</td>
+                <td><span className={`chip ${kindChip}`}>{r.kind === 'deep' ? 'deep research' : 'manual'}</span></td>
+                <td><span className={`chip ${statusChip}`}>{r.status}</span></td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.items_scanned}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.opportunities_created}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.api_calls}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>{fmt(r.cost)}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#6b7280' }}>
+                  {costPerOpp === null ? '—' : fmt(costPerOpp)}
+                </td>
+              </tr>
+            );
+          })}
+          <tr style={{ borderTop: '2px solid #e5e7eb', fontWeight: 600 }}>
+            <td>Total ({runs.length} runs)</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{totalOpps}</td>
+            <td></td>
+            <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(totalCost)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }

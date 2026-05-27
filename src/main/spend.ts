@@ -163,6 +163,21 @@ export type CostSummary = {
   byModel30d: Array<{ model: string; calls: number; cost: number }>;
   byStage30d: Array<{ stage: string; calls: number; cost: number }>;
   byProvider30d: Array<{ provider: string; calls: number; cost: number }>;
+  // v1.11.1: per-scan-instance cost from joining scan_runs to api_calls
+  // by time window (filtered to scan-related stages).
+  recentScanRuns: ScanRunCostRow[];
+};
+
+export type ScanRunCostRow = {
+  run_id: number;
+  kind: 'manual' | 'deep';
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  items_scanned: number;
+  opportunities_created: number;
+  cost: number;
+  api_calls: number;
 };
 
 /**
@@ -230,5 +245,56 @@ export function getCostSummary(): CostSummary {
      ORDER BY cost DESC`
   ).all() as Array<{ provider: string; calls: number; cost: number }>;
 
-  return { today, last7d, last30d, allTime, byModel30d, byStage30d, byProvider30d };
+  const recentScanRuns = getRecentScanRunCosts(50);
+
+  return { today, last7d, last30d, allTime, byModel30d, byStage30d, byProvider30d, recentScanRuns };
+}
+
+/**
+ * v1.11.1: per-scan-instance cost.
+ *
+ * Joins `scan_runs` (each row = one scan instance with start/finish timestamps)
+ * to `api_calls` filtered by scan-related stages within that time window.
+ * Live-Monitor and research api_calls that happen to fire during a scan
+ * window are excluded by the stage filter, so the attribution is accurate
+ * even when other operations run in parallel.
+ *
+ * Returns the most recent N runs, newest first. Includes runs from the
+ * last 30 days only.
+ */
+export function getRecentScanRunCosts(limit = 50): ScanRunCostRow[] {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT
+       sr.id AS run_id,
+       sr.kind,
+       sr.started_at,
+       sr.finished_at,
+       sr.status,
+       sr.items_scanned,
+       sr.opportunities_created,
+       COALESCE(
+         (SELECT SUM(ac.cost_usd)
+            FROM api_calls ac
+           WHERE ac.created_at >= sr.started_at
+             AND (sr.finished_at IS NULL OR ac.created_at <= sr.finished_at)
+             AND ac.stage IN ('manual_scan', 'deep_scan',
+                              'deep_scan_discovery', 'deep_scan_qualify')),
+         0
+       ) AS cost,
+       COALESCE(
+         (SELECT COUNT(*)
+            FROM api_calls ac
+           WHERE ac.created_at >= sr.started_at
+             AND (sr.finished_at IS NULL OR ac.created_at <= sr.finished_at)
+             AND ac.stage IN ('manual_scan', 'deep_scan',
+                              'deep_scan_discovery', 'deep_scan_qualify')),
+         0
+       ) AS api_calls
+     FROM scan_runs sr
+     WHERE sr.started_at >= datetime('now', '-30 days')
+     ORDER BY sr.id DESC
+     LIMIT ?`
+  ).all(limit) as ScanRunCostRow[];
+  return rows;
 }
