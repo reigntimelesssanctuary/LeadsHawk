@@ -613,6 +613,16 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.4 (2026-05-27):** Delete button on expired trials + remove 15-source soft cap.
+
+Two quick UX improvements following v1.13.3 trial-mode usage:
+
+1. **Delete button alongside Keep / Extend on expired trials.** The trash icon at the row end has always worked, but having the full triage decision (`Extend` / `Keep` / `Delete`) inline in the Trial column matches how users actually think about expired sources. Active trials still show only Keep (delete remains accessible via the trash icon at row end).
+
+2. **Removed the 8–15 soft cap on source suggestions.** The `SOURCE_RESEARCH_SYSTEM` prompt in `src/main/source-research.ts` said *"Aim for 8–15 suggestions total"* — Perplexity was honouring that as an upper bound. Rewritten to mirror the v1.9.1 signal-count widening pattern: *"List as many sources as are GENUINELY useful for this brand — minimum 5, no upper cap. Quality over quantity: a few sharp, signal-aligned sources beat dozens of generic ones."* The practical ceiling is now the `maxTokens: 6000` budget (~30–50 suggestions possible if the model has the relevance to fill them).
+
+No schema changes. 81 smoke tests still pass.
+
 **v1.13.3 (2026-05-27):** Swap Live Monitor section order — Sources above Recent items.
 
 User UX feedback: configuration (Sources) should appear above the resulting stream (Recent items). New order on the Live Monitor tab:

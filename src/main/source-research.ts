@@ -54,8 +54,10 @@ For each suggestion, provide:
 - why_relevant: 1 sentence on how this source helps find buying signals
   for THIS brand (anchor to the brand's signals + ICP)
 
-Aim for 8–15 suggestions total, mixed RSS + Google News. Quality over
-quantity — a few sharp suggestions beat 15 generic ones.
+List as many sources as are GENUINELY useful for this brand — minimum 5,
+no upper cap. Quality over quantity: a few sharp, signal-aligned sources
+beat dozens of generic ones. Don't pad to hit a number, and don't
+artificially compress either. Mix RSS feeds + Google News queries.
 
 Return JSON matching the schema.`;
 

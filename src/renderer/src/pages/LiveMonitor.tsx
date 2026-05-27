@@ -715,13 +715,13 @@ function SourceGroup({
                     {!trial ? (
                       <span style={{ fontSize: 11, color: '#9ca3af' }}>—</span>
                     ) : trial.expired ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                         <span className="chip chip-disqualified" style={{ fontSize: 10, padding: '1px 6px' }}>expired</span>
                         <button
                           className="btn-ghost"
                           style={{ fontSize: 11, padding: '2px 6px' }}
                           onClick={async () => { await window.lh.monitor.extendTrial(s.id, 7); onChanged(); }}
-                          title="Extend trial by 7 days"
+                          title="Extend trial by 7 days and re-enable"
                         >
                           Extend
                         </button>
@@ -729,9 +729,24 @@ function SourceGroup({
                           className="btn-ghost"
                           style={{ fontSize: 11, padding: '2px 6px' }}
                           onClick={async () => { await window.lh.monitor.promoteTrial(s.id); onChanged(); }}
-                          title="Promote to permanent (no trial)"
+                          title="Promote to permanent (no trial) and re-enable"
                         >
                           Keep
+                        </button>
+                        {/* v1.13.4: Delete button surfaced alongside Keep / Extend so
+                            users can make the full triage decision inline. */}
+                        <button
+                          className="btn-danger"
+                          style={{ fontSize: 11, padding: '2px 6px' }}
+                          onClick={async () => {
+                            if (confirm(`Delete expired trial source "${s.name}"?`)) {
+                              await window.lh.monitor.sourceDelete(s.id);
+                              onChanged();
+                            }
+                          }}
+                          title="Delete this source entirely"
+                        >
+                          Delete
                         </button>
                       </span>
                     ) : (
