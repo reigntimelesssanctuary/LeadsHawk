@@ -27,6 +27,7 @@ export type LlmStage =
   | 'refresh_signals'    // Perplexity sonar-pro, signals-only refresh (legacy; v1.9.2 replaced by brand_signals / product_signals — kept so historical spend rows still label correctly)
   | 'brand_signals'      // v1.9.2: Perplexity sonar-pro, brand-level signal research
   | 'product_signals'    // v1.9.2: Perplexity sonar-pro, product-level signal research
+  | 'brand_source_research'  // v1.13.0: Perplexity sonar-deep-research, auto-discover RSS / Google News sources per brand
   | 'manual_scan'        // Perplexity sonar-pro, Pass 1 + Pass 2 (cheap cron)
   | 'deep_scan'          // Perplexity sonar-deep-research, single-stage deep scan (v1.8.x fallback)
   | 'deep_scan_discovery'// v1.9: Perplexity sonar-deep-research, Stage 1 of two-stage deep scan

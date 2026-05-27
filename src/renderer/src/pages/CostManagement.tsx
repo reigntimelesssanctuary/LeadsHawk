@@ -24,6 +24,7 @@ const STAGE_LABELS: Record<string, string> = {
   refresh_signals: 'Refresh signals (legacy)',
   brand_signals: 'Signal research — brand',
   product_signals: 'Signal research — product',
+  brand_source_research: 'Source research — brand',
   manual_scan: 'Manual scan',
   deep_scan: 'Deep scan (single-stage, legacy)',
   deep_scan_discovery: 'Deep scan — Stage 1 discovery',

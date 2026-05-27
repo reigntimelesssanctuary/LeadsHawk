@@ -18,6 +18,10 @@ const api = {
       ipcRenderer.invoke('brands:research', id, opts),
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('brands:researchSignals', id, opts),
+    researchSources: (id: number, opts?: { feedback?: string }) =>
+      ipcRenderer.invoke('brands:researchSources', id, opts),
+    addSuggestedSources: (id: number, suggestions: any[]) =>
+      ipcRenderer.invoke('brands:addSuggestedSources', id, suggestions),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('brands:setScanEnabled', id, enabled)
   },

@@ -613,6 +613,45 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.0 (2026-05-27):** Auto-research news sources per brand.
+
+User insight after v1.12.1's diagnostics surfaced that default RSS sources were misaligned with workspace-design (Zyeta) and banking-software (Neptune) brands: *"Similar to signal config, LeadsHawk will do research and determine what signals to chase. What if we get LeadsHawk to determine what sources to follow for each brand?"*
+
+Mirrors the v1.9.2 signal-research decoupling pattern. Brand dossiers already know who the brand sells to + what signals matter — LeadsHawk now uses that context to suggest RSS feeds + Google News queries that should surface relevant news.
+
+**New backend** (`src/main/source-research.ts`):
+- `researchBrandSources(brandId, { feedback? })` — Perplexity `sonar-deep-research` with brand dossier as context, JSON-schema output (sonar-deep-research handles json_schema reliably, per v1.10.x experience).
+- Returns `SourceSuggestion[]` shaped `{ kind: 'rss' | 'google_news', name, url|query, why_relevant }`. **Does NOT persist** — user reviews + selects.
+- `buildGoogleNewsRssUrl(query)` — pure helper that constructs the Google News RSS URL from a search query. Exported for smoke testing.
+- Sanitisation step trims/caps fields and drops malformed suggestions before returning.
+
+**New IPC**:
+- `brands:researchSources(id, { feedback? })` → returns suggestions
+- `brands:addSuggestedSources(brandId, suggestions[])` → bulk-inserts selected suggestions into `monitor_sources`. RSS sources use the suggested URL directly; Google News sources construct via `buildGoogleNewsRssUrl()`. Each row's `config` JSON gets `suggested_by_brand_id` + `suggested_at` for traceability.
+
+**New UI**:
+- `src/renderer/src/components/ResearchSourcesModal.tsx` — multi-phase modal:
+  - **idle** — optional feedback textarea (with past feedback history shown above) + "Research sources" button
+  - **researching** — spinner + "Takes 1–3 minutes" caption
+  - **review** — checkable list of suggestions with kind chip (RSS/Google News), URL or query preview (RSS URL clickable to open externally), why-relevant explanation, select-all/clear helpers
+  - **adding** — spinner during bulk-add
+  - **done** — success count + auto-close
+- `BrandsProducts → BrandPanel` — new **"Research sources"** button next to "Re-research with feedback" on the brand header. Opens the modal scoped to that brand.
+
+**Feedback integration** (extends v1.9.2 infra):
+- `FeedbackTargetKind` extended to include `'brand_sources'` (in both `src/shared/types.ts` and `src/main/feedback.ts`)
+- Past feedback re-applies on subsequent runs so corrections persist across iterations, same pattern as signal and dossier research.
+
+**Cost Management integration**:
+- New `LlmStage` tag `'brand_source_research'` in `pricing.ts`
+- New `OperationType` bucket `'source_research'` in `spend.ts` mapped from the new stage
+- New row label in Cost Management's stage drill-down + a new operation row when calls exist
+- Cost per call: ~$0.05-0.15 (sonar-deep-research, modest token budget)
+
+**Source addition flow** integrates cleanly with the existing `monitor_sources` table — once added, sources poll on their normal schedule and feed the Live Monitor pipeline. No new schema columns.
+
+Smoke tests 71 → 75: `buildGoogleNewsRssUrl` parsing (encodes plain queries, encodes Boolean operators, handles empty/whitespace) + `operationForStage('brand_source_research') → 'source_research'`.
+
 **v1.12.1 (2026-05-27):** Live Monitor diagnostic UI + threshold default lowered.
 
 User reported Live Monitor was ingesting items but producing zero candidates (and therefore zero opportunities). Diagnostic data: ~283 items ingested over 7 days, 0 candidates. The embedding pre-filter was dropping everything silently.

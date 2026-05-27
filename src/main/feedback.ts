@@ -18,7 +18,8 @@ export type FeedbackTargetKind =
   | 'brand'
   | 'product'
   | 'brand_signals'
-  | 'product_signals';
+  | 'product_signals'
+  | 'brand_sources';   // v1.13.0
 
 export type DossierFeedback = {
   id: number;

@@ -82,6 +82,7 @@ export type OperationType =
   | 'brand_research'
   | 'product_research'
   | 'signal_research'
+  | 'source_research'    // v1.13.0
   | 'manual_scan'
   | 'deep_scan'
   | 'live_monitor'
@@ -105,6 +106,8 @@ export function operationForStage(stage: string): OperationType {
     case 'product_signals':
     case 'refresh_signals':          // legacy v1.x
       return 'signal_research';
+    case 'brand_source_research':    // v1.13.0
+      return 'source_research';
     case 'manual_scan':
       return 'manual_scan';
     case 'deep_scan':
@@ -125,6 +128,7 @@ export const OPERATION_LABEL: Record<OperationType, string> = {
   brand_research: 'Brand research (all 4 stages)',
   product_research: 'Product research (all 4 stages)',
   signal_research: 'Signal research (brand + product)',
+  source_research: 'Source research (auto-discover feeds)',
   manual_scan: 'Manual scan',
   deep_scan: 'Deep scan (Stage 1 + Stage 2)',
   live_monitor: 'Live Monitor (triage + qualify)',
@@ -136,6 +140,7 @@ const OPERATION_ORDER: OperationType[] = [
   'brand_research',
   'product_research',
   'signal_research',
+  'source_research',
   'manual_scan',
   'deep_scan',
   'live_monitor',

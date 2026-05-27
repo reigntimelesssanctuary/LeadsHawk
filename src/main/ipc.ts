@@ -4,6 +4,7 @@ import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
 import { researchProduct, researchBrand } from './research.js';
 import { researchBrandSignals, researchProductSignals } from './signal-research.js';
+import { researchBrandSources, buildGoogleNewsRssUrl } from './source-research.js';
 import { listFeedback, type FeedbackTargetKind } from './feedback.js';
 import { runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
@@ -125,6 +126,36 @@ export function registerIpc() {
   ipcMain.handle('brands:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
     researchBrandSignals(id, opts || {})
   );
+  // v1.13.0: brand-level auto-source-discovery. Returns suggestions WITHOUT
+  // persisting them — user reviews + picks via the modal.
+  ipcMain.handle('brands:researchSources', async (_e, id: number, opts?: { feedback?: string }) =>
+    researchBrandSources(id, opts || {})
+  );
+  // v1.13.0: bulk-add of selected source suggestions. Takes the renderer's
+  // selected SourceSuggestion[] and inserts each into monitor_sources.
+  // Tags `config.suggested_by_brand_id` for traceability.
+  ipcMain.handle('brands:addSuggestedSources', (_e, brandId: number, suggestions: Array<{ kind: 'rss' | 'google_news'; name: string; url?: string; query?: string; why_relevant?: string }>) => {
+    const added: number[] = [];
+    for (const s of suggestions || []) {
+      if (!s || (s.kind !== 'rss' && s.kind !== 'google_news')) continue;
+      const url = s.kind === 'rss'
+        ? (s.url || '').trim()
+        : buildGoogleNewsRssUrl(s.query || '');
+      if (!url) continue;
+      const config = JSON.stringify({
+        suggested_by_brand_id: brandId,
+        suggested_at: new Date().toISOString(),
+        ...(s.kind === 'google_news' ? { query: s.query } : {}),
+        ...(s.why_relevant ? { why_relevant: s.why_relevant } : {})
+      });
+      const info = db.prepare(
+        `INSERT INTO monitor_sources(name, kind, url, config, enabled, poll_interval_seconds)
+         VALUES (?, ?, ?, ?, 1, 900)`
+      ).run((s.name || '').slice(0, 80), s.kind, url, config);
+      added.push(Number(info.lastInsertRowid));
+    }
+    return added;
+  });
 
   // -------- Products --------
   ipcMain.handle('products:list', (_e, brandId?: number) => {

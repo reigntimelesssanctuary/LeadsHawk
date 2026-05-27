@@ -201,10 +201,12 @@ export type SpendSummary = {
 };
 
 // v1.11.0 — Cost Management tab: operation-bucket aggregation.
+// v1.13.0 — added 'source_research' for brand source auto-discovery.
 export type OperationType =
   | 'brand_research'
   | 'product_research'
   | 'signal_research'
+  | 'source_research'
   | 'manual_scan'
   | 'deep_scan'
   | 'live_monitor'
@@ -248,11 +250,26 @@ export type ScanRunCostRow = {
 };
 
 // v1.9.2: reviewer feedback for re-research runs.
+// v1.13.0: extended with 'brand_sources' for source-research feedback.
 export type FeedbackTargetKind =
   | 'brand'
   | 'product'
   | 'brand_signals'
-  | 'product_signals';
+  | 'product_signals'
+  | 'brand_sources';
+
+// v1.13.0 — auto-discovered news sources per brand.
+export type SourceSuggestion = {
+  kind: 'rss' | 'google_news';
+  name: string;
+  url?: string;        // RSS only
+  query?: string;      // Google News only
+  why_relevant: string;
+};
+
+export type ResearchSourcesResult = {
+  suggestions: SourceSuggestion[];
+};
 
 export type DossierFeedback = {
   id: number;

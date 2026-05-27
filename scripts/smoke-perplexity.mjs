@@ -114,6 +114,15 @@ function shouldRetryResponse(r, opts) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPY from src/main/source-research.ts (v1.13.0)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function buildGoogleNewsRssUrl(query) {
+  const encoded = encodeURIComponent((query || '').trim());
+  return `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPY from src/main/llm.ts (v1.10.1)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -145,6 +154,8 @@ function operationForStage(stage) {
     case 'product_signals':
     case 'refresh_signals':
       return 'signal_research';
+    case 'brand_source_research':
+      return 'source_research';
     case 'manual_scan':
       return 'manual_scan';
     case 'deep_scan':
@@ -165,6 +176,7 @@ const OPERATION_LABEL = {
   brand_research: 'Brand research (all 4 stages)',
   product_research: 'Product research (all 4 stages)',
   signal_research: 'Signal research (brand + product)',
+  source_research: 'Source research (auto-discover feeds)',
   manual_scan: 'Manual scan',
   deep_scan: 'Deep scan (Stage 1 + Stage 2)',
   live_monitor: 'Live Monitor (triage + qualify)',
@@ -173,8 +185,8 @@ const OPERATION_LABEL = {
 };
 
 const OPERATION_ORDER = [
-  'brand_research', 'product_research', 'signal_research', 'manual_scan',
-  'deep_scan', 'live_monitor', 'sales_brief', 'other'
+  'brand_research', 'product_research', 'signal_research', 'source_research',
+  'manual_scan', 'deep_scan', 'live_monitor', 'sales_brief', 'other'
 ];
 
 function bucketByOperation(rows) {
@@ -568,6 +580,23 @@ test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
 });
 
+console.log('\n[buildGoogleNewsRssUrl — v1.13.0]');
+test('encodes plain query into Google News RSS URL', () => {
+  const u = buildGoogleNewsRssUrl('office expansion APAC');
+  truthy(u.startsWith('https://news.google.com/rss/search?q='), `got: ${u}`);
+  truthy(u.includes('hl=en-US'), `got: ${u}`);
+  truthy(u.includes('office%20expansion%20APAC') || u.includes('office+expansion+APAC'), `got: ${u}`);
+});
+test('encodes Boolean operators safely', () => {
+  const u = buildGoogleNewsRssUrl('"core banking" OR "digital banking platform"');
+  truthy(u.includes('%22core%20banking%22'), `got: ${u}`);
+  truthy(u.includes('%20OR%20') || u.includes('+OR+'), `got: ${u}`);
+});
+test('handles empty / whitespace query', () => {
+  eq(buildGoogleNewsRssUrl('   ').endsWith('q=&hl=en-US&gl=US&ceid=US:en'), true);
+  eq(buildGoogleNewsRssUrl('').endsWith('q=&hl=en-US&gl=US&ceid=US:en'), true);
+});
+
 console.log('\n[operationForStage — v1.11.0 Cost Management bucketing]');
 test('brand_research_* and brand_summary → brand_research', () => {
   eq(operationForStage('brand_research'), 'brand_research');
@@ -603,6 +632,9 @@ test('unknown / unmapped stage → other', () => {
   eq(operationForStage('unknown'), 'other');
   eq(operationForStage('made_up_stage'), 'other');
   eq(operationForStage(''), 'other');
+});
+test('brand_source_research → source_research (v1.13.0)', () => {
+  eq(operationForStage('brand_source_research'), 'source_research');
 });
 test('bucketByOperation sums calls and cost per operation', () => {
   const rows = [
