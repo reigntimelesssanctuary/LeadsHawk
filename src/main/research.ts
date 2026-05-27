@@ -11,6 +11,7 @@ import {
   strategicIntelForBrand,
   strategicIntelForProduct
 } from './research/dossier-strategic.js';
+import { factCheckDossier } from './research/dossier-factcheck.js';
 import type { Product, Brand, KnowledgeItem, ResearchStatusDetail } from '@shared/types';
 
 /**
@@ -144,7 +145,8 @@ result as JSON matching the schema you've been given.`;
 
     const { perplexityResearchModel } = getSettings();
 
-    const { json } = await completePerplexity<ResearchOutput>(SYSTEM, prompt, {
+    // v1.10.2: capture citations alongside JSON so Stage 4 can fetch them.
+    const { json, citations: stage1Citations } = await completePerplexity<ResearchOutput>(SYSTEM, prompt, {
       model: perplexityResearchModel || 'sonar-deep-research',
       maxTokens: 6000,
       temperature: 0.15,
@@ -182,7 +184,7 @@ result as JSON matching the schema you've been given.`;
       json.competitors,
       json.differentiators,
       json.research_summary,
-      JSON.stringify({ stage1: json, citations: [] }),
+      JSON.stringify({ stage1: json, citations: stage1Citations || [] }),
       json.recommended_scan_recency || null,
       productId
     );
@@ -192,15 +194,18 @@ result as JSON matching the schema you've been given.`;
 
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
     // v1.10.1: track per-stage status for UI surfacing.
+    // v1.10.2: track Stage 4 fact-check too.
     const status = newStatus();
     status.stage1 = 'completed';
     const settings = getSettings();
     if (!settings.productResearchAdvanced) {
       status.stage2 = 'skipped: productResearchAdvanced toggle is off';
       status.stage3 = 'skipped: stage2 skipped';
+      status.stage4 = 'skipped: stage2 skipped';
     } else if (!settings.anthropicApiKey) {
       status.stage2 = 'skipped: no Anthropic API key configured';
       status.stage3 = 'skipped: stage2 skipped';
+      status.stage4 = 'skipped: stage2 skipped';
     } else {
       try {
         const verifiedRes = await verifyProductDossier({
@@ -219,7 +224,7 @@ result as JSON matching the schema you've been given.`;
             category: brand.category,
             target_icp: brand.target_icp
           },
-          citations: [],
+          citations: stage1Citations || [],
           knowledgeBlob,
           freshFeedback: options.feedback
         });
@@ -279,15 +284,57 @@ result as JSON matching the schema you've been given.`;
             status.stage3 = `failed: ${msg}`;
             console.warn(`[researchProduct ${productId}] Stage 3 threw:`, msg);
           }
+
+          // ─── v1.10.2 Stage 4 — fact-check (fetch cited URLs + verify) ──
+          if (!settings.productResearchFactCheck) {
+            status.stage4 = 'skipped: productResearchFactCheck toggle is off';
+          } else {
+            try {
+              const factRes = await factCheckDossier({
+                targetKind: 'product',
+                targetId: productId,
+                targetName: product.name,
+                verifiedDossier: {
+                  description: verified.fields.description,
+                  category: verified.fields.category,
+                  use_cases: verified.fields.use_cases,
+                  competitors: verified.fields.competitors,
+                  differentiators: verified.fields.differentiators,
+                  research_summary: verified.fields.research_summary
+                },
+                citationUrls: stage1Citations || [],
+                maxSources: Math.max(1, Math.min(15, settings.factCheckMaxSources || 10))
+              });
+              if (factRes.kind === 'completed' || factRes.kind === 'partial') {
+                status.stage4 = factRes.kind === 'completed'
+                  ? 'completed'
+                  : `partial: ${factRes.warning}`;
+                db.prepare(
+                  "UPDATE products SET fact_check_report = ?, last_fact_check_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+                ).run(JSON.stringify(factRes.report), productId);
+              } else if (factRes.kind === 'skipped') {
+                status.stage4 = `skipped: ${factRes.reason}`;
+              } else {
+                status.stage4 = `failed: ${factRes.error}`;
+                console.warn(`[researchProduct ${productId}] Stage 4:`, factRes.error);
+              }
+            } catch (e: any) {
+              const msg = String(e?.message || e).slice(0, 300);
+              status.stage4 = `failed: ${msg}`;
+              console.warn(`[researchProduct ${productId}] Stage 4 threw:`, msg);
+            }
+          }
         } else {
           status.stage2 = `failed: ${verifiedRes.error}`;
           status.stage3 = 'skipped: stage2 failed';
+          status.stage4 = 'skipped: stage2 failed';
           console.warn(`[researchProduct ${productId}] Stage 2:`, verifiedRes.error);
         }
       } catch (e: any) {
         const msg = String(e?.message || e).slice(0, 300);
         status.stage2 = `failed: ${msg}`;
         status.stage3 = 'skipped: stage2 failed';
+        status.stage4 = 'skipped: stage2 failed';
         console.warn(`[researchProduct ${productId}] Stage 2 threw:`, msg);
       }
     }
@@ -408,7 +455,8 @@ internal excerpts above into a foundational brand-level dossier. Return JSON
 matching the schema you've been given.`;
 
     const { perplexityResearchModel } = getSettings();
-    const { json } = await completePerplexity<BrandResearchOutput>(
+    // v1.10.2: capture citations for Stage 4 fact-check.
+    const { json, citations: stage1Citations } = await completePerplexity<BrandResearchOutput>(
       BRAND_RESEARCH_SYSTEM,
       prompt,
       {
@@ -448,22 +496,25 @@ matching the schema you've been given.`;
       json.target_icp,
       json.competitive_summary,
       json.research_summary,
-      JSON.stringify({ stage1: json, citations: [] }),
+      JSON.stringify({ stage1: json, citations: stage1Citations || [] }),
       json.recommended_scan_recency || null,
       brandId
     );
 
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
     // v1.10.1: track per-stage status for UI surfacing.
+    // v1.10.2: track Stage 4 fact-check too.
     const status = newStatus();
     status.stage1 = 'completed';
     const settings = getSettings();
     if (!settings.brandResearchAdvanced) {
       status.stage2 = 'skipped: brandResearchAdvanced toggle is off';
       status.stage3 = 'skipped: stage2 skipped';
+      status.stage4 = 'skipped: stage2 skipped';
     } else if (!settings.anthropicApiKey) {
       status.stage2 = 'skipped: no Anthropic API key configured';
       status.stage3 = 'skipped: stage2 skipped';
+      status.stage4 = 'skipped: stage2 skipped';
     } else {
       try {
         const verifiedRes = await verifyBrandDossier({
@@ -476,7 +527,7 @@ matching the schema you've been given.`;
             competitive_summary: json.competitive_summary,
             research_summary: json.research_summary
           },
-          citations: [],
+          citations: stage1Citations || [],
           knowledgeBlob,
           freshFeedback: options.feedback
         });
@@ -529,15 +580,56 @@ matching the schema you've been given.`;
             status.stage3 = `failed: ${msg}`;
             console.warn(`[researchBrand ${brandId}] Stage 3 threw:`, msg);
           }
+
+          // ─── v1.10.2 Stage 4 — fact-check (fetch cited URLs + verify) ──
+          if (!settings.brandResearchFactCheck) {
+            status.stage4 = 'skipped: brandResearchFactCheck toggle is off';
+          } else {
+            try {
+              const factRes = await factCheckDossier({
+                targetKind: 'brand',
+                targetId: brandId,
+                targetName: brand.name,
+                verifiedDossier: {
+                  category: verified.fields.category,
+                  positioning: verified.fields.positioning,
+                  target_icp: verified.fields.target_icp,
+                  competitive_summary: verified.fields.competitive_summary,
+                  research_summary: verified.fields.research_summary
+                },
+                citationUrls: stage1Citations || [],
+                maxSources: Math.max(1, Math.min(15, settings.factCheckMaxSources || 10))
+              });
+              if (factRes.kind === 'completed' || factRes.kind === 'partial') {
+                status.stage4 = factRes.kind === 'completed'
+                  ? 'completed'
+                  : `partial: ${factRes.warning}`;
+                db.prepare(
+                  "UPDATE brands SET fact_check_report = ?, last_fact_check_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+                ).run(JSON.stringify(factRes.report), brandId);
+              } else if (factRes.kind === 'skipped') {
+                status.stage4 = `skipped: ${factRes.reason}`;
+              } else {
+                status.stage4 = `failed: ${factRes.error}`;
+                console.warn(`[researchBrand ${brandId}] Stage 4:`, factRes.error);
+              }
+            } catch (e: any) {
+              const msg = String(e?.message || e).slice(0, 300);
+              status.stage4 = `failed: ${msg}`;
+              console.warn(`[researchBrand ${brandId}] Stage 4 threw:`, msg);
+            }
+          }
         } else {
           status.stage2 = `failed: ${verifiedRes.error}`;
           status.stage3 = 'skipped: stage2 failed';
+          status.stage4 = 'skipped: stage2 failed';
           console.warn(`[researchBrand ${brandId}] Stage 2:`, verifiedRes.error);
         }
       } catch (e: any) {
         const msg = String(e?.message || e).slice(0, 300);
         status.stage2 = `failed: ${msg}`;
         status.stage3 = 'skipped: stage2 failed';
+        status.stage4 = 'skipped: stage2 failed';
         console.warn(`[researchBrand ${brandId}] Stage 2 threw:`, msg);
       }
     }

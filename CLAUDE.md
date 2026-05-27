@@ -613,6 +613,43 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.10.2 (2026-05-27):** Stage 4 fact-check (fetch cited URLs + Opus verifies dossier claims against actual source text). Final piece of the original v1.10 vision.
+
+Stages 2+3 give Opus a verified-against-knowledge dossier, but Opus had no way to fact-check Stage 1's claims against the original web sources Perplexity cited. Stage 4 closes that loop.
+
+Architecture (only `researchBrand` and `researchProduct` change; everything downstream unchanged):
+
+- **New `src/main/research/dossier-factcheck.ts`** — `factCheckDossier({ targetKind, targetId, targetName, verifiedDossier, citationUrls, maxSources })`. Steps:
+  1. Dedupe + cap citation URLs to `factCheckMaxSources` (1-15, default 10).
+  2. Fetch all sources in parallel via existing `fetchUrl()` helper. Per-source 15s timeout. Failed fetches (paywall, JS-rendered, blocked) are skipped, not fatal — bundled into the success/partial bookkeeping.
+  3. Cap each fetched source text at 8000 chars to bound token cost.
+  4. If <2 sources usable → skip Opus call with `partial: only K/N sources reachable` status (no point spending Opus tokens on too-thin sample).
+  5. Otherwise send Opus the verified dossier + fetched sources, ask for per-section verdicts (verified / partially_supported / unsupported / inconclusive) + flagged claims list.
+- **Return shape**: discriminated union — `completed` | `partial` (with warning) | `skipped` (reason) | `failed` (error). All surfaced to `research_status_detail.stage4` for the UI chip.
+- **New `brand_research_factcheck` / `product_research_factcheck` LlmStage tags** for spend tracking.
+
+**Schema additions** (idempotent) on `brands` AND `products`:
+- `fact_check_report TEXT` — JSON output (overall_confidence, sources_attempted, sources_fetched, per_section_verdicts, flagged_claims)
+- `last_fact_check_at TEXT` — timestamp of last successful Stage 4
+
+`ResearchStatusDetail.stage4` optional field tracks the same status pattern (`completed | partial: ... | skipped: ... | failed: ...`).
+
+**Settings — Research depth card extended** with three new controls (all default ON):
+- `brandResearchFactCheck` toggle
+- `productResearchFactCheck` toggle
+- `factCheckMaxSources` number input (1-15, default 10)
+
+**UI** in `BrandResearchPanel` and product card dossier render:
+- New "Fact-check report (Stage 4 — Claude Opus)" collapsible section below "Strategic Intelligence". Shows overall confidence pill, sources-fetched stat (`8/10 sources verified`), per-section verdict cards (with verdict pill + reasoning + supporting source links), flagged claims rows (status badge + claim text + reason + source link).
+- `ResearchStatusChip` extends to include Stage 4 — green when all four stages ✓, amber when Stage 4 partial (some sources unreachable), red when any failure.
+- Dossier expand summary tag becomes `Opus verified + fact-checked` when both `last_advanced_research_at` and `last_fact_check_at` are set.
+
+**Stage 1 citations now actually captured**. v1.10.0 had `JSON.stringify({ stage1: json, citations: [] })` — Perplexity's citations were thrown away. Fixed in v1.10.2: `const { json, citations } = await completePerplexity(...)`, citations flow into both `raw_dossier` and Stage 2's input, and feed Stage 4's URL fetch list.
+
+**Cost** — per research run jumps from \$0.55-1.10 (Stages 1-3) to \$1.85-2.90 (with Stage 4). For 10 brands + 30 products refreshed monthly with all 4 stages on: ~\$60-80/month.
+
+**Smoke tests 50 → 56.** 6 new tests cover `clampCitationList` (dedup, cap, whitespace, null), `shouldAttemptOpusCall` (min-2-sources gate), and `extractCitationsFromRawDossier` (parses v1.10.0+ raw_dossier shape, graceful on malformed).
+
 **v1.10.1 (2026-05-27):** Patch for Opus temperature deprecation + per-stage status surfacing + dossier signal cleanup.
 
 User installed v1.10.0, ran brand re-research on Zyeta, dossier text refreshed but none of the new Opus features appeared. Terminal log showed `400 invalid_request_error: "temperature is deprecated for this model"` from `claude-opus-4-7`. Anthropic deprecated the `temperature` parameter for Opus 4.7+; my v1.10.0 code was passing `temperature: 0.2` / `0.3` and getting 400'd. Stage 2 caught the error and returned null → Stage 3 skipped → no Opus features rendered. v1.10.0 had no visible indicator of the failure — the silent-failure pattern.

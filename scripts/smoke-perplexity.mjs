@@ -125,6 +125,36 @@ function modelSupportsTemperature(modelId) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPIES from src/main/research/dossier-factcheck.ts (v1.10.2)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function clampCitationList(urls, max) {
+  const seen = new Set();
+  const out = [];
+  for (const u of urls || []) {
+    const trimmed = (u || '').trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+function shouldAttemptOpusCall(sourcesFetched, minRequired = 2) {
+  return sourcesFetched >= minRequired;
+}
+function extractCitationsFromRawDossier(rawDossierJson) {
+  if (!rawDossierJson) return [];
+  try {
+    const obj = JSON.parse(rawDossierJson);
+    if (Array.isArray(obj?.citations)) {
+      return obj.citations.filter((u) => typeof u === 'string');
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/signal-research.ts (v1.9.3)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -455,6 +485,36 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[dossier-factcheck — v1.10.2 source-gating helpers]');
+test('clampCitationList dedupes and caps to max', () => {
+  const out = clampCitationList(['a', 'b', 'a', 'c', 'd', 'e'], 3);
+  eq(out, ['a', 'b', 'c']);
+});
+test('clampCitationList drops empty and whitespace entries', () => {
+  const out = clampCitationList(['', '  ', 'http://x', '   ', 'http://y'], 10);
+  eq(out, ['http://x', 'http://y']);
+});
+test('clampCitationList returns [] on null/undefined input', () => {
+  eq(clampCitationList(null, 5), []);
+  eq(clampCitationList(undefined, 5), []);
+});
+test('shouldAttemptOpusCall requires at least 2 sources by default', () => {
+  falsy(shouldAttemptOpusCall(0));
+  falsy(shouldAttemptOpusCall(1));
+  truthy(shouldAttemptOpusCall(2));
+  truthy(shouldAttemptOpusCall(10));
+});
+test('extractCitationsFromRawDossier pulls citation array', () => {
+  const raw = JSON.stringify({ stage1: { foo: 1 }, citations: ['http://a', 'http://b'] });
+  eq(extractCitationsFromRawDossier(raw), ['http://a', 'http://b']);
+});
+test('extractCitationsFromRawDossier returns [] on malformed input', () => {
+  eq(extractCitationsFromRawDossier(null), []);
+  eq(extractCitationsFromRawDossier('not json'), []);
+  eq(extractCitationsFromRawDossier('{}'), []);
+  eq(extractCitationsFromRawDossier(JSON.stringify({ citations: 'not array' })), []);
 });
 
 console.log('\n[modelSupportsTemperature — v1.10.1]');

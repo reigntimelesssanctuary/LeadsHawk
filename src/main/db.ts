@@ -281,6 +281,14 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'products', 'last_advanced_research_at', 'TEXT');
   addColumnIfMissing(db, 'products', 'research_status_detail', 'TEXT');
 
+  // v1.10.2: Stage 4 fact-check (fetch cited URLs + Opus verifies claims
+  // against actual source text). fact_check_report holds the JSON output;
+  // last_fact_check_at timestamps a successful run.
+  addColumnIfMissing(db, 'brands', 'fact_check_report', 'TEXT');
+  addColumnIfMissing(db, 'brands', 'last_fact_check_at', 'TEXT');
+  addColumnIfMissing(db, 'products', 'fact_check_report', 'TEXT');
+  addColumnIfMissing(db, 'products', 'last_fact_check_at', 'TEXT');
+
   // v1.9.2: reviewer feedback for dossier and signal re-research.
   // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'
   // applied_at is set when the research run that consumed this feedback

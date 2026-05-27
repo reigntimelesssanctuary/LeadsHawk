@@ -23,6 +23,11 @@ const defaults: Settings = {
   // both brand and product research. Uncheck to revert to v1.9.x Stage-1-only.
   brandResearchAdvanced: true,
   productResearchAdvanced: true,
+  // v1.10.2: Stage 4 fact-check ON by default. Uncheck to skip the
+  // fetch + Opus verify pass that runs after Stages 2+3.
+  brandResearchFactCheck: true,
+  productResearchFactCheck: true,
+  factCheckMaxSources: 10,
   minConfidence: 0.55,
   maxItemsPerScan: 30,
   liveMonitoringEnabled: false,
@@ -51,6 +56,9 @@ export function getSettings(): Settings {
     deepScanTwoStage: (store as any).get('deepScanTwoStage') as boolean,
     brandResearchAdvanced: (store as any).get('brandResearchAdvanced') as boolean,
     productResearchAdvanced: (store as any).get('productResearchAdvanced') as boolean,
+    brandResearchFactCheck: (store as any).get('brandResearchFactCheck') as boolean,
+    productResearchFactCheck: (store as any).get('productResearchFactCheck') as boolean,
+    factCheckMaxSources: (store as any).get('factCheckMaxSources') as number,
     minConfidence: (store as any).get('minConfidence') as number,
     maxItemsPerScan: (store as any).get('maxItemsPerScan') as number,
     liveMonitoringEnabled: (store as any).get('liveMonitoringEnabled') as boolean,

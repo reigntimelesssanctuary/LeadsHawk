@@ -6,8 +6,10 @@ const STAGE_LABELS: Record<string, string> = {
   brand_research: 'Brand research — Stage 1 (Perplexity)',
   brand_research_verify: 'Brand research — Stage 2 (Opus verify)',
   brand_research_strategic: 'Brand research — Stage 3 (Opus strategic)',
+  brand_research_factcheck: 'Brand research — Stage 4 (Opus fact-check)',
   product_research_verify: 'Product research — Stage 2 (Opus verify)',
   product_research_strategic: 'Product research — Stage 3 (Opus strategic)',
+  product_research_factcheck: 'Product research — Stage 4 (Opus fact-check)',
   brand_summary: 'Brand summary (legacy)',
   refresh_signals: 'Refresh signals (legacy)',
   brand_signals: 'Signal research — brand',
@@ -236,6 +238,39 @@ export function Settings() {
             onChange={(e) => setS({ ...s, productResearchAdvanced: e.target.checked })}
           /> Opus verification + strategic intel on <b style={{ margin: '0 4px' }}>product</b> research
         </label>
+
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed #e5e7eb' }}>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+            <b>Stage 4 — fact-check (v1.10.2)</b>. After Stages 2+3 produce a verified dossier, Stage 4 fetches up to N cited source URLs from Stage 1 and asks Opus to verify the dossier's claims against actual source text. Adds ~$1.30–$1.80 per research run. Requires the toggle above to be on (Stage 4 needs Stage 2's verified dossier as input).
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={s.brandResearchFactCheck}
+              onChange={(e) => setS({ ...s, brandResearchFactCheck: e.target.checked })}
+            /> Opus fact-check on <b style={{ margin: '0 4px' }}>brand</b> research
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 10 }}>
+            <input
+              type="checkbox"
+              checked={s.productResearchFactCheck}
+              onChange={(e) => setS({ ...s, productResearchFactCheck: e.target.checked })}
+            /> Opus fact-check on <b style={{ margin: '0 4px' }}>product</b> research
+          </label>
+          <label className="label">Max sources fetched per fact-check call</label>
+          <input
+            className="input"
+            type="number"
+            min="1"
+            max="15"
+            value={s.factCheckMaxSources}
+            onChange={(e) => setS({ ...s, factCheckMaxSources: Math.max(1, Math.min(15, Number(e.target.value) || 10)) })}
+            style={{ maxWidth: 120 }}
+          />
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+            Lower = cheaper + faster fact-check. Higher = more sources verified. Range 1–15. Default 10. Each source is fetched in parallel; unreachable URLs are skipped gracefully.
+          </div>
+        </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>

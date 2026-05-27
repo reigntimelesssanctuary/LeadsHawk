@@ -24,6 +24,10 @@ export type Brand = {
   strategic_intel: string | null;      // Stage 3 output JSON (icp_segments, buying_cycle_scenarios, competitive_plays)
   last_advanced_research_at: string | null;
   research_status_detail: string | null; // v1.10.1: per-stage status JSON for UI surfacing
+  // v1.10.2: Stage 4 fact-check — Opus verifies dossier claims against
+  // actual fetched source text from Stage 1's citations.
+  fact_check_report: string | null;
+  last_fact_check_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -54,17 +58,44 @@ export type Product = {
   strategic_intel: string | null;
   last_advanced_research_at: string | null;
   research_status_detail: string | null; // v1.10.1: per-stage status JSON
+  // v1.10.2: Stage 4 fact-check.
+  fact_check_report: string | null;
+  last_fact_check_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
 // v1.10.1: per-stage status persisted to brands.research_status_detail
 // / products.research_status_detail (JSON-serialised).
+// v1.10.2 extends with stage4.
 export type ResearchStatusDetail = {
   stage1: string;        // 'completed' | 'failed: <reason>'
   stage2: string;        // 'completed' | 'skipped: <reason>' | 'failed: <reason>'
   stage3: string;        // 'completed' | 'skipped: <reason>' | 'failed: <reason>'
+  stage4?: string;       // 'completed' | 'skipped: <reason>' | 'failed: <reason>' | 'partial: K/N sources'
   last_attempt_at: string;
+};
+
+// v1.10.2: Stage 4 fact-check output shape.
+export type FactCheckSectionVerdict = {
+  verdict: 'verified' | 'partially_supported' | 'unsupported' | 'inconclusive';
+  reasoning: string;
+  supporting_source_urls: string[];
+};
+
+export type FactCheckFlaggedClaim = {
+  claim: string;
+  status: 'verified' | 'unsupported' | 'contradicted' | 'inconclusive';
+  source_url: string | null;
+  reason: string;
+};
+
+export type FactCheckReport = {
+  overall_confidence: 'high' | 'medium' | 'low';
+  sources_attempted: number;
+  sources_fetched: number;
+  per_section_verdicts: Record<string, FactCheckSectionVerdict>;
+  flagged_claims: FactCheckFlaggedClaim[];
 };
 
 // v1.10.0: shared types for Stage 3 strategic intel output.
@@ -241,6 +272,13 @@ export type Settings = {
   // Perplexity Stage 1 call. Uncheck to revert to v1.9.x Stage-1-only.
   brandResearchAdvanced: boolean;
   productResearchAdvanced: boolean;
+  // v1.10.2: when true, chain Stage 4 fact-check after Stages 1-3.
+  // Stage 4 fetches cited URLs and asks Opus to verify dossier claims
+  // against the actual source text. Skipped if Stage 2/3 didn't complete.
+  brandResearchFactCheck: boolean;
+  productResearchFactCheck: boolean;
+  /** Cap on the number of citation URLs fetched and verified per call. */
+  factCheckMaxSources: number;
 };
 
 export type MonitorSource = {

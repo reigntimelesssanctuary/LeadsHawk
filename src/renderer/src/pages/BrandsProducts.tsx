@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, ConfidenceLevels, ConfidenceLevel, ResearchStatusDetail } from '../../../shared/types';
+import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, ConfidenceLevels, ConfidenceLevel, ResearchStatusDetail, FactCheckReport, FactCheckSectionVerdict, FactCheckFlaggedClaim } from '../../../shared/types';
 import type { Page } from '../components/Sidebar';
 import { Modal } from '../components/Modal';
 import { FeedbackModal } from '../components/FeedbackModal';
@@ -20,6 +20,14 @@ function parseStrategicIntel(raw: string | null): StrategicIntel | null {
     const j = JSON.parse(raw);
     if (!j || typeof j !== 'object' || !Array.isArray(j.icp_segments)) return null;
     return j as StrategicIntel;
+  } catch { return null; }
+}
+function parseFactCheckReport(raw: string | null): FactCheckReport | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object' || !j.per_section_verdicts) return null;
+    return j as FactCheckReport;
   } catch { return null; }
 }
 function ConfidencePill({ level }: { level: ConfidenceLevel | undefined }) {
@@ -127,28 +135,37 @@ function ResearchStatusChip({ raw }: { raw: string | null }) {
   const parsed = parseStatusDetail(raw);
   if (!parsed) return null;
 
-  const isFail = (s: string) => /^failed:/.test(s);
-  const isSkip = (s: string) => /^skipped:/.test(s);
-  const isOk = (s: string) => s === 'completed';
+  const isFail = (s: string | undefined) => !!s && /^failed:/.test(s);
+  const isSkip = (s: string | undefined) => !!s && /^skipped:/.test(s);
+  const isPartial = (s: string | undefined) => !!s && /^partial:/.test(s);
+  const isOk = (s: string | undefined) => s === 'completed';
 
-  const anyFailed = isFail(parsed.stage2) || isFail(parsed.stage3);
+  const stage4 = parsed.stage4; // v1.10.2 — may be undefined on pre-1.10.2 records
+  const anyFailed = isFail(parsed.stage2) || isFail(parsed.stage3) || isFail(stage4);
+  const anyPartial = isPartial(stage4);
   const stage2Skipped = isSkip(parsed.stage2);
-  const allOk = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3);
+  const allOk = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3) &&
+                (stage4 === undefined || isOk(stage4));
 
   const palette = anyFailed
     ? { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }
+    : anyPartial
+    ? { bg: '#fef3c7', fg: '#92400e', border: '#fde68a' }
     : stage2Skipped
     ? { bg: '#fef3c7', fg: '#92400e', border: '#fde68a' }
     : allOk
     ? { bg: '#d1fae5', fg: '#065f46', border: '#a7f3d0' }
     : { bg: '#f3f4f6', fg: '#4b5563', border: '#e5e7eb' };
 
-  const summary = anyFailed
-    ? `Stage 2 ${isOk(parsed.stage2) ? '✓' : '✗'} · Stage 3 ${isOk(parsed.stage3) ? '✓' : '✗'}`
-    : stage2Skipped
+  // v1.10.2: include stage 4 in summary if present.
+  const stagePart = (n: number, s: string | undefined) =>
+    s === undefined ? '' : ` · Stage ${n} ${isOk(s) ? '✓' : isPartial(s) ? '⚠' : isSkip(s) ? '–' : '✗'}`;
+  const summary = stage2Skipped
     ? `Stage 1 only · Opus skipped`
     : allOk
-    ? `Stage 1 ✓ · Stage 2 ✓ · Stage 3 ✓`
+    ? `Stage 1 ✓ · Stage 2 ✓ · Stage 3 ✓${stage4 ? ' · Stage 4 ✓' : ''}`
+    : anyFailed || anyPartial
+    ? `Stage 2 ${isOk(parsed.stage2) ? '✓' : '✗'}${stagePart(3, parsed.stage3)}${stagePart(4, stage4)}`
     : 'pending';
 
   return (
@@ -188,11 +205,147 @@ function ResearchStatusChip({ raw }: { raw: string | null }) {
           <div><b>Stage 1 (Perplexity):</b> {parsed.stage1}</div>
           <div><b>Stage 2 (Opus verify):</b> {parsed.stage2}</div>
           <div><b>Stage 3 (Opus strategic):</b> {parsed.stage3}</div>
+          {parsed.stage4 !== undefined && (
+            <div><b>Stage 4 (Opus fact-check):</b> {parsed.stage4}</div>
+          )}
           <div style={{ marginTop: 6, color: '#6b7280' }}>
             Last attempt: {parsed.last_attempt_at}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// v1.10.2 — fact-check report rendering (Stage 4 output).
+function FactCheckReportBlock({ report }: { report: FactCheckReport | null }) {
+  const [open, setOpen] = useState(false);
+  if (!report) return null;
+
+  const confPalette: Record<FactCheckReport['overall_confidence'], { bg: string; fg: string }> = {
+    high:   { bg: '#d1fae5', fg: '#065f46' },
+    medium: { bg: '#fef3c7', fg: '#92400e' },
+    low:    { bg: '#fee2e2', fg: '#991b1b' }
+  };
+  const conf = confPalette[report.overall_confidence] || confPalette.medium;
+  const sectionEntries = Object.entries(report.per_section_verdicts);
+
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: '#f0f9ff', borderRadius: 8, border: '1px solid #bae6fd' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span style={{ fontWeight: 600, fontSize: 13, color: '#075985' }}>
+          Fact-check report (Stage 4 — Claude Opus)
+        </span>
+        <span style={{
+          marginLeft: 8,
+          fontSize: 10,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          padding: '2px 6px',
+          borderRadius: 4,
+          background: conf.bg,
+          color: conf.fg
+        }}>
+          {report.overall_confidence} confidence
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
+          {report.sources_fetched}/{report.sources_attempted} sources verified
+        </span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 12, display: 'grid', gap: 14 }}>
+          {sectionEntries.length > 0 && (
+            <div>
+              <div className="label" style={{ marginBottom: 8 }}>Per-section verdicts</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {sectionEntries.map(([name, v]) => (
+                  <FactCheckSectionCard key={name} name={name} verdict={v} />
+                ))}
+              </div>
+            </div>
+          )}
+          {report.flagged_claims && report.flagged_claims.length > 0 && (
+            <div>
+              <div className="label" style={{ marginBottom: 8 }}>Flagged claims</div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {report.flagged_claims.map((c, i) => (
+                  <FactCheckClaimRow key={i} claim={c} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+function FactCheckSectionCard({ name, verdict }: { name: string; verdict: FactCheckSectionVerdict }) {
+  const palette: Record<FactCheckSectionVerdict['verdict'], { bg: string; fg: string; label: string }> = {
+    verified:            { bg: '#d1fae5', fg: '#065f46', label: 'verified' },
+    partially_supported: { bg: '#fef3c7', fg: '#92400e', label: 'partially supported' },
+    unsupported:         { bg: '#fee2e2', fg: '#991b1b', label: 'unsupported' },
+    inconclusive:        { bg: '#f3f4f6', fg: '#4b5563', label: 'inconclusive' }
+  };
+  const s = palette[verdict.verdict] || palette.inconclusive;
+  return (
+    <div style={{ padding: 10, background: 'white', borderRadius: 6, border: '1px solid #e0e7ef' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontWeight: 600, fontSize: 13, color: '#1f2937', textTransform: 'capitalize' }}>
+          {name.replace(/_/g, ' ')}
+        </span>
+        <span style={{
+          fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+          padding: '2px 6px', borderRadius: 4, background: s.bg, color: s.fg
+        }}>
+          {s.label}
+        </span>
+      </div>
+      <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.5, marginBottom: 6 }}>{verdict.reasoning}</div>
+      {verdict.supporting_source_urls && verdict.supporting_source_urls.length > 0 && (
+        <div style={{ fontSize: 11, color: '#6b7280' }}>
+          Supporting sources:{' '}
+          {verdict.supporting_source_urls.slice(0, 3).map((u, i) => (
+            <span key={i}>
+              {i > 0 && ' · '}
+              <a onClick={() => openExternal(u)} style={{ cursor: 'pointer', color: '#0369a1', textDecoration: 'underline' }}>
+                {(() => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } })()}
+              </a>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function FactCheckClaimRow({ claim }: { claim: FactCheckFlaggedClaim }) {
+  const palette: Record<FactCheckFlaggedClaim['status'], { bg: string; fg: string }> = {
+    verified:     { bg: '#d1fae5', fg: '#065f46' },
+    unsupported:  { bg: '#fef3c7', fg: '#92400e' },
+    contradicted: { bg: '#fee2e2', fg: '#991b1b' },
+    inconclusive: { bg: '#f3f4f6', fg: '#4b5563' }
+  };
+  const s = palette[claim.status] || palette.inconclusive;
+  return (
+    <div style={{ padding: 8, background: 'white', borderRadius: 6, border: '1px solid #e0e7ef', fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{
+          fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+          padding: '2px 6px', borderRadius: 4, background: s.bg, color: s.fg
+        }}>
+          {claim.status}
+        </span>
+        {claim.source_url && (
+          <a onClick={() => openExternal(claim.source_url!)} style={{ cursor: 'pointer', color: '#0369a1', textDecoration: 'underline', fontSize: 11 }}>
+            source
+          </a>
+        )}
+      </div>
+      <div style={{ color: '#1f2937', marginBottom: 4, fontStyle: 'italic' }}>"{claim.claim}"</div>
+      <div style={{ color: '#6b7280' }}>{claim.reason}</div>
     </div>
   );
 }
@@ -514,12 +667,15 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
               {p.research_summary && (() => {
                 const conf = parseConfidenceLevels(p.confidence_levels);
                 const strategic = parseStrategicIntel(p.strategic_intel);
+                const factCheck = parseFactCheckReport(p.fact_check_report);
                 return (
                   <details style={{ marginTop: 10 }}>
                     <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
                       View research dossier
                       {p.last_advanced_research_at && (
-                        <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>· Opus verified</span>
+                        <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>
+                          · Opus verified{p.last_fact_check_at ? ' + fact-checked' : ''}
+                        </span>
                       )}
                     </summary>
                     <div style={{ marginTop: 8, fontSize: 13, display: 'grid', gap: 10 }}>
@@ -530,6 +686,7 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                       <Field label="Summary" value={p.research_summary} confidence={conf?.research_summary} />
                       <UnknownsBlock unknowns={p.unknowns} />
                       <StrategicIntelBlock intel={strategic} />
+                      <FactCheckReportBlock report={factCheck} />
                     </div>
                   </details>
                 );
@@ -856,12 +1013,15 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
       {brand.research_status === 'ready' && (() => {
         const conf = parseConfidenceLevels(brand.confidence_levels);
         const strategic = parseStrategicIntel(brand.strategic_intel);
+        const factCheck = parseFactCheckReport(brand.fact_check_report);
         return (
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
               View brand dossier
               {brand.last_advanced_research_at && (
-                <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>· Opus verified</span>
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>
+                  · Opus verified{brand.last_fact_check_at ? ' + fact-checked' : ''}
+                </span>
               )}
             </summary>
             <div style={{ marginTop: 10, padding: 14, background: '#f3f4ff', borderRadius: 8, fontSize: 13, color: '#1f2937', display: 'grid', gap: 12 }}>
@@ -873,6 +1033,7 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
               {brand.research_summary && <Field label="Research summary" value={brand.research_summary} confidence={conf?.research_summary} />}
               <UnknownsBlock unknowns={brand.unknowns} />
               <StrategicIntelBlock intel={strategic} />
+              <FactCheckReportBlock report={factCheck} />
             </div>
           </details>
         );
