@@ -613,6 +613,32 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.12.0 (2026-05-27):** Manual scan retired. Deep scan is now "the scan".
+
+User feedback: deep scan produces materially better leads than manual scan in v1.10.x, and maintaining two scan pipelines doubles bug surface. Quality is the priority. Architectural cleanup follows.
+
+**What's removed:**
+- `scan:run` IPC handler (manual scan trigger). `runScan()` stays available as the single-stage fallback `runDeepScan()` routes to when `deepScanTwoStage=false`, but no user-facing trigger calls it anymore.
+- `window.lh.scan.run` from the preload bridge.
+- The manual-scan cron registration in `scheduler.ts`. Scheduler now only handles deep scan.
+- The "Schedule" card on the Scan Jobs page (manual cron editor). Deep scan's schedule lives in Settings → Scan card.
+- The "Run Scan Now" button on Scan Jobs (the cheap one); the remaining button (renamed from "Run Deep Scan Now") triggers deep scan.
+
+**What's renamed:**
+- Settings card "Deep Research Scan" → **"Scan"**. Copy updated to reflect that the two-stage deep scan is now the only autonomous scan engine.
+- Scan Jobs history table — `manual` kind chip relabeled to `manual (legacy)` (any historical manual-scan rows in `scan_runs` still render with their original kind); deep scan rows render as `scan`.
+- Dashboard's "Run Scan Now" button kept in place but rewired to `runDeep`. Same label, same prominence.
+
+**What's deprecated:**
+- **Custom topics** (`signal_sources` rows, the "Advanced — custom topics" section in Signal Config). Custom topics ran only via the v1.7.5 manual-scan Pass 2 codepath, so they're orphaned by this change. The section now shows a yellow deprecation banner explaining they're preserved in the DB but no longer execute. Users can delete topics they no longer need or leave them as a record.
+
+**What stays:**
+- `settings.scanCron` / `scanEnabled` fields kept in the `Settings` type for back-compat reads (no migration needed). Unused at runtime.
+- `runScan()` in `scanner.ts` — still the single-stage fallback path under `runDeepScan()` when `deepScanTwoStage=false`.
+- `signal_sources` table — data preserved.
+
+No schema changes. 71 smoke tests still pass.
+
 **v1.11.1 (2026-05-27):** Per-scan-instance cost breakdown + Settings Spend card removed.
 
 User feedback after using v1.11.0: the Cost Management tab showed aggregated totals but not per-individual-scan cost. Also flagged that with the Cost Management tab live, the Spend card in Settings was redundant.

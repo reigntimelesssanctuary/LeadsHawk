@@ -1,26 +1,22 @@
 import { useEffect, useState } from 'react';
-import type { ScanRun, Settings, Brand, Product } from '../../../shared/types';
+import type { ScanRun, Brand, Product } from '../../../shared/types';
 import { fmtDate } from '../lib/api';
 import { Switch } from '../components/Switch';
 
 export function ScanJobs() {
   const [runs, setRuns] = useState<ScanRun[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [running, setRunning] = useState(false);
-  const [runningDeep, setRunningDeep] = useState(false);
   const [selectedRun, setSelectedRun] = useState<ScanRun | null>(null);
 
   const refresh = async () => {
-    const [r, s, b, p] = await Promise.all([
+    const [r, b, p] = await Promise.all([
       window.lh.scan.runs(),
-      window.lh.settings.get(),
       window.lh.brands.list(),
       window.lh.products.list()
     ]);
     setRuns(r);
-    setSettings(s);
     setBrands(b);
     setProducts(p);
   };
@@ -31,13 +27,8 @@ export function ScanJobs() {
       <div style={{ marginTop: 16, marginBottom: 16 }}>
         <div className="h-page">Scan Jobs</div>
         <div style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
-          Autonomous scan schedule and run history
+          Scan inclusion + run history. Schedule and toggles live under <b>Settings → Scan</b>.
         </div>
-      </div>
-
-      <div className="card" style={{ padding: 20, marginBottom: 20 }}>
-        <div className="h-card" style={{ marginBottom: 10 }}>Schedule</div>
-        {settings && <ScheduleEditor settings={settings} onSaved={refresh} />}
       </div>
 
       <ScanInclusionCard brands={brands} products={products} onChanged={refresh} />
@@ -46,35 +37,21 @@ export function ScanJobs() {
         <div>
           <div className="h-card">Manual run</div>
           <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>
-            <b>Run Scan Now</b> uses the cheap sonar-pro model. <b>Run Deep Scan Now</b> uses sonar-deep-research — slower and costlier per call but reasons harder.
+            Runs the two-stage scan: Perplexity sonar-deep-research discovery → Claude qualification. Slower and costlier than the retired manual scan, but produces better leads.
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            className="btn-ghost"
-            onClick={async () => {
-              setRunningDeep(true);
-              try { await window.lh.scan.runDeep(); refresh(); }
-              catch (e: any) { alert(e.message); }
-              finally { setRunningDeep(false); }
-            }}
-            disabled={runningDeep || running}
-          >
-            {runningDeep ? 'Deep scanning…' : 'Run Deep Scan Now'}
-          </button>
-          <button
-            className="btn-primary"
-            onClick={async () => {
-              setRunning(true);
-              try { await window.lh.scan.run(); refresh(); }
-              catch (e: any) { alert(e.message); }
-              finally { setRunning(false); }
-            }}
-            disabled={running || runningDeep}
-          >
-            {running ? 'Scanning…' : 'Run Scan Now'}
-          </button>
-        </div>
+        <button
+          className="btn-primary"
+          onClick={async () => {
+            setRunning(true);
+            try { await window.lh.scan.runDeep(); refresh(); }
+            catch (e: any) { alert(e.message); }
+            finally { setRunning(false); }
+          }}
+          disabled={running}
+        >
+          {running ? 'Scanning…' : 'Run Scan Now'}
+        </button>
       </div>
 
       <div className="card" style={{ overflow: 'hidden' }}>
@@ -101,7 +78,7 @@ export function ScanJobs() {
                 <td>{fmtDate(r.finished_at)}</td>
                 <td>
                   <span className={`chip ${r.kind === 'deep' ? 'chip-brand' : 'chip-muted'}`}>
-                    {r.kind === 'deep' ? 'deep research' : 'manual'}
+                    {r.kind === 'deep' ? 'scan' : 'manual (legacy)'}
                   </span>
                 </td>
                 <td><span className={`chip ${r.status === 'completed' ? 'chip-qualified' : r.status === 'error' ? 'chip-disqualified' : 'chip-open'}`}>{r.status}</span></td>
@@ -180,7 +157,7 @@ function ScanInclusionCard({
         </div>
       </div>
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
-        Toggle what gets included in every scan (manual, deep research, and live monitor). Disabling a brand pauses all of its products regardless of the per-product toggle.
+        Toggle what gets included in scans and the live monitor. Disabling a brand pauses all of its products regardless of the per-product toggle.
       </div>
       {brands.length === 0 ? (
         <div style={{ color: '#6b7280', fontSize: 13 }}>
@@ -246,39 +223,5 @@ function ScanInclusionCard({
   );
 }
 
-function ScheduleEditor({ settings, onSaved }: { settings: Settings; onSaved: () => void }) {
-  const [cron, setCron] = useState(settings.scanCron);
-  const [enabled, setEnabled] = useState(settings.scanEnabled);
-  const [saved, setSaved] = useState(false);
-
-  const presets: { label: string; value: string }[] = [
-    { label: 'Every hour', value: '0 * * * *' },
-    { label: 'Every 6 hours', value: '0 */6 * * *' },
-    { label: 'Twice daily', value: '0 9,21 * * *' },
-    { label: 'Daily at 9am', value: '0 9 * * *' }
-  ];
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enable autonomous scans
-        </label>
-      </div>
-      <label className="label">Cron expression</label>
-      <input className="input" value={cron} onChange={(e) => setCron(e.target.value)} />
-      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {presets.map((p) => (
-          <button key={p.value} className="btn-ghost" onClick={() => setCron(p.value)}>{p.label}</button>
-        ))}
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <button className="btn-primary" onClick={async () => {
-          await window.lh.settings.update({ scanCron: cron, scanEnabled: enabled });
-          setSaved(true); onSaved(); setTimeout(() => setSaved(false), 2000);
-        }}>Save schedule</button>
-        {saved && <span style={{ marginLeft: 12, color: '#065f46', fontSize: 13 }}>Saved.</span>}
-      </div>
-    </div>
-  );
-}
+// v1.12.0: ScheduleEditor removed — manual scan retired. Deep scan
+// schedule lives in Settings → Scan card. Settings import also dropped.

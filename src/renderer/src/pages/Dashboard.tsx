@@ -85,10 +85,13 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
 
   useEffect(() => { refresh(); }, []);
 
+  // v1.12.0: manual scan retired. Dashboard's "Run Scan Now" button
+  // now triggers the deep-scan pipeline (two-stage Opus-qualified by
+  // default; configurable in Settings).
   const runScan = async () => {
     setRunning(true); setError(null);
     try {
-      await window.lh.scan.run();
+      await window.lh.scan.runDeep();
       await refresh();
     } catch (e: any) {
       setError(e.message || String(e));

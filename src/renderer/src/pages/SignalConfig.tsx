@@ -231,13 +231,14 @@ export function SignalConfig() {
         )}
       </div>
 
-      <div className="card" style={{ padding: 20 }}>
+      <div className="card" style={{ padding: 20, background: '#fafafa' }}>
         <button
           onClick={() => setAdvancedOpen(!advancedOpen)}
           style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
         >
           {advancedOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          <span className="h-section">Advanced — custom topics</span>
+          <span className="h-section" style={{ color: '#6b7280' }}>Advanced — custom topics</span>
+          <span className="chip chip-muted" style={{ marginLeft: 8 }}>retired in v1.12</span>
           <span style={{ marginLeft: 'auto', color: '#6b7280', fontSize: 13 }}>
             {sources.length} configured
           </span>
@@ -245,8 +246,8 @@ export function SignalConfig() {
 
         {advancedOpen && (
           <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-              Optional. Add a free-form topic and LeadsHawk will also search the web for that topic on every scan — in addition to the auto signals above. Useful if you want to hunt for opportunities outside what your product research suggests (e.g. tracking specific competitors or industries).
+            <div style={{ fontSize: 13, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', padding: '10px 12px', borderRadius: 8, marginBottom: 14 }}>
+              Custom topics ran only via the manual scan, which was retired in v1.12 in favour of the higher-quality two-stage deep scan. Your existing topics are preserved in the database for reference, but they don't fire on any scan or live monitor today. You can delete topics you no longer need, or leave them as a record of past intent.
             </div>
 
             {sources.length > 0 && (

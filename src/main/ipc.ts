@@ -5,7 +5,7 @@ import { extractFromFile, fetchUrl } from './knowledge.js';
 import { researchProduct, researchBrand } from './research.js';
 import { researchBrandSignals, researchProductSignals } from './signal-research.js';
 import { listFeedback, type FeedbackTargetKind } from './feedback.js';
-import { runScan, runDeepScan } from './scanner.js';
+import { runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
 import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
@@ -327,10 +327,9 @@ export function registerIpc() {
   });
 
   // -------- Scans / Opportunities --------
-  ipcMain.handle('scan:run', async () => {
-    const result = await runScan();
-    return result;
-  });
+  // v1.12.0: manual scan retired. Deep scan is now "the scan". The
+  // `scan:run` IPC handler is removed — call `scan:runDeep` instead
+  // (or window.lh.scan.runDeep on the renderer).
   ipcMain.handle('scan:runDeep', async () => {
     const result = await runDeepScan();
     return result;

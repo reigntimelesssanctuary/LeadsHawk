@@ -66,7 +66,7 @@ const api = {
       ipcRenderer.invoke('rules:createGlobal', p)
   },
   scan: {
-    run: () => ipcRenderer.invoke('scan:run'),
+    // v1.12.0: manual scan retired. `run` is gone; use `runDeep`.
     runDeep: () => ipcRenderer.invoke('scan:runDeep'),
     runs: () => ipcRenderer.invoke('scan:runs'),
     runGet: (id: number) => ipcRenderer.invoke('scan:run:get', id)

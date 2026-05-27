@@ -211,16 +211,16 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="h-card" style={{ marginBottom: 6 }}>Deep Research Scan</div>
+        <div className="h-card" style={{ marginBottom: 6 }}>Scan</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          A third, heavier scanning engine — uses Perplexity's deep-research model on its own cron, separate from the regular hourly/6-hourly scan. Costlier per call, but reasons harder and pulls from more sources. The schedule lives here; the on/off toggle is the checkbox below.
+          The autonomous scan engine — two-stage by default: Perplexity sonar-deep-research discovery + Claude qualification. Slower and costlier per run than the retired v1.x manual scan, but produces meaningfully better leads. Set the schedule below; the on/off toggle is the checkbox.
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 12 }}>
           <input
             type="checkbox"
             checked={s.deepScanEnabled}
             onChange={(e) => setS({ ...s, deepScanEnabled: e.target.checked })}
-          /> Enable deep research scans on schedule
+          /> Enable scheduled scans
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 6 }}>
           <input
