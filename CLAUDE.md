@@ -613,6 +613,30 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.12.1 (2026-05-27):** Live Monitor diagnostic UI + threshold default lowered.
+
+User reported Live Monitor was ingesting items but producing zero candidates (and therefore zero opportunities). Diagnostic data: ~283 items ingested over 7 days, 0 candidates. The embedding pre-filter was dropping everything silently.
+
+Three causes contribute to this pattern; v1.12.1 makes them visible:
+
+1. **Per-product embedding status indicator in Signal Config.** New `products:embeddingStatus` IPC returns `Record<productId, embeddingCount>`. `SignalConfig.tsx` fetches it and renders next to each product:
+   - `✓ embedded (N)` green chip when vectors are populated
+   - `⚠ needs embedding` amber chip + inline `Embed now` button (calls existing `products:reembed`) when signals exist but embeddings are null. Catches the silent-fire-and-forget failure mode of `embedSignalsForProduct()`.
+
+2. **Diagnostic banner on Live Monitor.** Fires when last-24h `ingested > 0 && candidates === 0` OR when 7-day aggregate shows ≥20 ingested with 0 across all sources. Lists the three usual causes with inline fix actions:
+   - Threshold too strict → one-click "Lower to 0.40" button (writes via `settings:update`)
+   - Embeddings missing → links to Signal Config (via `onNavigate` prop, same pattern as BrandsProducts)
+   - Source-portfolio misalignment → text only (auto-discovery coming in v1.13)
+   - Dismissible per-session.
+
+3. **Settings threshold helper text.** Updated under the embedSimilarityThreshold input to recommend 0.40 and explain when to lower.
+
+4. **Default `embedSimilarityThreshold` lowered 0.55 → 0.40** for NEW installs only. Existing user settings preserved by electron-store (no migration). Rationale: 0.55 was too strict in practice — real product-signal vs news-headline matches consistently sit at 0.40-0.50. Sonnet triage downstream is the cheap filter for false positives; the embedding pre-filter should cast a wider net.
+
+LiveMonitor.tsx gains an `onNavigate?: (p: Page) => void` prop (same pattern v1.9.2 added to BrandsProducts) so the diagnostic banner's "Open Signal Config →" action can switch the active page directly.
+
+No schema changes. 71 smoke tests still pass.
+
 **v1.12.0 (2026-05-27):** Manual scan retired. Deep scan is now "the scan".
 
 User feedback: deep scan produces materially better leads than manual scan in v1.10.x, and maintaining two scan pipelines doubles bug surface. Quality is the priority. Architectural cleanup follows.

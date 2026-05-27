@@ -23,14 +23,33 @@ export function SignalConfig() {
   const [feedbackTarget, setFeedbackTarget] = useState<
     { kind: SignalFeedbackKind; id: number; name: string } | null
   >(null);
+  // v1.12.1: per-product embedding vector count (0 = signals present but
+  // embeddings haven't been computed yet → Live Monitor can't match).
+  const [embeddingStatus, setEmbeddingStatus] = useState<Record<number, number>>({});
 
   const refresh = async () => {
-    setProducts(await window.lh.products.list());
-    setBrands(await window.lh.brands.list());
-    setSources(await window.lh.sources.list());
-    setGlobalRules(await window.lh.rules.listGlobal());
+    const [prods, brs, srcs, rules, embStatus] = await Promise.all([
+      window.lh.products.list(),
+      window.lh.brands.list(),
+      window.lh.sources.list(),
+      window.lh.rules.listGlobal(),
+      window.lh.products.embeddingStatus().catch(() => ({} as Record<number, number>))
+    ]);
+    setProducts(prods);
+    setBrands(brs);
+    setSources(srcs);
+    setGlobalRules(rules);
+    setEmbeddingStatus(embStatus);
   };
   useEffect(() => { refresh(); }, []);
+
+  const embedNow = async (p: Product) => {
+    const key = `embed-${p.id}`;
+    setBusy(key);
+    try { await window.lh.products.reembed(p.id); await refresh(); }
+    catch (e: any) { alert(e.message); }
+    finally { setBusy(null); }
+  };
 
   const researchBrandSignals = async (b: Brand) => {
     const key = `brand-${b.id}`;
@@ -217,6 +236,9 @@ export function SignalConfig() {
                   }
                   isBusy={busy === busyKey}
                   anyBusy={busy !== null}
+                  embeddingCount={embeddingStatus[p.id] ?? 0}
+                  isEmbedding={busy === `embed-${p.id}`}
+                  onEmbedNow={() => embedNow(p)}
                 />
               );
             })}
@@ -322,13 +344,18 @@ export function SignalConfig() {
 
 function ProductSignals({
   product, brandName, onToggle,
-  onResearchSignals, onResearchSignalsWithFeedback, isBusy, anyBusy
+  onResearchSignals, onResearchSignalsWithFeedback, isBusy, anyBusy,
+  embeddingCount, isEmbedding, onEmbedNow
 }: {
   product: Product; brandName: string; onToggle: () => void;
   onResearchSignals: () => void;
   onResearchSignalsWithFeedback: () => void;
   isBusy: boolean;
   anyBusy: boolean;
+  // v1.12.1
+  embeddingCount: number;
+  isEmbedding: boolean;
+  onEmbedNow: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [rules, setRules] = useState<ScanRule[]>([]);
@@ -363,8 +390,38 @@ function ProductSignals({
               {product.name}
               <span style={{ color: '#6b7280', fontWeight: 400 }}> · {brandName}</span>
             </div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-              {hasSignals ? `${signalLines.length} signal${signalLines.length === 1 ? '' : 's'} ${enabled ? 'tracked' : 'paused'}` : 'no signals yet'}
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>{hasSignals ? `${signalLines.length} signal${signalLines.length === 1 ? '' : 's'} ${enabled ? 'tracked' : 'paused'}` : 'no signals yet'}</span>
+              {/* v1.12.1: embedding status indicator. Critical because Live
+                  Monitor's pre-filter ONLY works when embeddings exist. */}
+              {hasSignals && embeddingCount > 0 && (
+                <span
+                  className="chip chip-qualified"
+                  style={{ fontSize: 10, padding: '1px 6px' }}
+                  title={`${embeddingCount} signal vectors persisted — Live Monitor's pre-filter can match against this product.`}
+                >
+                  ✓ embedded ({embeddingCount})
+                </span>
+              )}
+              {hasSignals && embeddingCount === 0 && (
+                <>
+                  <span
+                    className="chip"
+                    style={{ fontSize: 10, padding: '1px 6px', background: '#fef3c7', color: '#92400e' }}
+                    title="Signals exist but vector embeddings haven't been computed. Live Monitor can't match against this product until embeddings are populated."
+                  >
+                    ⚠ needs embedding
+                  </span>
+                  <button
+                    className="btn-ghost"
+                    onClick={(e) => { e.stopPropagation(); onEmbedNow(); }}
+                    disabled={anyBusy}
+                    style={{ fontSize: 11, padding: '2px 8px' }}
+                  >
+                    {isEmbedding ? 'Embedding…' : 'Embed now'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </button>

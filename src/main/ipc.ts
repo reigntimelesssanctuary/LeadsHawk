@@ -195,6 +195,26 @@ export function registerIpc() {
     await embedSignalsForProduct(id);
     return true;
   });
+  // v1.12.1: per-product embedding status for Signal Config diagnostic
+  // indicators. Returns a map of product_id → number of signal vectors
+  // currently persisted in products.signal_embeddings (0 = needs embed).
+  ipcMain.handle('products:embeddingStatus', () => {
+    const rows = db.prepare(
+      `SELECT id, signal_embeddings FROM products`
+    ).all() as Array<{ id: number; signal_embeddings: string | null }>;
+    const out: Record<number, number> = {};
+    for (const r of rows) {
+      let count = 0;
+      if (r.signal_embeddings) {
+        try {
+          const parsed = JSON.parse(r.signal_embeddings);
+          if (Array.isArray(parsed)) count = parsed.length;
+        } catch { /* malformed → 0 */ }
+      }
+      out[r.id] = count;
+    }
+    return out;
+  });
   ipcMain.handle('products:setScanEnabled', (_e, id: number, enabled: boolean) => {
     db.prepare(
       "UPDATE products SET scan_enabled = ?, updated_at = datetime('now') WHERE id = ?"

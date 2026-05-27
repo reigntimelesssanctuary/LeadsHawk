@@ -35,7 +35,7 @@ export default function App() {
           ) : (
             <>
               {page === 'dashboard' && <Dashboard onOpenOpp={(id) => setOppId(id)} />}
-              {page === 'monitor' && <LiveMonitor onOpenOpp={(id) => setOppId(id)} />}
+              {page === 'monitor' && <LiveMonitor onOpenOpp={(id) => setOppId(id)} onNavigate={(p) => setPage(p)} />}
               {page === 'scans' && <ScanJobs />}
               {page === 'signals' && <SignalConfig />}
               {page === 'dispatch' && <BrandDispatch onOpenOpp={(id) => setOppId(id)} />}

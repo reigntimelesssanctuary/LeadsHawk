@@ -31,7 +31,12 @@ const defaults: Settings = {
   minConfidence: 0.55,
   maxItemsPerScan: 30,
   liveMonitoringEnabled: false,
-  embedSimilarityThreshold: 0.55,
+  // v1.12.1: lowered default 0.55 → 0.40 for NEW installs (existing user
+  // settings preserved by electron-store). 0.55 was too strict in
+  // practice — most real product-signal vs news-headline matches sit
+  // around 0.40-0.50. Sonnet triage downstream is the cheap filter for
+  // false positives; the embedding pre-filter should cast a wider net.
+  embedSimilarityThreshold: 0.40,
   notifyOnNewOpportunity: true,
   openAtLogin: false,
   crossMatchEnabled: true

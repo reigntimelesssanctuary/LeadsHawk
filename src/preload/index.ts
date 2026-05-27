@@ -32,6 +32,8 @@ const api = {
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('products:researchSignals', id, opts),
     reembed: (id: number) => ipcRenderer.invoke('products:reembed', id),
+    embeddingStatus: (): Promise<Record<number, number>> =>
+      ipcRenderer.invoke('products:embeddingStatus'),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('products:setScanEnabled', id, enabled)
   },
