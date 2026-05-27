@@ -68,3 +68,167 @@ export function getSpendSummary(): SpendSummary {
 
   return { today, last7d, last30d, byStage, byModel };
 }
+
+// ─── v1.11.0 — Cost Management ──────────────────────────────────────
+
+/**
+ * Operation buckets the user thinks in. Each maps to one or more
+ * LlmStage values (which the code uses for fine-grained telemetry).
+ * Order here drives the order rows appear in the UI.
+ *
+ * Exported as a pure function for smoke testing.
+ */
+export type OperationType =
+  | 'brand_research'
+  | 'product_research'
+  | 'signal_research'
+  | 'manual_scan'
+  | 'deep_scan'
+  | 'live_monitor'
+  | 'sales_brief'
+  | 'other';
+
+export function operationForStage(stage: string): OperationType {
+  switch (stage) {
+    case 'brand_research':
+    case 'brand_research_verify':
+    case 'brand_research_strategic':
+    case 'brand_research_factcheck':
+    case 'brand_summary':            // legacy v1.x
+      return 'brand_research';
+    case 'research':                 // historical: product Stage 1
+    case 'product_research_verify':
+    case 'product_research_strategic':
+    case 'product_research_factcheck':
+      return 'product_research';
+    case 'brand_signals':
+    case 'product_signals':
+    case 'refresh_signals':          // legacy v1.x
+      return 'signal_research';
+    case 'manual_scan':
+      return 'manual_scan';
+    case 'deep_scan':
+    case 'deep_scan_discovery':
+    case 'deep_scan_qualify':
+      return 'deep_scan';
+    case 'triage':
+    case 'qualify':
+      return 'live_monitor';
+    case 'brief':
+      return 'sales_brief';
+    default:
+      return 'other';
+  }
+}
+
+export const OPERATION_LABEL: Record<OperationType, string> = {
+  brand_research: 'Brand research (all 4 stages)',
+  product_research: 'Product research (all 4 stages)',
+  signal_research: 'Signal research (brand + product)',
+  manual_scan: 'Manual scan',
+  deep_scan: 'Deep scan (Stage 1 + Stage 2)',
+  live_monitor: 'Live Monitor (triage + qualify)',
+  sales_brief: 'Sales brief generation',
+  other: 'Other / untagged'
+};
+
+const OPERATION_ORDER: OperationType[] = [
+  'brand_research',
+  'product_research',
+  'signal_research',
+  'manual_scan',
+  'deep_scan',
+  'live_monitor',
+  'sales_brief',
+  'other'
+];
+
+export type OperationBucket = {
+  operation: OperationType;
+  label: string;
+  calls: number;
+  cost: number;
+};
+
+export type CostWindow = {
+  totalCost: number;
+  byOperation: OperationBucket[];
+};
+
+export type CostSummary = {
+  today: CostWindow;
+  last7d: CostWindow;
+  last30d: CostWindow;
+  allTime: CostWindow;
+  byModel30d: Array<{ model: string; calls: number; cost: number }>;
+  byStage30d: Array<{ stage: string; calls: number; cost: number }>;
+  byProvider30d: Array<{ provider: string; calls: number; cost: number }>;
+};
+
+/**
+ * Aggregate raw stage-level rows into the user-facing operation buckets.
+ * Pure function — exported for smoke testing.
+ */
+export function bucketByOperation(
+  rows: Array<{ stage: string; calls: number; cost: number }>
+): OperationBucket[] {
+  const buckets = new Map<OperationType, OperationBucket>();
+  for (const op of OPERATION_ORDER) {
+    buckets.set(op, { operation: op, label: OPERATION_LABEL[op], calls: 0, cost: 0 });
+  }
+  for (const row of rows) {
+    const op = operationForStage(row.stage);
+    const b = buckets.get(op)!;
+    b.calls += row.calls;
+    b.cost += row.cost;
+  }
+  return OPERATION_ORDER.map((op) => buckets.get(op)!).filter((b) => b.calls > 0);
+}
+
+function loadWindow(db: ReturnType<typeof getDb>, sqlWhere: string): CostWindow {
+  const rows = db
+    .prepare(
+      `SELECT stage, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost
+       FROM api_calls
+       ${sqlWhere}
+       GROUP BY stage`
+    )
+    .all() as Array<{ stage: string; calls: number; cost: number }>;
+  const byOperation = bucketByOperation(rows);
+  const totalCost = byOperation.reduce((sum, b) => sum + b.cost, 0);
+  return { totalCost, byOperation };
+}
+
+export function getCostSummary(): CostSummary {
+  const db = getDb();
+  const today    = loadWindow(db, "WHERE created_at >= date('now')");
+  const last7d   = loadWindow(db, "WHERE created_at >= datetime('now','-7 days')");
+  const last30d  = loadWindow(db, "WHERE created_at >= datetime('now','-30 days')");
+  const allTime  = loadWindow(db, "");
+
+  const byModel30d = db.prepare(
+    `SELECT model, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost
+     FROM api_calls
+     WHERE created_at >= datetime('now','-30 days')
+     GROUP BY model
+     ORDER BY cost DESC`
+  ).all() as Array<{ model: string; calls: number; cost: number }>;
+
+  const byStage30d = db.prepare(
+    `SELECT stage, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost
+     FROM api_calls
+     WHERE created_at >= datetime('now','-30 days')
+     GROUP BY stage
+     ORDER BY cost DESC`
+  ).all() as Array<{ stage: string; calls: number; cost: number }>;
+
+  const byProvider30d = db.prepare(
+    `SELECT provider, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost
+     FROM api_calls
+     WHERE created_at >= datetime('now','-30 days')
+     GROUP BY provider
+     ORDER BY cost DESC`
+  ).all() as Array<{ provider: string; calls: number; cost: number }>;
+
+  return { today, last7d, last30d, allTime, byModel30d, byStage30d, byProvider30d };
+}

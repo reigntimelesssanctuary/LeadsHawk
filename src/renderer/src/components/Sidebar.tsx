@@ -1,11 +1,11 @@
 import {
-  LayoutGrid, Clock, Filter, Send, Boxes, Archive, Settings as SettingsIcon, Radio
+  LayoutGrid, Clock, Filter, Send, Boxes, Archive, Settings as SettingsIcon, Radio, DollarSign
 } from 'lucide-react';
 import logoUrl from '../assets/logo.png';
 
 export type Page =
   | 'dashboard' | 'monitor' | 'scans' | 'signals' | 'dispatch'
-  | 'brands' | 'archive' | 'settings';
+  | 'brands' | 'archive' | 'cost' | 'settings';
 
 export function Sidebar({
   active, onNav
@@ -18,6 +18,7 @@ export function Sidebar({
     { id: 'dispatch', label: 'Brand Dispatch', icon: Send },
     { id: 'brands', label: 'Brands & Products', icon: Boxes },
     { id: 'archive', label: 'Archive', icon: Archive },
+    { id: 'cost', label: 'Cost Management', icon: DollarSign },
     { id: 'settings', label: 'Settings', icon: SettingsIcon }
   ];
   return (
@@ -81,7 +82,7 @@ export function Sidebar({
         </nav>
       </div>
       <div className="no-drag px-6 py-4" style={{ color: '#6b7280', fontSize: 11 }}>
-        v1.10.3
+        v1.11.0
       </div>
     </aside>
   );

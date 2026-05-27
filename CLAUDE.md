@@ -613,6 +613,32 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.11.0 (2026-05-27):** New **Cost Management** tab in the sidebar.
+
+User asked for "a summary of how much API costing each type of scan incurs". The existing Settings → Spend card showed totals + by-stage and by-model breakdowns, but stages are too granular to read quickly — "brand_research_verify" + "brand_research_strategic" + "brand_research_factcheck" all relate to brand-research work but appear as separate rows. v1.11.0 aggregates them into user-facing operation buckets and gives the breakdown its own dedicated tab.
+
+**Operation buckets** (defined in `src/main/spend.ts → operationForStage`):
+- `brand_research` ← `brand_research`, `brand_research_verify`, `brand_research_strategic`, `brand_research_factcheck`, `brand_summary` (legacy)
+- `product_research` ← `research`, `product_research_verify`, `product_research_strategic`, `product_research_factcheck`
+- `signal_research` ← `brand_signals`, `product_signals`, `refresh_signals` (legacy)
+- `manual_scan`, `deep_scan` (covers v1.8.x single-stage + v1.9.0 two-stage), `live_monitor` (triage + qualify), `sales_brief`, `other` (catch-all)
+
+**Backend**: new `getCostSummary()` in `spend.ts` returns four time windows (today, last 7d, last 30d, all time) each with `byOperation` breakdown, plus 30-day `byModel`, `byStage`, `byProvider` arrays. Exposed via new IPC `cost:summary` → `window.lh.cost.summary()`.
+
+**UI** (`src/renderer/src/pages/CostManagement.tsx`):
+- Period totals card with four stat boxes
+- "Cost by operation type" table showing all 8 buckets × 4 time windows side-by-side + totals row
+- "By provider (last 30d)" — useful for matching against Anthropic / Perplexity billing dashboards
+- "By model (last 30d)"
+- "By stage (last 30d)" — finest-grained drill-down with the human labels from Settings
+- Auto-refreshes every 30 seconds, plus a manual "Refresh now" button
+
+**Sidebar entry**: new "Cost Management" item with `DollarSign` icon, between Archive and Settings. New `Page` type member `'cost'`.
+
+Budget tracking (user-set monthly cap + burn-rate projection) was explicitly scoped out — user opted for the leaner "just cost breakdown" option. Existing Settings → Spend card is kept as the at-a-glance summary.
+
+Smoke tests 61 → 71. 10 new tests cover `operationForStage` (every stage maps correctly + unknown falls through to `other`) and `bucketByOperation` (sums calls + cost per operation, drops empty buckets, preserves canonical order).
+
 **v1.10.3 (2026-05-27):** Two UX patches the user surfaced after running v1.10.2 on their portfolio.
 
 **Fix 1 — Cisco products not visible in Signal Config (v1.9.2 oversight).**

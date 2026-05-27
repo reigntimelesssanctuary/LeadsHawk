@@ -10,7 +10,7 @@ import { exportOpportunitiesXlsx } from './export.js';
 import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
-import { getSpendSummary } from './spend.js';
+import { getSpendSummary, getCostSummary } from './spend.js';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning,
   processSingleItem
@@ -517,6 +517,8 @@ export function registerIpc() {
 
   // -------- Spend --------
   ipcMain.handle('spend:summary', () => getSpendSummary());
+  // -------- Cost Management (v1.11.0) --------
+  ipcMain.handle('cost:summary', () => getCostSummary());
 
   // -------- Feedback (v1.9.2) --------
   // Read-only — feedback rows are inserted by the research handlers

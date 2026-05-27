@@ -125,6 +125,73 @@ function modelSupportsTemperature(modelId) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPIES from src/main/spend.ts (v1.11.0 — Cost Management)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function operationForStage(stage) {
+  switch (stage) {
+    case 'brand_research':
+    case 'brand_research_verify':
+    case 'brand_research_strategic':
+    case 'brand_research_factcheck':
+    case 'brand_summary':
+      return 'brand_research';
+    case 'research':
+    case 'product_research_verify':
+    case 'product_research_strategic':
+    case 'product_research_factcheck':
+      return 'product_research';
+    case 'brand_signals':
+    case 'product_signals':
+    case 'refresh_signals':
+      return 'signal_research';
+    case 'manual_scan':
+      return 'manual_scan';
+    case 'deep_scan':
+    case 'deep_scan_discovery':
+    case 'deep_scan_qualify':
+      return 'deep_scan';
+    case 'triage':
+    case 'qualify':
+      return 'live_monitor';
+    case 'brief':
+      return 'sales_brief';
+    default:
+      return 'other';
+  }
+}
+
+const OPERATION_LABEL = {
+  brand_research: 'Brand research (all 4 stages)',
+  product_research: 'Product research (all 4 stages)',
+  signal_research: 'Signal research (brand + product)',
+  manual_scan: 'Manual scan',
+  deep_scan: 'Deep scan (Stage 1 + Stage 2)',
+  live_monitor: 'Live Monitor (triage + qualify)',
+  sales_brief: 'Sales brief generation',
+  other: 'Other / untagged'
+};
+
+const OPERATION_ORDER = [
+  'brand_research', 'product_research', 'signal_research', 'manual_scan',
+  'deep_scan', 'live_monitor', 'sales_brief', 'other'
+];
+
+function bucketByOperation(rows) {
+  const buckets = new Map();
+  for (const op of OPERATION_ORDER) {
+    buckets.set(op, { operation: op, label: OPERATION_LABEL[op], calls: 0, cost: 0 });
+  }
+  for (const row of rows) {
+    const op = operationForStage(row.stage);
+    const b = buckets.get(op);
+    b.calls += row.calls;
+    b.cost += row.cost;
+  }
+  return OPERATION_ORDER.map((op) => buckets.get(op)).filter((b) => b.calls > 0);
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPY from src/renderer/src/pages/BrandsProducts.tsx (v1.10.3)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -499,6 +566,75 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[operationForStage — v1.11.0 Cost Management bucketing]');
+test('brand_research_* and brand_summary → brand_research', () => {
+  eq(operationForStage('brand_research'), 'brand_research');
+  eq(operationForStage('brand_research_verify'), 'brand_research');
+  eq(operationForStage('brand_research_strategic'), 'brand_research');
+  eq(operationForStage('brand_research_factcheck'), 'brand_research');
+  eq(operationForStage('brand_summary'), 'brand_research');
+});
+test('research + product_research_* → product_research', () => {
+  eq(operationForStage('research'), 'product_research');
+  eq(operationForStage('product_research_verify'), 'product_research');
+  eq(operationForStage('product_research_strategic'), 'product_research');
+  eq(operationForStage('product_research_factcheck'), 'product_research');
+});
+test('brand_signals + product_signals + refresh_signals → signal_research', () => {
+  eq(operationForStage('brand_signals'), 'signal_research');
+  eq(operationForStage('product_signals'), 'signal_research');
+  eq(operationForStage('refresh_signals'), 'signal_research');
+});
+test('deep_scan_* and legacy deep_scan → deep_scan', () => {
+  eq(operationForStage('deep_scan'), 'deep_scan');
+  eq(operationForStage('deep_scan_discovery'), 'deep_scan');
+  eq(operationForStage('deep_scan_qualify'), 'deep_scan');
+});
+test('triage + qualify → live_monitor', () => {
+  eq(operationForStage('triage'), 'live_monitor');
+  eq(operationForStage('qualify'), 'live_monitor');
+});
+test('brief → sales_brief', () => {
+  eq(operationForStage('brief'), 'sales_brief');
+});
+test('unknown / unmapped stage → other', () => {
+  eq(operationForStage('unknown'), 'other');
+  eq(operationForStage('made_up_stage'), 'other');
+  eq(operationForStage(''), 'other');
+});
+test('bucketByOperation sums calls and cost per operation', () => {
+  const rows = [
+    { stage: 'brand_research', calls: 2, cost: 0.4 },
+    { stage: 'brand_research_verify', calls: 2, cost: 0.8 },
+    { stage: 'manual_scan', calls: 5, cost: 0.15 },
+    { stage: 'triage', calls: 100, cost: 0.5 },
+    { stage: 'qualify', calls: 8, cost: 0.16 }
+  ];
+  const buckets = bucketByOperation(rows);
+  const get = (op) => buckets.find((b) => b.operation === op);
+  const round = (n) => Math.round(n * 100) / 100;
+  eq(get('brand_research').calls, 4);
+  eq(round(get('brand_research').cost), 1.2);  // 0.4 + 0.8 = 1.2000…002 in JS
+  eq(get('manual_scan').calls, 5);
+  eq(get('live_monitor').calls, 108);
+  eq(round(get('live_monitor').cost), 0.66);
+});
+test('bucketByOperation drops buckets with zero calls', () => {
+  const rows = [{ stage: 'brief', calls: 1, cost: 0.5 }];
+  const buckets = bucketByOperation(rows);
+  eq(buckets.length, 1);
+  eq(buckets[0].operation, 'sales_brief');
+});
+test('bucketByOperation preserves operation order', () => {
+  const rows = [
+    { stage: 'brief', calls: 1, cost: 0.5 },
+    { stage: 'brand_research', calls: 1, cost: 0.5 },
+    { stage: 'manual_scan', calls: 1, cost: 0.5 }
+  ];
+  const buckets = bucketByOperation(rows);
+  eq(buckets.map((b) => b.operation), ['brand_research', 'manual_scan', 'sales_brief']);
 });
 
 console.log('\n[stage4SourceCoverage — v1.10.3 chip threshold helper]');

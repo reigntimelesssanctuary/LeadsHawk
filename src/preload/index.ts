@@ -88,6 +88,9 @@ const api = {
   spend: {
     summary: () => ipcRenderer.invoke('spend:summary')
   },
+  cost: {
+    summary: () => ipcRenderer.invoke('cost:summary')
+  },
   openExternal: (url: string) => ipcRenderer.invoke('openExternal', url),
   monitor: {
     status: () => ipcRenderer.invoke('monitor:status'),

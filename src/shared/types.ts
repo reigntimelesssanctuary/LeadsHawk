@@ -200,6 +200,39 @@ export type SpendSummary = {
   byModel: Array<{ model: string; calls: number; cost: number }>;
 };
 
+// v1.11.0 — Cost Management tab: operation-bucket aggregation.
+export type OperationType =
+  | 'brand_research'
+  | 'product_research'
+  | 'signal_research'
+  | 'manual_scan'
+  | 'deep_scan'
+  | 'live_monitor'
+  | 'sales_brief'
+  | 'other';
+
+export type OperationBucket = {
+  operation: OperationType;
+  label: string;
+  calls: number;
+  cost: number;
+};
+
+export type CostWindow = {
+  totalCost: number;
+  byOperation: OperationBucket[];
+};
+
+export type CostSummary = {
+  today: CostWindow;
+  last7d: CostWindow;
+  last30d: CostWindow;
+  allTime: CostWindow;
+  byModel30d: Array<{ model: string; calls: number; cost: number }>;
+  byStage30d: Array<{ stage: string; calls: number; cost: number }>;
+  byProvider30d: Array<{ provider: string; calls: number; cost: number }>;
+};
+
 // v1.9.2: reviewer feedback for re-research runs.
 export type FeedbackTargetKind =
   | 'brand'

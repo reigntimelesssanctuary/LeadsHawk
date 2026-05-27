@@ -7,6 +7,7 @@ import { SignalConfig } from './pages/SignalConfig';
 import { BrandDispatch } from './pages/BrandDispatch';
 import { BrandsProducts } from './pages/BrandsProducts';
 import { Archive } from './pages/Archive';
+import { CostManagement } from './pages/CostManagement';
 import { Settings } from './pages/Settings';
 import { OpportunityDetail } from './pages/OpportunityDetail';
 
@@ -40,6 +41,7 @@ export default function App() {
               {page === 'dispatch' && <BrandDispatch onOpenOpp={(id) => setOppId(id)} />}
               {page === 'brands' && <BrandsProducts onNavigate={(p) => setPage(p)} />}
               {page === 'archive' && <Archive onOpenOpp={(id) => setOppId(id)} />}
+              {page === 'cost' && <CostManagement />}
               {page === 'settings' && <Settings />}
             </>
           )}
