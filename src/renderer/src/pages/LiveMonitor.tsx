@@ -1,17 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Switch } from '../components/Switch';
 import { Modal } from '../components/Modal';
-import type { MonitorStatus, MonitorSource, SignalItem, SourceHealth } from '../../../shared/types';
+import type { MonitorStatus, MonitorSource, SignalItem, SourceHealth, Settings } from '../../../shared/types';
+import type { Page } from '../components/Sidebar';
 import { fmtDate, fmtDateSGT, openExternal } from '../lib/api';
 import { Plus, Trash2, RefreshCw, AlertCircle, Radio, Inbox } from 'lucide-react';
 
-export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
+export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number) => void; onNavigate?: (p: Page) => void }) {
   const [status, setStatus] = useState<MonitorStatus | null>(null);
   const [items, setItems] = useState<SignalItem[]>([]);
   const [sources, setSources] = useState<MonitorSource[]>([]);
   const [health, setHealth] = useState<SourceHealth[]>([]);
   const [spendToday, setSpendToday] = useState<number | null>(null);
   const [showAddSource, setShowAddSource] = useState(false);
+  // v1.12.1: thresholds + embedding-status data for diagnostic banner
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<Record<number, number>>({});
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const refresh = async () => {
     setStatus(await window.lh.monitor.status());
@@ -22,6 +28,10 @@ export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) 
       const s = await window.lh.spend.summary();
       setSpendToday(s.today);
     } catch { /* spend is best-effort */ }
+    try {
+      setSettings(await window.lh.settings.get());
+      setEmbeddingStatus(await window.lh.products.embeddingStatus());
+    } catch { /* best-effort */ }
   };
   useEffect(() => {
     refresh();
@@ -86,6 +96,88 @@ export function LiveMonitor({ onOpenOpp }: { onOpenOpp: (id: number) => void }) 
         <FunnelCard label="Triaged strong" value={status?.last24h.triagedStrong ?? 0} sublabel="passed Sonnet triage" color="#0891b2" />
         <FunnelCard label="Opportunities" value={status?.last24h.qualified ?? 0} sublabel="deep-qualified" color="#065f46" />
       </div>
+
+      {/* v1.12.1: diagnostic banner — fires when ingestion is happening but
+          the embedding filter drops everything. Three potential causes with
+          inline fix actions. */}
+      {!bannerDismissed && (() => {
+        const ingested7d = health.reduce((s, h) => s + (h.ingested7d || 0), 0);
+        const candidates24h = status?.last24h.candidates ?? 0;
+        const ingested24h = status?.last24h.ingested ?? 0;
+        // Show if 24h shows ingest-but-no-candidates, OR if 7d aggregate
+        // shows the same chronic pattern (>=20 ingested, 0 candidates).
+        const showBanner =
+          (ingested24h > 0 && candidates24h === 0) ||
+          (ingested7d >= 20 && health.every((h) => (h.candidates7d || 0) === 0));
+        if (!showBanner) return null;
+
+        const productsWithSignalsCount = Object.keys(embeddingStatus).length;
+        const productsMissingEmbeddings = Object.values(embeddingStatus).filter((c) => c === 0).length;
+        const currentThreshold = settings?.embedSimilarityThreshold ?? 0.40;
+
+        return (
+          <div className="card" style={{ padding: 16, marginBottom: 20, background: '#fff7ed', border: '1px solid #fed7aa' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <AlertCircle size={20} style={{ color: '#c2410c', flexShrink: 0, marginTop: 2 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#7c2d12', marginBottom: 6 }}>
+                  Funnel diagnostic — items are coming in but nothing's becoming a candidate
+                </div>
+                <div style={{ fontSize: 13, color: '#7c2d12', marginBottom: 12, lineHeight: 1.5 }}>
+                  {ingested7d} items ingested over 7 days, 0 became candidates. The embedding pre-filter is dropping everything. Three usual causes, in order of likelihood:
+                </div>
+                <ol style={{ paddingLeft: 22, margin: 0, fontSize: 13, color: '#7c2d12', lineHeight: 1.6 }}>
+                  <li style={{ marginBottom: 8 }}>
+                    <b>Similarity threshold may be too strict.</b> Current value: <code style={{ background: '#fef3c7', padding: '1px 4px', borderRadius: 3 }}>{currentThreshold.toFixed(2)}</code>.
+                    Most real product-signal-vs-news matches sit at 0.40–0.50.
+                    {currentThreshold > 0.40 && (
+                      <button
+                        className="btn-ghost"
+                        style={{ marginLeft: 10, fontSize: 12, padding: '2px 8px' }}
+                        disabled={busyAction !== null}
+                        onClick={async () => {
+                          setBusyAction('threshold');
+                          try {
+                            await window.lh.settings.update({ embedSimilarityThreshold: 0.40 });
+                            await refresh();
+                          } finally { setBusyAction(null); }
+                        }}
+                      >
+                        {busyAction === 'threshold' ? 'Lowering…' : 'Lower to 0.40'}
+                      </button>
+                    )}
+                  </li>
+                  <li style={{ marginBottom: 8 }}>
+                    <b>Product signal embeddings may be missing</b> — needed for the pre-filter to match anything.
+                    {productsMissingEmbeddings > 0 && productsWithSignalsCount > 0 && (
+                      <span> Currently {productsMissingEmbeddings} of {productsWithSignalsCount} products have no embeddings.</span>
+                    )}
+                    {onNavigate && (
+                      <button
+                        className="btn-ghost"
+                        style={{ marginLeft: 10, fontSize: 12, padding: '2px 8px' }}
+                        onClick={() => onNavigate('signals')}
+                      >
+                        Open Signal Config →
+                      </button>
+                    )}
+                  </li>
+                  <li>
+                    <b>Sources may not align with your portfolio.</b> Default seeded sources cover IT/cybersecurity well but miss other categories (real estate, banking, etc.). Look at the Sources table below — feeds with high 7d ingest but zero qualified are candidates for replacement. Auto-discovered brand-aware sources are coming in v1.13.
+                  </li>
+                </ol>
+              </div>
+              <button
+                onClick={() => setBannerDismissed(true)}
+                style={{ background: 'transparent', border: 'none', color: '#9a3412', cursor: 'pointer', fontSize: 12, padding: 4 }}
+                title="Hide until next reload"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       <ManualIntakeCard onDone={refresh} onOpenOpp={onOpenOpp} />
 

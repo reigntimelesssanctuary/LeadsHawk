@@ -132,7 +132,7 @@ export function Settings() {
           onChange={(e) => setS({ ...s, embedSimilarityThreshold: Number(e.target.value) })}
         />
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-          Items must score above this against at least one product signal to advance past the free local pre-filter. Lower = wider net, higher LLM cost.
+          Items must score above this against at least one product signal to advance past the free local pre-filter. Lower = wider net, higher Sonnet triage cost. <b>Recommended: 0.40.</b> If your funnel shows "Ingested {'>'}  0, Candidates 0", this is the most likely cause — most real product-signal vs news-headline matches sit between 0.40 and 0.50.
         </div>
         <div style={{ height: 16 }} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
