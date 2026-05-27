@@ -613,6 +613,19 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.3 (2026-05-27):** Swap Live Monitor section order — Sources above Recent items.
+
+User UX feedback: configuration (Sources) should appear above the resulting stream (Recent items). New order on the Live Monitor tab:
+
+1. Page header + funnel cards (unchanged)
+2. v1.12.1 diagnostic banner (when applicable)
+3. Manual intake card
+4. **Sources card** (was below)
+5. **Recent items card** (was above)
+6. Modals
+
+Pure JSX swap in `src/renderer/src/pages/LiveMonitor.tsx`. No backend or schema changes. 81 smoke tests still pass.
+
 **v1.13.2 (2026-05-27):** Persist pending source-research suggestions so closing the modal mid-research doesn't waste the Perplexity spend.
 
 User noticed that during the 1-3 minute Perplexity call in `ResearchSourcesModal`, closing the modal would silently discard the result — the IPC call kept running in the main process and the spend was logged, but the returned suggestions had nowhere to land (React component unmounted). Net effect: $0.05-0.30 wasted per closed-mid-research.

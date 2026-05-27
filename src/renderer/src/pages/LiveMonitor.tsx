@@ -192,62 +192,9 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
 
       <ManualIntakeCard onDone={refresh} onOpenOpp={onOpenOpp} />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="h-section">Recent items</div>
-          <button className="btn-ghost" onClick={refresh}>
-            <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> Refresh
-          </button>
-        </div>
-        <table className="lh">
-          <thead>
-            <tr>
-              <th>Fetched</th>
-              <th>Title</th>
-              <th>Stage</th>
-              <th>Score</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 && (
-              <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
-                {status?.running ? 'No items yet. Wait for the first poll cycle.' : 'Live monitoring is off.'}
-              </td></tr>
-            )}
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td style={{ whiteSpace: 'nowrap', fontSize: 13, color: '#6b7280' }} title="Singapore time (UTC+8)">
-                  {fmtDateSGT(it.fetched_at)}
-                </td>
-                <td style={{ maxWidth: 420 }}>
-                  <div style={{ fontWeight: 500 }}>{it.title}</div>
-                  {it.snippet && (
-                    <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>{it.snippet}</div>
-                  )}
-                </td>
-                <td><StageChip status={it.status} /></td>
-                <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#4b5563' }}>
-                  {it.best_match_similarity !== null && it.best_match_similarity !== undefined && (
-                    <div>sim&nbsp;{it.best_match_similarity.toFixed(2)}</div>
-                  )}
-                  {it.triage_confidence !== null && it.triage_confidence !== undefined && (
-                    <div>triage&nbsp;{it.triage_confidence.toFixed(2)}</div>
-                  )}
-                </td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  {it.opportunity_id ? (
-                    <button className="btn-ghost" onClick={() => onOpenOpp(it.opportunity_id!)}>Open</button>
-                  ) : (
-                    <button className="btn-ghost" onClick={() => openExternal(it.url)}>Source</button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
+      {/* v1.13.3: Sources moved above Recent items — sources are the
+          configuration surface, items are the resulting stream. Putting
+          configuration first matches the user's mental model. */}
       <div className="card" style={{ padding: 20, overflowX: 'auto' }}>
         {/* v1.13.2: pending-suggestions banner — shows when research finished
             but suggestions haven't been reviewed yet (e.g. modal was closed
@@ -407,6 +354,63 @@ export function LiveMonitor({ onOpenOpp, onNavigate }: { onOpenOpp: (id: number)
             </div>
           );
         })()}
+      </div>
+
+      {/* v1.13.3: Recent items now lives below Sources. */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20, marginTop: 20 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div className="h-section">Recent items</div>
+          <button className="btn-ghost" onClick={refresh}>
+            <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> Refresh
+          </button>
+        </div>
+        <table className="lh">
+          <thead>
+            <tr>
+              <th>Fetched</th>
+              <th>Title</th>
+              <th>Stage</th>
+              <th>Score</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
+                {status?.running ? 'No items yet. Wait for the first poll cycle.' : 'Live monitoring is off.'}
+              </td></tr>
+            )}
+            {items.map((it) => (
+              <tr key={it.id}>
+                <td style={{ whiteSpace: 'nowrap', fontSize: 13, color: '#6b7280' }} title="Singapore time (UTC+8)">
+                  {fmtDateSGT(it.fetched_at)}
+                </td>
+                <td style={{ maxWidth: 420 }}>
+                  <div style={{ fontWeight: 500 }}>{it.title}</div>
+                  {it.snippet && (
+                    <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>{it.snippet}</div>
+                  )}
+                </td>
+                <td><StageChip status={it.status} /></td>
+                <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#4b5563' }}>
+                  {it.best_match_similarity !== null && it.best_match_similarity !== undefined && (
+                    <div>sim&nbsp;{it.best_match_similarity.toFixed(2)}</div>
+                  )}
+                  {it.triage_confidence !== null && it.triage_confidence !== undefined && (
+                    <div>triage&nbsp;{it.triage_confidence.toFixed(2)}</div>
+                  )}
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {it.opportunity_id ? (
+                    <button className="btn-ghost" onClick={() => onOpenOpp(it.opportunity_id!)}>Open</button>
+                  ) : (
+                    <button className="btn-ghost" onClick={() => openExternal(it.url)}>Source</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <Modal open={showAddSource} onClose={() => setShowAddSource(false)} title="Add Source">
