@@ -130,6 +130,22 @@ function parseStatusDetail(raw: string | null): ResearchStatusDetail | null {
     return j as ResearchStatusDetail;
   } catch { return null; }
 }
+/**
+ * v1.10.3: extract Stage 4 source coverage ratio from a partial status string.
+ * Format: "partial: 9/10 sources verified ..." → 0.9
+ * Returns null when the string isn't a partial-with-ratio.
+ * Exported for smoke testing.
+ */
+export function stage4SourceCoverage(stage4Status: string | undefined): number | null {
+  if (!stage4Status) return null;
+  const m = stage4Status.match(/(\d+)\s*\/\s*(\d+)\s*sources/i);
+  if (!m) return null;
+  const fetched = Number(m[1]);
+  const attempted = Number(m[2]);
+  if (!Number.isFinite(fetched) || !Number.isFinite(attempted) || attempted <= 0) return null;
+  return fetched / attempted;
+}
+
 function ResearchStatusChip({ raw }: { raw: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const parsed = parseStatusDetail(raw);
@@ -142,30 +158,55 @@ function ResearchStatusChip({ raw }: { raw: string | null }) {
 
   const stage4 = parsed.stage4; // v1.10.2 — may be undefined on pre-1.10.2 records
   const anyFailed = isFail(parsed.stage2) || isFail(parsed.stage3) || isFail(stage4);
-  const anyPartial = isPartial(stage4);
   const stage2Skipped = isSkip(parsed.stage2);
-  const allOk = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3) &&
-                (stage4 === undefined || isOk(stage4));
 
-  const palette = anyFailed
+  // v1.10.3: smarter Stage 4 partial classification by source-coverage ratio.
+  // 9/10 (90% coverage) should read as green-with-note, not amber.
+  // Threshold: ≥80% coverage = effectively complete (small amount of paywalled
+  // sources is normal); 50-79% = amber warning; <50% = red.
+  const stage4Coverage = isPartial(stage4) ? stage4SourceCoverage(stage4) : null;
+  const stage4PartialHigh = stage4Coverage !== null && stage4Coverage >= 0.8;
+  const stage4PartialMid  = stage4Coverage !== null && stage4Coverage >= 0.5 && stage4Coverage < 0.8;
+  const stage4PartialLow  = stage4Coverage !== null && stage4Coverage < 0.5;
+
+  const stagesGreen = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3) &&
+                      (stage4 === undefined || isOk(stage4) || stage4PartialHigh);
+  const stagesAmber = !stagesGreen && (stage2Skipped || stage4PartialMid);
+  const stagesRed   = anyFailed || stage4PartialLow;
+
+  const palette = stagesRed
     ? { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }
-    : anyPartial
+    : stagesAmber
     ? { bg: '#fef3c7', fg: '#92400e', border: '#fde68a' }
-    : stage2Skipped
-    ? { bg: '#fef3c7', fg: '#92400e', border: '#fde68a' }
-    : allOk
+    : stagesGreen
     ? { bg: '#d1fae5', fg: '#065f46', border: '#a7f3d0' }
     : { bg: '#f3f4f6', fg: '#4b5563', border: '#e5e7eb' };
 
-  // v1.10.2: include stage 4 in summary if present.
+  // v1.10.2/v1.10.3: stage symbols.
+  const stageSymbol = (s: string | undefined): string => {
+    if (isOk(s)) return '✓';
+    if (isPartial(s)) {
+      if (stage4PartialHigh) return '✓'; // green-tier partial reads as ✓
+      if (stage4PartialMid) return '⚠';
+      return '✗';
+    }
+    if (isSkip(s)) return '–';
+    return '✗';
+  };
   const stagePart = (n: number, s: string | undefined) =>
-    s === undefined ? '' : ` · Stage ${n} ${isOk(s) ? '✓' : isPartial(s) ? '⚠' : isSkip(s) ? '–' : '✗'}`;
+    s === undefined ? '' : ` · Stage ${n} ${stageSymbol(s)}`;
+
+  // Optional K/N coverage note for high-but-partial Stage 4.
+  const coverageNote = stage4PartialHigh && stage4Coverage !== null
+    ? ` (${Math.round(stage4Coverage * 100)}% sources)`
+    : '';
+
   const summary = stage2Skipped
     ? `Stage 1 only · Opus skipped`
-    : allOk
-    ? `Stage 1 ✓ · Stage 2 ✓ · Stage 3 ✓${stage4 ? ' · Stage 4 ✓' : ''}`
-    : anyFailed || anyPartial
-    ? `Stage 2 ${isOk(parsed.stage2) ? '✓' : '✗'}${stagePart(3, parsed.stage3)}${stagePart(4, stage4)}`
+    : stagesGreen
+    ? `Stage 1 ✓ · Stage 2 ✓ · Stage 3 ✓${stage4 ? ` · Stage 4 ${stageSymbol(stage4)}${coverageNote}` : ''}`
+    : (stagesRed || stagesAmber)
+    ? `Stage 2 ${stageSymbol(parsed.stage2)}${stagePart(3, parsed.stage3)}${stagePart(4, stage4)}`
     : 'pending';
 
   return (

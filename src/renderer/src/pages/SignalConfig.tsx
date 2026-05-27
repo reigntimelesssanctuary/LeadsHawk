@@ -59,8 +59,12 @@ export function SignalConfig() {
     refresh();
   };
 
-  const productsReady = products.filter((p) => p.research_status === 'ready' && p.signals);
-  const productsNotReady = products.filter((p) => !productsReady.includes(p));
+  // v1.10.3: dropped the `&& p.signals` requirement. v1.9.2 decoupled
+  // signal research from dossier research, so a freshly-researched product
+  // has research_status='ready' but signals=null until the user clicks
+  // Research signals here. The old filter hid such products entirely.
+  const productsReady = products.filter((p) => p.research_status === 'ready');
+  const productsNotReady = products.filter((p) => p.research_status !== 'ready');
 
   return (
     <div>
@@ -221,8 +225,8 @@ export function SignalConfig() {
 
         {productsNotReady.length > 0 && (
           <div style={{ marginTop: 14, fontSize: 13, color: '#6b7280' }}>
-            <b>{productsNotReady.length}</b> product{productsNotReady.length === 1 ? '' : 's'} not yet researched —
-            run research on {productsNotReady.length === 1 ? 'it' : 'them'} to enable scanning.
+            <b>{productsNotReady.length}</b> product{productsNotReady.length === 1 ? '' : 's'} need dossier research before signal research can run —
+            go to <b>Brands &amp; Products</b> and click <b>Run research</b> on {productsNotReady.length === 1 ? 'it' : 'them'} first.
           </div>
         )}
       </div>

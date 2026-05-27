@@ -125,6 +125,20 @@ function modelSupportsTemperature(modelId) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// INLINED COPY from src/renderer/src/pages/BrandsProducts.tsx (v1.10.3)
+// Keep byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+function stage4SourceCoverage(stage4Status) {
+  if (!stage4Status) return null;
+  const m = stage4Status.match(/(\d+)\s*\/\s*(\d+)\s*sources/i);
+  if (!m) return null;
+  const fetched = Number(m[1]);
+  const attempted = Number(m[2]);
+  if (!Number.isFinite(fetched) || !Number.isFinite(attempted) || attempted <= 0) return null;
+  return fetched / attempted;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // INLINED COPIES from src/main/research/dossier-factcheck.ts (v1.10.2)
 // Keep byte-identical with production.
 // ════════════════════════════════════════════════════════════════════════
@@ -485,6 +499,25 @@ test('v1.8.3: short stem (≤4 chars) requires exact match', () => {
 });
 test('regression: exact match on bare brand name still wins', () => {
   truthy(isOwnBrandCompany('Acme', [{ name: 'Acme' }]));
+});
+
+console.log('\n[stage4SourceCoverage — v1.10.3 chip threshold helper]');
+test('parses 9/10 sources → 0.9', () => {
+  eq(stage4SourceCoverage('partial: 9/10 sources verified (1 unreachable)'), 0.9);
+});
+test('parses 5/10 sources → 0.5', () => {
+  eq(stage4SourceCoverage('partial: 5/10 sources verified (5 unreachable)'), 0.5);
+});
+test('parses 1/10 sources → 0.1', () => {
+  eq(stage4SourceCoverage('partial: only 1/10 sources reachable — skipped Opus call'), 0.1);
+});
+test('returns null for non-partial status', () => {
+  eq(stage4SourceCoverage('completed'), null);
+  eq(stage4SourceCoverage('failed: Opus API error'), null);
+  eq(stage4SourceCoverage(undefined), null);
+});
+test('returns null when no K/N pattern present', () => {
+  eq(stage4SourceCoverage('partial: something went wrong'), null);
 });
 
 console.log('\n[dossier-factcheck — v1.10.2 source-gating helpers]');

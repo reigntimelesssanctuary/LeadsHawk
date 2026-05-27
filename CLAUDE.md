@@ -613,6 +613,21 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.10.3 (2026-05-27):** Two UX patches the user surfaced after running v1.10.2 on their portfolio.
+
+**Fix 1 — Cisco products not visible in Signal Config (v1.9.2 oversight).**
+`SignalConfig.tsx` filtered the product list by `research_status === 'ready' && p.signals`. Since v1.9.2 decoupled signal research from dossier research, a freshly-researched product has `signals=NULL` until Signal Config's *Research signals* button is clicked — but that button was hidden because the product got filtered out before render. Dropped the `&& p.signals` clause so the filter matches what the brand-level section already does (show all researched targets, let the button take care of empty signals). Updated the "products not researched" muted-text message to be accurate about needing *dossier* research first.
+
+**Fix 2 — Stage 4 status chip turning amber on 9/10 source coverage.**
+v1.10.2's `ResearchStatusChip` treated *any* Stage 4 `partial` status as amber, even when 90% of sources verified successfully. New `stage4SourceCoverage` helper extracts the K/N ratio from `"partial: K/N sources verified …"` and applies tiered thresholds:
+- ≥80% verified → **green ✓** (with `(N% sources)` mini-note)
+- 50–79% verified → **amber ⚠**
+- <50% verified, or any hard failure → **red ✗**
+
+So Cisco's 9/10 outcome now reads green-with-note instead of being a misleading warning, while a 4/10 outcome still flags amber and a 1/10 outcome still flags red.
+
+Smoke tests 56 → 61. 5 new tests cover `stage4SourceCoverage` parsing (K/N regex match, edge cases — non-partial status, no ratio present, undefined input).
+
 **v1.10.2 (2026-05-27):** Stage 4 fact-check (fetch cited URLs + Opus verifies dossier claims against actual source text). Final piece of the original v1.10 vision.
 
 Stages 2+3 give Opus a verified-against-knowledge dossier, but Opus had no way to fact-check Stage 1's claims against the original web sources Perplexity cited. Stage 4 closes that loop.
