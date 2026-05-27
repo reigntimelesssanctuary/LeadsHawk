@@ -49,8 +49,9 @@ const api = {
       ipcRenderer.invoke('products:setScanEnabled', id, enabled)
   },
   feedback: {
-    list: (kind: 'brand' | 'product' | 'brand_signals' | 'product_signals', targetId: number) =>
-      ipcRenderer.invoke('feedback:list', kind, targetId)
+    list: (kind: 'brand' | 'product' | 'brand_signals' | 'product_signals' | 'brand_sources', targetId: number) =>
+      ipcRenderer.invoke('feedback:list', kind, targetId),
+    delete: (id: number) => ipcRenderer.invoke('feedback:delete', id)
   },
   knowledge: {
     list: (brandId?: number) => ipcRenderer.invoke('knowledge:list', brandId),

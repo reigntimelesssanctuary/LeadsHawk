@@ -154,23 +154,48 @@ export function FeedbackModal({
                     fontSize: 13
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 12, color: '#6b7280' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, fontSize: 12, color: '#6b7280', gap: 8 }}>
                     <span>{fmtDateShort(f.created_at)}</span>
-                    {f.feedback.length > 140 && (
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      {f.feedback.length > 140 && (
+                        <button
+                          onClick={() => toggleEntry(f.id)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#6c5cf2',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            padding: 0
+                          }}
+                        >
+                          {isExpanded ? 'collapse' : 'show full'}
+                        </button>
+                      )}
+                      {/* v1.13.5: per-entry delete so stale feedback can be pruned. */}
                       <button
-                        onClick={() => toggleEntry(f.id)}
+                        onClick={async () => {
+                          if (!confirm('Delete this feedback entry? It will stop being re-applied on future re-research runs.')) return;
+                          try {
+                            await window.lh.feedback.delete(f.id);
+                            setHistory((prev) => prev.filter((h) => h.id !== f.id));
+                          } catch (e: any) {
+                            setError(String(e?.message || e));
+                          }
+                        }}
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: '#6c5cf2',
+                          color: '#b91c1c',
                           cursor: 'pointer',
                           fontSize: 12,
                           padding: 0
                         }}
+                        title="Delete this feedback entry"
                       >
-                        {isExpanded ? 'collapse' : 'show full'}
+                        delete
                       </button>
-                    )}
+                    </div>
                   </div>
                   <div style={{ whiteSpace: 'pre-wrap', color: '#1f2937' }}>{preview}</div>
                 </div>

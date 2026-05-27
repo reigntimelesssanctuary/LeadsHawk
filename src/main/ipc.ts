@@ -667,13 +667,22 @@ export function registerIpc() {
   ipcMain.handle('cost:summary', () => getCostSummary());
 
   // -------- Feedback (v1.9.2) --------
-  // Read-only — feedback rows are inserted by the research handlers
+  // Read-only listing — feedback rows are inserted by the research handlers
   // themselves when `opts.feedback` is provided, so the renderer never
   // needs to call addFeedback directly. listFeedback drives the modal's
   // history pane.
   ipcMain.handle('feedback:list', (_e, kind: FeedbackTargetKind, targetId: number) =>
     listFeedback(kind, targetId)
   );
+  // v1.13.5: per-entry deletion so users can prune stale feedback that
+  // no longer applies. Hard delete (not soft) — feedback is just a prompt
+  // hint, not historical truth. Past runs that consumed this feedback
+  // aren't retroactively un-applied (you can't undo an LLM call), but
+  // future runs will stop seeing it.
+  ipcMain.handle('feedback:delete', (_e, id: number) => {
+    db.prepare('DELETE FROM dossier_feedback WHERE id = ?').run(id);
+    return true;
+  });
 }
 
 export function seedDefaults() {

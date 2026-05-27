@@ -613,6 +613,23 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.5 (2026-05-27):** Delete individual past-feedback entries.
+
+User feedback: feedback history shown in the re-research modals (signals, dossier, sources) was read-only — stale guidance kept getting re-injected into every future run, with no way to prune. Now every past entry has an inline `delete` link.
+
+Hard delete (not soft) — feedback is a prompt hint, not historical truth. Past runs that already consumed the entry aren't retroactively un-applied (can't undo an LLM call), but future re-research runs stop seeing it.
+
+Changes:
+
+- **New `feedback:delete(id)` IPC** in `src/main/ipc.ts` — single `DELETE FROM dossier_feedback WHERE id = ?`.
+- **Preload bridge** `window.lh.feedback.delete(id)`.
+- **`FeedbackModal` history list** gains a per-entry `delete` action in the row header, paired with the `collapse`/`show full` toggle. Confirm-on-click. On success, the entry is optimistically removed from local state.
+- **`ResearchSourcesModal` history list** gets the same treatment (history bumped from 5 → 8 visible entries while we were at it).
+
+Covers all five feedback kinds via the shared modal logic: brand dossier, product dossier, brand signals, product signals, brand sources.
+
+No schema changes. 81 smoke tests still pass.
+
 **v1.13.4 (2026-05-27):** Delete button on expired trials + remove 15-source soft cap.
 
 Two quick UX improvements following v1.13.3 trial-mode usage:

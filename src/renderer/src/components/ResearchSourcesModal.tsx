@@ -146,10 +146,35 @@ export function ResearchSourcesModal({
           {history.length > 0 && (
             <div style={{ marginBottom: 14 }}>
               <div className="label" style={{ marginBottom: 6 }}>Past feedback ({history.length})</div>
-              <div style={{ maxHeight: 120, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8, background: '#fafafa', fontSize: 12 }}>
-                {history.slice(0, 5).map((f) => (
+              <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8, background: '#fafafa', fontSize: 12 }}>
+                {history.slice(0, 8).map((f) => (
                   <div key={f.id} style={{ padding: '6px 4px', borderBottom: '1px dashed #e5e7eb' }}>
-                    <div style={{ color: '#6b7280' }}>{fmtDateShort(f.created_at)}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                      <span style={{ color: '#6b7280' }}>{fmtDateShort(f.created_at)}</span>
+                      {/* v1.13.5: per-entry delete so stale feedback can be pruned. */}
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Delete this feedback entry? It will stop being re-applied on future re-research runs.')) return;
+                          try {
+                            await window.lh.feedback.delete(f.id);
+                            setHistory((prev) => prev.filter((h) => h.id !== f.id));
+                          } catch (e: any) {
+                            setError(String(e?.message || e));
+                          }
+                        }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#b91c1c',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          padding: 0
+                        }}
+                        title="Delete this feedback entry"
+                      >
+                        delete
+                      </button>
+                    </div>
                     <div style={{ color: '#1f2937', whiteSpace: 'pre-wrap' }}>{f.feedback.slice(0, 200)}{f.feedback.length > 200 ? '…' : ''}</div>
                   </div>
                 ))}
