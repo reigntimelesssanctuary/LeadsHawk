@@ -4,7 +4,7 @@ import { getSettings, updateSettings } from './settings.js';
 import { extractFromFile, fetchUrl } from './knowledge.js';
 import { researchProduct, researchBrand } from './research.js';
 import { researchBrandSignals, researchProductSignals } from './signal-research.js';
-import { researchBrandSources, buildGoogleNewsRssUrl } from './source-research.js';
+import { researchBrandSources, buildGoogleNewsRssUrl, computeTrialUntil } from './source-research.js';
 import { listFeedback, type FeedbackTargetKind } from './feedback.js';
 import { runDeepScan } from './scanner.js';
 import { exportOpportunitiesXlsx } from './export.js';
@@ -131,30 +131,73 @@ export function registerIpc() {
   ipcMain.handle('brands:researchSources', async (_e, id: number, opts?: { feedback?: string }) =>
     researchBrandSources(id, opts || {})
   );
-  // v1.13.0: bulk-add of selected source suggestions. Takes the renderer's
-  // selected SourceSuggestion[] and inserts each into monitor_sources.
-  // Tags `config.suggested_by_brand_id` for traceability.
-  ipcMain.handle('brands:addSuggestedSources', (_e, brandId: number, suggestions: Array<{ kind: 'rss' | 'google_news'; name: string; url?: string; query?: string; why_relevant?: string }>) => {
+  // v1.13.0: bulk-add of selected source suggestions.
+  // v1.13.1: dedup URLs (merge brand into serves_brand_ids on collision) +
+  //          support optional trialPeriod ('24h' | '48h' | '7d' | 'permanent').
+  ipcMain.handle('brands:addSuggestedSources', (
+    _e,
+    brandId: number,
+    suggestions: Array<{ kind: 'rss' | 'google_news'; name: string; url?: string; query?: string; why_relevant?: string }>,
+    opts?: { trialPeriod?: '24h' | '48h' | '7d' | 'permanent' }
+  ) => {
+    const trialPeriod = opts?.trialPeriod || '24h';
+    const trialUntil = computeTrialUntil(trialPeriod);
     const added: number[] = [];
+    const merged: number[] = [];
     for (const s of suggestions || []) {
       if (!s || (s.kind !== 'rss' && s.kind !== 'google_news')) continue;
       const url = s.kind === 'rss'
         ? (s.url || '').trim()
         : buildGoogleNewsRssUrl(s.query || '');
       if (!url) continue;
+      // Check for an existing source with this URL — if found, merge brandId
+      // into config.serves_brand_ids instead of inserting a duplicate row.
+      const existing = db.prepare(
+        'SELECT id, config FROM monitor_sources WHERE url = ?'
+      ).get(url) as { id: number; config: string | null } | undefined;
+      if (existing) {
+        const cfg = (() => { try { return JSON.parse(existing.config || '{}'); } catch { return {}; } })();
+        const ids = Array.isArray(cfg.serves_brand_ids) ? cfg.serves_brand_ids : [];
+        if (!ids.includes(brandId)) ids.push(brandId);
+        cfg.serves_brand_ids = ids;
+        // Preserve the original suggested_by_brand_id if present.
+        db.prepare('UPDATE monitor_sources SET config = ? WHERE id = ?')
+          .run(JSON.stringify(cfg), existing.id);
+        merged.push(existing.id);
+        continue;
+      }
       const config = JSON.stringify({
         suggested_by_brand_id: brandId,
+        serves_brand_ids: [brandId],
         suggested_at: new Date().toISOString(),
+        trial_period: trialPeriod,
         ...(s.kind === 'google_news' ? { query: s.query } : {}),
         ...(s.why_relevant ? { why_relevant: s.why_relevant } : {})
       });
       const info = db.prepare(
-        `INSERT INTO monitor_sources(name, kind, url, config, enabled, poll_interval_seconds)
-         VALUES (?, ?, ?, ?, 1, 900)`
-      ).run((s.name || '').slice(0, 80), s.kind, url, config);
+        `INSERT INTO monitor_sources(name, kind, url, config, enabled, poll_interval_seconds, trial_until)
+         VALUES (?, ?, ?, ?, 1, 900, ?)`
+      ).run((s.name || '').slice(0, 80), s.kind, url, config, trialUntil);
       added.push(Number(info.lastInsertRowid));
     }
-    return added;
+    return { added, merged, trialUntil };
+  });
+  // v1.13.1: promote a trial source to permanent (clear trial_until).
+  ipcMain.handle('monitor:sources:promoteTrial', (_e, id: number) => {
+    db.prepare(
+      "UPDATE monitor_sources SET trial_until = NULL, enabled = 1 WHERE id = ?"
+    ).run(id);
+    return db.prepare('SELECT * FROM monitor_sources WHERE id = ?').get(id);
+  });
+  // v1.13.1: extend a trial by N days (or revive an expired trial).
+  ipcMain.handle('monitor:sources:extendTrial', (_e, id: number, days: number) => {
+    const d = Math.max(1, Math.min(90, Math.floor(Number(days) || 7)));
+    db.prepare(
+      `UPDATE monitor_sources
+       SET trial_until = datetime('now', '+' || ? || ' days'), enabled = 1
+       WHERE id = ?`
+    ).run(d, id);
+    return db.prepare('SELECT * FROM monitor_sources WHERE id = ?').get(id);
   });
 
   // -------- Products --------

@@ -47,10 +47,14 @@ export async function startMonitor(): Promise<void> {
 
   // Poll cycle every 60s (each source has its own due check)
   pollTimer = setInterval(() => {
+    sweepExpiredTrials();
     pollAllDue(log).catch((e) => log(`poll cycle error: ${e?.message || e}`));
   }, 60_000);
   // First poll immediately
-  setTimeout(() => pollAllDue(log).catch((e) => log(`poll cycle error: ${e?.message || e}`)), 1000);
+  setTimeout(() => {
+    sweepExpiredTrials();
+    pollAllDue(log).catch((e) => log(`poll cycle error: ${e?.message || e}`));
+  }, 1000);
 
   // Pipeline cycle every 30s: process up to N items per cycle
   pipelineTimer = setInterval(() => {
@@ -68,6 +72,28 @@ export function stopMonitor(): void {
 }
 
 const MAX_PER_CYCLE = 5;
+
+/**
+ * v1.13.1: auto-disable sources whose trial period has expired.
+ * Runs every poll cycle (60s). Cheap single-statement update.
+ */
+function sweepExpiredTrials(): void {
+  try {
+    const db = getDb();
+    const result = db.prepare(
+      `UPDATE monitor_sources
+       SET enabled = 0
+       WHERE trial_until IS NOT NULL
+         AND datetime(trial_until) < datetime('now')
+         AND enabled = 1`
+    ).run();
+    if (result.changes > 0) {
+      log(`auto-disabled ${result.changes} expired trial source${result.changes === 1 ? '' : 's'}`);
+    }
+  } catch (e: any) {
+    log(`trial-sweep error: ${e?.message || e}`);
+  }
+}
 
 async function processPipeline(): Promise<void> {
   if (!running) return;

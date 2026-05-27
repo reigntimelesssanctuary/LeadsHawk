@@ -359,7 +359,21 @@ export type MonitorSource = {
   last_status: string | null;
   last_error: string | null;
   consecutive_empty_polls: number;
+  // v1.13.1: trial mode. When set, the monitor loop auto-disables the
+  // source after this timestamp passes (SQLite UTC string format).
+  // null = permanent.
+  trial_until: string | null;
   created_at: string;
+};
+
+// v1.13.1: typed shape for monitor_sources.config JSON (most fields optional).
+export type MonitorSourceConfig = {
+  suggested_by_brand_id?: number;
+  serves_brand_ids?: number[];
+  suggested_at?: string;
+  trial_period?: '24h' | '48h' | '7d' | 'permanent';
+  query?: string;          // for google_news kind
+  why_relevant?: string;
 };
 
 export type SignalItem = {

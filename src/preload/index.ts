@@ -20,8 +20,11 @@ const api = {
       ipcRenderer.invoke('brands:researchSignals', id, opts),
     researchSources: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('brands:researchSources', id, opts),
-    addSuggestedSources: (id: number, suggestions: any[]) =>
-      ipcRenderer.invoke('brands:addSuggestedSources', id, suggestions),
+    addSuggestedSources: (
+      id: number,
+      suggestions: any[],
+      opts?: { trialPeriod?: '24h' | '48h' | '7d' | 'permanent' }
+    ) => ipcRenderer.invoke('brands:addSuggestedSources', id, suggestions, opts),
     setScanEnabled: (id: number, enabled: boolean) =>
       ipcRenderer.invoke('brands:setScanEnabled', id, enabled)
   },
@@ -110,6 +113,8 @@ const api = {
     sourceUpdate: (id: number, p: any) => ipcRenderer.invoke('monitor:sources:update', id, p),
     sourceDelete: (id: number) => ipcRenderer.invoke('monitor:sources:delete', id),
     sourcesHealth: () => ipcRenderer.invoke('monitor:sources:health'),
+    promoteTrial: (id: number) => ipcRenderer.invoke('monitor:sources:promoteTrial', id),
+    extendTrial: (id: number, days: number) => ipcRenderer.invoke('monitor:sources:extendTrial', id, days),
     intake: (p: { url: string; title?: string }) => ipcRenderer.invoke('monitor:intake', p)
   },
   onNavigate: (cb: (data: { kind: string; id: number }) => void) => {

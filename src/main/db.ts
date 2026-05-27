@@ -289,6 +289,11 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'products', 'fact_check_report', 'TEXT');
   addColumnIfMissing(db, 'products', 'last_fact_check_at', 'TEXT');
 
+  // v1.13.1: trial mode for monitor sources. When set, the monitor loop
+  // auto-disables the source after this timestamp passes. Sources can be
+  // promoted (trial_until cleared) or extended.
+  addColumnIfMissing(db, 'monitor_sources', 'trial_until', 'TEXT');
+
   // v1.9.2: reviewer feedback for dossier and signal re-research.
   // target_kind = 'brand' | 'product' | 'brand_signals' | 'product_signals'
   // applied_at is set when the research run that consumed this feedback

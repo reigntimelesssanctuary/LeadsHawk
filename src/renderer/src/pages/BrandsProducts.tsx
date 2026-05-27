@@ -3,8 +3,7 @@ import type { Brand, Product, KnowledgeItem, StrategicIntel, IcpSegment, Confide
 import type { Page } from '../components/Sidebar';
 import { Modal } from '../components/Modal';
 import { FeedbackModal } from '../components/FeedbackModal';
-import { ResearchSourcesModal } from '../components/ResearchSourcesModal';
-import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, Pencil, AlertTriangle, MessageSquare, ChevronDown, ChevronRight, Radio } from 'lucide-react';
+import { Plus, FileText, Link2, NotebookPen, Sparkles, Trash2, Pencil, AlertTriangle, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
 import { openExternal, fmtDateShort } from '../lib/api';
 
 // v1.10.0 — helpers for rendering Opus Stage 2 + Stage 3 output.
@@ -533,8 +532,7 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
   const [feedbackTarget, setFeedbackTarget] = useState<
     { kind: 'brand' | 'product'; id: number; name: string } | null
   >(null);
-  // v1.13.0: ResearchSourcesModal open state.
-  const [researchingSources, setResearchingSources] = useState(false);
+  // v1.13.1: Research sources button moved to Live Monitor tab.
 
   // v1.9.2: signals are now managed in Signal Config. Empty signals on a
   // researched brand or product are surfaced as a banner pointing there.
@@ -622,17 +620,7 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                 Re-research with feedback
               </button>
             )}
-            {brand.research_status === 'ready' && (
-              <button
-                className="btn-ghost"
-                onClick={() => setResearchingSources(true)}
-                disabled={busy === 'research-brand'}
-                title="Auto-discover news sources (RSS + Google News) aligned with this brand's signals. v1.13.0."
-              >
-                <Radio size={13} style={{ display: 'inline', marginRight: 4 }} />
-                Research sources
-              </button>
-            )}
+            {/* v1.13.1: Research sources button moved to Live Monitor → Sources card. */}
             <button className="btn-ghost" onClick={() => setEditingBrand(true)}>
               <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} /> Edit
             </button>
@@ -897,14 +885,7 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
         />
       )}
 
-      {/* v1.13.0: auto-source-discovery modal. */}
-      <ResearchSourcesModal
-        open={researchingSources}
-        onClose={() => setResearchingSources(false)}
-        brandId={brand.id}
-        brandName={brand.name}
-        onCompleted={() => { /* no-op — sources land in Live Monitor's table */ }}
-      />
+      {/* v1.13.1: Research sources modal moved to Live Monitor tab. */}
     </div>
   );
 }

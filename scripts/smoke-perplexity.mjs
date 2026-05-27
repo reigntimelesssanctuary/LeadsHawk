@@ -122,6 +122,49 @@ function buildGoogleNewsRssUrl(query) {
   return `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
 }
 
+// v1.13.1: computeTrialUntil — returns SQLite-format timestamp or null.
+function computeTrialUntil(period, now = new Date()) {
+  if (period === 'permanent') return null;
+  const hours = period === '24h' ? 24 : period === '48h' ? 48 : 24 * 7;
+  const t = new Date(now.getTime() + hours * 3600 * 1000);
+  return t.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+}
+
+// v1.13.1: groupSourcesByBrand — pure renderer-side grouping helper.
+function groupSourcesByBrand(sources, brands) {
+  const perBrandMap = new Map();
+  const common = [];
+  const unassigned = [];
+  for (const s of sources) {
+    let cfg = {};
+    try { cfg = JSON.parse(s.config || '{}'); } catch { /* ignore */ }
+    const ids = Array.isArray(cfg.serves_brand_ids) ? cfg.serves_brand_ids : [];
+    if (ids.length === 0) {
+      unassigned.push(s);
+    } else if (ids.length === 1) {
+      const bid = ids[0];
+      if (!perBrandMap.has(bid)) perBrandMap.set(bid, []);
+      perBrandMap.get(bid).push(s);
+    } else {
+      common.push(s);
+    }
+  }
+  const perBrand = [];
+  for (const b of brands) {
+    const list = perBrandMap.get(b.id);
+    if (list && list.length > 0) {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      perBrand.push({ brand: b, sources: list });
+    }
+  }
+  for (const [bid, list] of perBrandMap.entries()) {
+    if (!brands.find((b) => b.id === bid)) common.push(...list);
+  }
+  common.sort((a, b) => a.name.localeCompare(b.name));
+  unassigned.sort((a, b) => a.name.localeCompare(b.name));
+  return { perBrand, common, unassigned };
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // INLINED COPY from src/main/llm.ts (v1.10.1)
 // Keep byte-identical with production.
@@ -595,6 +638,57 @@ test('encodes Boolean operators safely', () => {
 test('handles empty / whitespace query', () => {
   eq(buildGoogleNewsRssUrl('   ').endsWith('q=&hl=en-US&gl=US&ceid=US:en'), true);
   eq(buildGoogleNewsRssUrl('').endsWith('q=&hl=en-US&gl=US&ceid=US:en'), true);
+});
+
+console.log('\n[computeTrialUntil — v1.13.1 trial-mode helper]');
+test('permanent → null', () => {
+  eq(computeTrialUntil('permanent'), null);
+});
+test('24h → +24h timestamp', () => {
+  const now = new Date('2026-05-27T10:00:00Z');
+  const t = computeTrialUntil('24h', now);
+  eq(t, '2026-05-28 10:00:00');
+});
+test('48h → +48h timestamp', () => {
+  const now = new Date('2026-05-27T10:00:00Z');
+  eq(computeTrialUntil('48h', now), '2026-05-29 10:00:00');
+});
+test('7d → +7d timestamp', () => {
+  const now = new Date('2026-05-27T10:00:00Z');
+  eq(computeTrialUntil('7d', now), '2026-06-03 10:00:00');
+});
+
+console.log('\n[groupSourcesByBrand — v1.13.1 source grouping]');
+test('splits sources into per-brand, common, unassigned buckets', () => {
+  const brands = [
+    { id: 1, name: 'Zyeta' },
+    { id: 2, name: 'Neptune' },
+    { id: 3, name: 'Cisco' }
+  ];
+  const sources = [
+    { id: 1, name: 'A', config: JSON.stringify({ serves_brand_ids: [1] }) },
+    { id: 2, name: 'B', config: JSON.stringify({ serves_brand_ids: [2] }) },
+    { id: 3, name: 'C', config: JSON.stringify({ serves_brand_ids: [1, 2] }) },
+    { id: 4, name: 'D', config: null },
+    { id: 5, name: 'E', config: '{}' }
+  ];
+  const g = groupSourcesByBrand(sources, brands);
+  eq(g.perBrand.length, 2);
+  eq(g.perBrand[0].brand.name, 'Zyeta');
+  eq(g.perBrand[0].sources.map((s) => s.name), ['A']);
+  eq(g.perBrand[1].brand.name, 'Neptune');
+  eq(g.perBrand[1].sources.map((s) => s.name), ['B']);
+  eq(g.common.map((s) => s.name), ['C']);
+  eq(g.unassigned.map((s) => s.name), ['D', 'E']);
+});
+test('orphaned brand IDs (deleted brands) fall into common', () => {
+  const brands = [{ id: 1, name: 'Zyeta' }];
+  const sources = [
+    { id: 1, name: 'A', config: JSON.stringify({ serves_brand_ids: [99] }) }  // deleted brand
+  ];
+  const g = groupSourcesByBrand(sources, brands);
+  eq(g.perBrand.length, 0);
+  eq(g.common.map((s) => s.name), ['A']);
 });
 
 console.log('\n[operationForStage — v1.11.0 Cost Management bucketing]');

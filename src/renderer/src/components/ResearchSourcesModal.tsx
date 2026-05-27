@@ -19,6 +19,7 @@ import { fmtDateShort, openExternal } from '../lib/api';
 const FEEDBACK_MAX = 4000;
 
 type Phase = 'idle' | 'researching' | 'review' | 'adding' | 'done';
+type TrialPeriod = '24h' | '48h' | '7d' | 'permanent';
 
 export function ResearchSourcesModal({
   open, onClose, brandId, brandName, onCompleted
@@ -37,6 +38,10 @@ export function ResearchSourcesModal({
   const [selectedIdx, setSelectedIdx] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [addedCount, setAddedCount] = useState(0);
+  const [mergedCount, setMergedCount] = useState(0);
+  // v1.13.1: trial period for the add. Default 24h — sources auto-disable
+  // after the trial unless promoted via Live Monitor → Sources.
+  const [trialPeriod, setTrialPeriod] = useState<TrialPeriod>('24h');
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +51,8 @@ export function ResearchSourcesModal({
     setSelectedIdx(new Set());
     setError(null);
     setAddedCount(0);
+    setMergedCount(0);
+    setTrialPeriod('24h');
     window.lh.feedback.list('brand_sources', brandId).then(setHistory).catch(() => setHistory([]));
   }, [open, brandId]);
 
@@ -77,12 +84,19 @@ export function ResearchSourcesModal({
     setPhase('adding');
     setError(null);
     try {
-      const ids = await window.lh.brands.addSuggestedSources(brandId, picked);
-      setAddedCount(ids?.length || 0);
+      const result = await window.lh.brands.addSuggestedSources(
+        brandId,
+        picked,
+        { trialPeriod }
+      );
+      // Backend now returns { added: number[], merged: number[], trialUntil }
+      const addedIds = Array.isArray(result) ? result : (result?.added || []);
+      const mergedIds = Array.isArray(result) ? [] : (result?.merged || []);
+      setAddedCount(addedIds.length);
+      setMergedCount(mergedIds.length);
       setPhase('done');
       onCompleted();
-      // Auto-close after a short success display.
-      setTimeout(onClose, 1500);
+      setTimeout(onClose, 2200);
     } catch (e: any) {
       setError(String(e?.message || e));
       setPhase('review');
@@ -229,12 +243,45 @@ export function ResearchSourcesModal({
             <div style={{ marginTop: 10, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, color: '#991b1b', fontSize: 13 }}>{error}</div>
           )}
 
-          <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ marginTop: 14, padding: 12, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+            <div className="label" style={{ marginBottom: 6 }}>Trial period</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+              {([
+                ['24h', '24-hour trial'],
+                ['48h', '48-hour trial'],
+                ['7d', '7-day trial'],
+                ['permanent', 'Permanent (no trial)']
+              ] as Array<[TrialPeriod, string]>).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setTrialPeriod(key)}
+                  style={{
+                    fontSize: 12,
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                    cursor: 'pointer',
+                    border: trialPeriod === key ? '1px solid #6c5cf2' : '1px solid #e5e7eb',
+                    background: trialPeriod === key ? '#ede9fe' : 'white',
+                    color: trialPeriod === key ? '#4c1d95' : '#374151',
+                    fontWeight: trialPeriod === key ? 600 : 400
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>
+              Trial sources auto-disable when the period expires. You can promote or extend them on Live Monitor → Sources.
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button className="btn-ghost" onClick={() => setPhase('idle')}>← Back to feedback</button>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn-ghost" onClick={onClose}>Cancel</button>
               <button className="btn-primary" onClick={addSelected} disabled={selectedIdx.size === 0}>
-                Add {selectedIdx.size} selected source{selectedIdx.size === 1 ? '' : 's'}
+                Add {selectedIdx.size} source{selectedIdx.size === 1 ? '' : 's'}
+                {trialPeriod !== 'permanent' ? ` (${trialPeriod} trial)` : ' (permanent)'}
               </button>
             </div>
           </div>
@@ -249,13 +296,23 @@ export function ResearchSourcesModal({
 
       {phase === 'done' && (
         <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-          {addedCount > 0 ? (
+          {(addedCount > 0 || mergedCount > 0) ? (
             <>
               <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
-              <div style={{ fontSize: 14, color: '#065f46', marginBottom: 6 }}>
-                {addedCount} source{addedCount === 1 ? '' : 's'} added.
+              {addedCount > 0 && (
+                <div style={{ fontSize: 14, color: '#065f46', marginBottom: 4 }}>
+                  {addedCount} new source{addedCount === 1 ? '' : 's'} added
+                  {trialPeriod !== 'permanent' ? ` as ${trialPeriod} trial` : ' permanently'}.
+                </div>
+              )}
+              {mergedCount > 0 && (
+                <div style={{ fontSize: 13, color: '#4c1d95', marginBottom: 4 }}>
+                  {mergedCount} existing source{mergedCount === 1 ? '' : 's'} now also tagged for {brandName}.
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+                New sources start ingesting at their next poll cycle (within 15 minutes).
               </div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>They'll start ingesting items at their next poll cycle (typically within 15 minutes).</div>
             </>
           ) : (
             <>

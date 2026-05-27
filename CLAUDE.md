@@ -613,6 +613,42 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.13.1 (2026-05-27):** Trial mode + brand-grouped sources + Research-sources button moved to Live Monitor.
+
+User feedback on v1.13.0: wanted (a) a trial period for newly-discovered sources, (b) Live Monitor's Sources card grouped by brand instead of one flat list, (c) the Research-sources button on the Live Monitor tab where sources live.
+
+**Trial mode:**
+- New `monitor_sources.trial_until TEXT NULL` column (idempotent migration). When set, the monitor's poll cycle auto-disables the source after the timestamp passes.
+- New monitor-loop sweep `sweepExpiredTrials()` runs every 60s alongside the poll cycle. Single UPDATE statement; logs how many were disabled.
+- `ResearchSourcesModal` gets a trial-period selector before the Add button: 24h / 48h / 7d / Permanent. Default `24h` — safest cost trajectory for unvalidated suggestions.
+- New IPCs: `monitor:sources:promoteTrial(id)` (clears `trial_until`, makes permanent) and `monitor:sources:extendTrial(id, days)` (pushes `trial_until` forward).
+- Pure helper `computeTrialUntil(period, now?)` in `src/main/source-research.ts` — exported for smoke testing.
+
+**`brands:addSuggestedSources` rewrite:**
+- Detects URL collisions: if the same URL already exists in `monitor_sources`, the new brandId is merged into `config.serves_brand_ids` instead of inserting a duplicate. This is what creates "Common sources" (sources serving ≥2 brands).
+- Accepts new `opts.trialPeriod` argument; new rows get `trial_until` set via `computeTrialUntil()`.
+- Return shape changed: `{ added: number[], merged: number[], trialUntil }` (was bare `number[]`). Modal renders both counts in the success screen.
+
+**Live Monitor Sources card redesign (`groupSourcesByBrand` pure helper):**
+- Three groups rendered as collapsible sections:
+  - **Per-brand sections** — one per brand, only sources with `serves_brand_ids` containing exactly that brand. Each section has a `Discover more` button that opens the modal scoped to that brand.
+  - **Common sources** — sources with ≥2 brand IDs in `serves_brand_ids`. Includes a new "Serves" column with brand-name pills.
+  - **Unassigned** — sources with no `serves_brand_ids` (default seeded + manually added). Shown at the bottom.
+- New per-row "Trial" column shows time-remaining chip + Promote (`Keep`) / Extend buttons. Expired trials show red chip + Extend (7d) + Keep buttons.
+- Orphaned brand IDs (referenced brand was deleted) fall into the Common section gracefully.
+
+**Research-sources button moved:**
+- Removed from the brand panel in Brands & Products.
+- Added to Live Monitor → Sources card header. Click opens a brand-picker dropdown listing brands with `research_status === 'ready'`. Selecting a brand opens the same `ResearchSourcesModal`.
+- Each per-brand section's "Discover more" link bypasses the picker for that brand.
+
+**Type additions** in `src/shared/types.ts`:
+- `MonitorSource.trial_until: string | null`
+- New `MonitorSourceConfig` typed shape for the JSON config field
+- `SourceGrouping` return type from `groupSourcesByBrand`
+
+Smoke tests 75 → 82. 7 new tests cover `computeTrialUntil` (permanent → null, 24h/48h/7d arithmetic) and `groupSourcesByBrand` (splits buckets correctly, handles orphaned brand IDs).
+
 **v1.13.0 (2026-05-27):** Auto-research news sources per brand.
 
 User insight after v1.12.1's diagnostics surfaced that default RSS sources were misaligned with workspace-design (Zyeta) and banking-software (Neptune) brands: *"Similar to signal config, LeadsHawk will do research and determine what signals to chase. What if we get LeadsHawk to determine what sources to follow for each brand?"*

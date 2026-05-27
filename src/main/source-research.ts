@@ -175,3 +175,21 @@ export function buildGoogleNewsRssUrl(query: string): string {
   const encoded = encodeURIComponent((query || '').trim());
   return `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`;
 }
+
+/**
+ * v1.13.1: compute the `trial_until` timestamp for a new source.
+ * Returns null for 'permanent' (no trial). Otherwise a SQLite-format
+ * ISO timestamp N hours from now.
+ *
+ * Pure function — exported for smoke testing.
+ */
+export function computeTrialUntil(
+  period: '24h' | '48h' | '7d' | 'permanent',
+  now: Date = new Date()
+): string | null {
+  if (period === 'permanent') return null;
+  const hours = period === '24h' ? 24 : period === '48h' ? 48 : 24 * 7;
+  const t = new Date(now.getTime() + hours * 3600 * 1000);
+  // SQLite datetime() format: 'YYYY-MM-DD HH:MM:SS'
+  return t.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+}
