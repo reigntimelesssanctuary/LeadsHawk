@@ -1,9 +1,37 @@
 import { useEffect, useState } from 'react';
 import type { Settings as Sett } from '../../../shared/types';
+import {
+  scheduleToCron,
+  cronToSchedule,
+  describeSchedule,
+  fmtHour,
+  dayName,
+  type Schedule,
+  type FreqType
+} from '../../../shared/schedule';
 
 // v1.11.1: Spend card removed from Settings. Same data + more lives in the
 // Cost Management tab. The STAGE_LABELS map and SpendStat component also
 // moved with it; the canonical labels are now defined in CostManagement.tsx.
+//
+// v1.14.0: model pickers removed across both API cards (research / scan /
+// brief / triage). The right model per task is now hardcoded in code; if we
+// need to upgrade, we ship a new release rather than expecting the user to
+// pick. Also: the cron text input was replaced with a frequency picker +
+// contextual time selectors (see scheduleToCron / cronToSchedule helpers in
+// src/shared/schedule.ts). And the v1.8 single-stage deep scan fallback
+// toggle is gone — two-stage is now always-on.
+
+const FREQ_OPTIONS: { value: FreqType; label: string }[] = [
+  { value: 'daily',   label: 'Daily' },
+  { value: 'twice',   label: 'Twice daily' },
+  { value: 'every6',  label: 'Every 6 hours' },
+  { value: 'every12', label: 'Every 12 hours' },
+  { value: 'weekly',  label: 'Weekly' }
+];
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: fmtHour(h) }));
+const DAY_OPTIONS = [0, 1, 2, 3, 4, 5, 6].map((d) => ({ value: d, label: dayName(d) }));
 
 export function Settings() {
   const [s, setS] = useState<Sett | null>(null);
@@ -20,21 +48,30 @@ export function Settings() {
     setTimeout(() => setSaved(false), 2000);
   };
 
+  // v1.14.0: derive frequency-picker state from the persisted cron string.
+  // Single source of truth is still settings.deepScanCron — the picker is a
+  // structured editor on top of it. Round-tripping unknown crons folds
+  // them back to the default (Twice daily 9am / 9pm).
+  const schedule = cronToSchedule(s.deepScanCron);
+  const setSchedule = (next: Schedule) => {
+    setS({ ...s, deepScanCron: scheduleToCron(next) });
+  };
+
   return (
     <div>
       <div style={{ marginTop: 16, marginBottom: 16 }}>
         <div className="h-page">Settings</div>
         <div style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
-          API keys, models, and scanner tuning. (Spend details moved to the <b>Cost Management</b> tab in the sidebar.)
+          API keys and tuning. (Spend details live on the <b>Cost Management</b> tab in the sidebar.)
         </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Perplexity API</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          Used for product research (<i>Run research</i>) and the autonomous scan job. Both use live web search.
+          Used for product/brand research, source discovery, scheduled deep scans, and Live Monitor's qualification stage. All calls run live web search.
         </div>
-        <label className="label">API Key</label>
+        <label className="label">API key</label>
         <input
           className="input"
           type="password"
@@ -45,30 +82,6 @@ export function Settings() {
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
           Get one at perplexity.ai/settings/api.
         </div>
-
-        <div style={{ height: 16 }} />
-        <label className="label">Research model (used by “Run research”)</label>
-        <select
-          className="select"
-          value={s.perplexityResearchModel}
-          onChange={(e) => setS({ ...s, perplexityResearchModel: e.target.value })}
-        >
-          <option value="sonar-deep-research">sonar-deep-research (multi-step deep research — recommended)</option>
-          <option value="sonar-reasoning-pro">sonar-reasoning-pro (chain-of-thought, faster)</option>
-          <option value="sonar-pro">sonar-pro (fastest)</option>
-        </select>
-
-        <div style={{ height: 16 }} />
-        <label className="label">Scan model (used by autonomous scans)</label>
-        <select
-          className="select"
-          value={s.perplexityScanModel}
-          onChange={(e) => setS({ ...s, perplexityScanModel: e.target.value })}
-        >
-          <option value="sonar-pro">sonar-pro (recommended — fast live search)</option>
-          <option value="sonar-reasoning-pro">sonar-reasoning-pro (more deliberate)</option>
-          <option value="sonar">sonar (cheapest)</option>
-        </select>
 
         <div style={{ height: 16 }} />
         <label className="label">Recency window for scans</label>
@@ -83,16 +96,16 @@ export function Settings() {
           <option value="year">Last 12 months</option>
         </select>
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-          Slow-cycle signals (real estate, multi-year programmes, ESG commitments, M&A) telegraph over months. Fast-cycle signals (outages, CISO changes, breaches) need a tight window. This is the global default — per-brand and per-product overrides land in v1.8.
+          How far back scans look for events. Slow-cycle signals (real estate, multi-year programmes, ESG commitments, M&A) telegraph over months. Fast-cycle signals (outages, CISO changes, breaches) need a tight window. This is the <b>global default</b>; per-brand and per-product overrides can be set in the brand/product editors.
         </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Anthropic API</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          Used by the <i>Generate brief</i> button and by the Live Monitor's triage stage.
+          Used by the <i>Generate brief</i> button on each opportunity, Live Monitor's triage stage, and the deep scan's Claude qualification step. Models are fixed (Opus 4.7 for brief writing, Sonnet 4.6 for triage and qualify).
         </div>
-        <label className="label">API Key</label>
+        <label className="label">API key</label>
         <input
           className="input"
           type="password"
@@ -100,23 +113,6 @@ export function Settings() {
           onChange={(e) => setS({ ...s, anthropicApiKey: e.target.value })}
           placeholder="sk-ant-…"
         />
-        <div style={{ height: 12 }} />
-        <label className="label">Brief-generation model</label>
-        <select className="select" value={s.model} onChange={(e) => setS({ ...s, model: e.target.value })}>
-          <option value="claude-opus-4-7">claude-opus-4-7 (most capable)</option>
-          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
-          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
-        </select>
-        <div style={{ height: 12 }} />
-        <label className="label">Live-monitor triage model</label>
-        <select className="select" value={s.triageModel} onChange={(e) => setS({ ...s, triageModel: e.target.value })}>
-          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (recommended)</option>
-          <option value="claude-opus-4-7">claude-opus-4-7 (more deliberate, costlier)</option>
-          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (cheapest, slightly noisier)</option>
-        </select>
-        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-          Used for the cheap yes/no triage on each candidate item before deep qualification.
-        </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
@@ -153,13 +149,12 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="h-card" style={{ marginBottom: 6 }}>Research depth (v1.10)</div>
+        <div className="h-card" style={{ marginBottom: 6 }}>Research depth</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
           When enabled, brand/product research chains Claude Opus after Perplexity to:
           (1) verify and sharpen the dossier — strip generic language, annotate per-field confidence, surface gaps as a "What we don't know" list;
           (2) produce a strategic-intelligence layer — ICP segments, buying-cycle scenarios, competitive plays.
           Adds ~$0.50–$0.80 per research run on top of the Perplexity cost. Needs an Anthropic API key (set above).
-          Uncheck to revert to v1.9.x's Perplexity-only research.
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 8 }}>
           <input
@@ -178,7 +173,7 @@ export function Settings() {
 
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed #e5e7eb' }}>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-            <b>Stage 4 — fact-check (v1.10.2)</b>. After Stages 2+3 produce a verified dossier, Stage 4 fetches up to N cited source URLs from Stage 1 and asks Opus to verify the dossier's claims against actual source text. Adds ~$1.30–$1.80 per research run. Requires the toggle above to be on (Stage 4 needs Stage 2's verified dossier as input).
+            <b>Stage 4 — fact-check</b>. After Stages 2+3 produce a verified dossier, Stage 4 fetches up to N cited source URLs from Stage 1 and asks Opus to verify the dossier's claims against actual source text. Adds ~$1.30–$1.80 per research run. Requires the toggle above to be on (Stage 4 needs Stage 2's verified dossier as input).
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 8 }}>
             <input
@@ -211,57 +206,138 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="h-card" style={{ marginBottom: 6 }}>Scan</div>
+        <div className="h-card" style={{ marginBottom: 6 }}>Scheduled deep scan</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          The autonomous scan engine — two-stage by default: Perplexity sonar-deep-research discovery + Claude qualification. Slower and costlier per run than the retired v1.x manual scan, but produces meaningfully better leads. Set the schedule below; the on/off toggle is the checkbox.
+          The autonomous deep scan. For each researched product, Perplexity casts a wide net of real-world events and Claude qualifies which ones are genuine buying signals. Currently the most productive lead source in LeadsHawk. Runs on the schedule below.
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 16 }}>
           <input
             type="checkbox"
             checked={s.deepScanEnabled}
             onChange={(e) => setS({ ...s, deepScanEnabled: e.target.checked })}
           /> Enable scheduled scans
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, marginBottom: 6 }}>
-          <input
-            type="checkbox"
-            checked={s.deepScanTwoStage}
-            onChange={(e) => setS({ ...s, deepScanTwoStage: e.target.checked })}
-          /> Use two-stage deep scan (recommended)
-        </label>
-        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          Splits the call into Perplexity-led discovery (wide net of named
-          companies + citations) and Claude-led qualification (ICP fit, scan
-          rules, dedupe, confidence). Better leads at roughly the same cost.
-          Uncheck to fall back to the v1.8 monolithic single-call path.
+
+        <label className="label">Frequency</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, marginBottom: 12 }}>
+          {FREQ_OPTIONS.map((opt) => {
+            const active = schedule.freq === opt.value;
+            return (
+              <button
+                key={opt.value}
+                onClick={() => {
+                  // Preserve sensible hours/dow when switching frequency.
+                  const carryHour = schedule.hours[0] ?? 9;
+                  const carrySecond = schedule.hours[1] ?? 21;
+                  if (opt.value === 'daily')   setSchedule({ freq: 'daily',   hours: [carryHour], dayOfWeek: schedule.dayOfWeek });
+                  if (opt.value === 'twice')   setSchedule({ freq: 'twice',   hours: [carryHour, carrySecond], dayOfWeek: schedule.dayOfWeek });
+                  if (opt.value === 'every6')  setSchedule({ freq: 'every6',  hours: [], dayOfWeek: schedule.dayOfWeek });
+                  if (opt.value === 'every12') setSchedule({ freq: 'every12', hours: [], dayOfWeek: schedule.dayOfWeek });
+                  if (opt.value === 'weekly')  setSchedule({ freq: 'weekly',  hours: [carryHour], dayOfWeek: schedule.dayOfWeek });
+                }}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 999,
+                  border: active ? '1px solid #6c5cf2' : '1px solid #e5e7eb',
+                  background: active ? '#6c5cf2' : 'white',
+                  color: active ? 'white' : '#111827',
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.12s'
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
         </div>
-        <label className="label">Cron expression</label>
-        <input
-          className="input"
-          value={s.deepScanCron}
-          onChange={(e) => setS({ ...s, deepScanCron: e.target.value })}
-        />
-        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {[
-            { label: 'Twice daily (9am / 9pm)', value: '0 9,21 * * *' },
-            { label: 'Daily at 9am',            value: '0 9 * * *' },
-            { label: 'Every 12 hours',          value: '0 */12 * * *' },
-            { label: 'Weekly Mon 9am',          value: '0 9 * * 1' }
-          ].map((p) => (
-            <button key={p.value} className="btn-ghost" onClick={() => setS({ ...s, deepScanCron: p.value })}>{p.label}</button>
-          ))}
+
+        {schedule.freq === 'daily' && (
+          <div style={{ marginBottom: 12 }}>
+            <label className="label">At</label>
+            <select
+              className="select"
+              value={schedule.hours[0] ?? 9}
+              onChange={(e) => setSchedule({ ...schedule, hours: [Number(e.target.value)] })}
+              style={{ maxWidth: 200 }}
+            >
+              {HOUR_OPTIONS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+            </select>
+          </div>
+        )}
+
+        {schedule.freq === 'twice' && (
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            <div>
+              <label className="label">First run</label>
+              <select
+                className="select"
+                value={schedule.hours[0] ?? 9}
+                onChange={(e) => setSchedule({ ...schedule, hours: [Number(e.target.value), schedule.hours[1] ?? 21] })}
+                style={{ maxWidth: 200 }}
+              >
+                {HOUR_OPTIONS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Second run</label>
+              <select
+                className="select"
+                value={schedule.hours[1] ?? 21}
+                onChange={(e) => setSchedule({ ...schedule, hours: [schedule.hours[0] ?? 9, Number(e.target.value)] })}
+                style={{ maxWidth: 200 }}
+              >
+                {HOUR_OPTIONS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {schedule.freq === 'weekly' && (
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            <div>
+              <label className="label">On</label>
+              <select
+                className="select"
+                value={schedule.dayOfWeek}
+                onChange={(e) => setSchedule({ ...schedule, dayOfWeek: Number(e.target.value) })}
+                style={{ maxWidth: 200 }}
+              >
+                {DAY_OPTIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">At</label>
+              <select
+                className="select"
+                value={schedule.hours[0] ?? 9}
+                onChange={(e) => setSchedule({ ...schedule, hours: [Number(e.target.value)] })}
+                style={{ maxWidth: 200 }}
+              >
+                {HOUR_OPTIONS.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16, fontStyle: 'italic' }}>
+          {describeSchedule(schedule)}
         </div>
-        <div style={{ height: 16 }} />
-        <label className="label">Deep scan model</label>
+
+        <label className="label">Deep scan model (Stage 1 discovery)</label>
         <select
           className="select"
           value={s.deepScanModel}
           onChange={(e) => setS({ ...s, deepScanModel: e.target.value })}
         >
-          <option value="sonar-deep-research">sonar-deep-research (recommended — multi-step research, costliest)</option>
+          <option value="sonar-deep-research">sonar-deep-research (recommended — multi-step research)</option>
           <option value="sonar-reasoning-pro">sonar-reasoning-pro (chain-of-thought, mid-tier)</option>
-          <option value="sonar-pro">sonar-pro (same as regular scan — useful if you just want more frequent runs)</option>
+          <option value="sonar-pro">sonar-pro (cheapest — narrower discovery)</option>
         </select>
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+          Controls the Perplexity model used for Stage 1 discovery. Stage 2 qualification always uses Claude Sonnet 4.6.
+        </div>
       </div>
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>

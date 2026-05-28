@@ -46,8 +46,11 @@ export async function complete(
   opts: CompleteOpts = {}
 ): Promise<string> {
   const client = getClient();
-  const { model } = getSettings();
-  const modelId = opts.model || model || 'claude-opus-4-7';
+  // v1.14.0: brief-generation model picker removed from Settings. Opus 4.7
+  // is the right default for the sales-brief writing task; callers can
+  // still pass `opts.model` to override (the two-stage scan's qualifier
+  // does this with Sonnet for cost).
+  const modelId = opts.model || 'claude-opus-4-7';
   // v1.10.1: Anthropic deprecated `temperature` on Opus 4.7. Only set it
   // for models where it's still supported.
   const req: Anthropic.MessageCreateParamsNonStreaming = {

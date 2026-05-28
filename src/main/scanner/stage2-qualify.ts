@@ -148,7 +148,10 @@ export async function stage2Qualify(
   if (stage1.candidates.length === 0) {
     return { opportunities: [], rejected: [] };
   }
-  const model = settings.triageModel || 'claude-sonnet-4-6';
+  // v1.14.0: Sonnet 4.6 hardcoded — picker removed from Settings. This is
+  // the qualify-side Claude call (was sharing settings.triageModel with the
+  // Live Monitor triage stage; both now hardcoded to the same model).
+  const model = 'claude-sonnet-4-6';
 
   const rulesBlock = buildRulesBlock(product.id);
   const disqBlock = buildDisqualificationsBlock(product.id, 8);

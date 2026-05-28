@@ -141,7 +141,8 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
   let r;
   try {
     r = await completePerplexity<QualifyResult>(SYSTEM, prompt, {
-      model: settings.perplexityScanModel || 'sonar-pro',
+      // v1.14.0: model picker removed from Settings — sonar-pro hardcoded.
+      model: 'sonar-pro',
       maxTokens: 2500,
       temperature: 0.2,
       jsonSchema: SCHEMA,

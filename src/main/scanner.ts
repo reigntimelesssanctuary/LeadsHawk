@@ -186,7 +186,11 @@ export async function runScan(
     if (!settings.perplexityApiKey) {
       throw new Error('Perplexity API key not configured. Open Settings and paste your key.');
     }
-    const scanModel = opts.model ?? settings.perplexityScanModel ?? 'sonar-pro';
+    // v1.14.0: perplexityScanModel removed from Settings. This function is
+    // now orphaned dead code (the two-stage deep scan path replaced it
+    // entirely; nothing in production calls runScan anymore). Hardcoded
+    // sonar-pro for any caller still passing through.
+    const scanModel = opts.model ?? 'sonar-pro';
     log(`engine: model=${scanModel} stage=${stage} kind=${kind}`);
 
     const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
@@ -641,31 +645,17 @@ export async function crossMatchRecent(
 }
 
 /**
- * Top-level deep-scan entrypoint. Routes to either the v1.9.0 two-stage
- * orchestrator (Perplexity discovery → Claude qualify) or the v1.8.7
- * monolithic single-call path, depending on `settings.deepScanTwoStage`.
+ * Top-level deep-scan entrypoint. Always runs the two-stage v1.9.0
+ * orchestrator (Perplexity discovery → Claude qualify).
  *
- * The single-stage path remains for safety: if the two-stage path ever
- * underperforms in real use, the user can flip it off in Settings and
- * revert instantly. Do not remove the fallback until v1.10 at earliest.
+ * v1.14.0: the v1.8.7 monolithic single-call fallback (selectable via
+ * `settings.deepScanTwoStage = false`) was removed. The fallback hadn't
+ * been exercised since v1.9.0 shipped — every fix and improvement since
+ * (citation passthrough, Opus dossier verify, fact-check coverage) only
+ * landed on the two-stage path. The toggle in Settings was deleted.
  */
 export async function runDeepScan(): Promise<{ runId: number; created: number; scanned: number }> {
-  const settings = getSettings();
-  if (settings.deepScanTwoStage) {
-    return runDeepScanTwoStage();
-  }
-  return runScan({
-    model: settings.deepScanModel || 'sonar-deep-research',
-    stage: 'deep_scan',
-    kind: 'deep',
-    // v1.8.2: bumped 9000 → 24000. sonar-deep-research mixes <think>
-    // reasoning into the completion stream, so a rich prompt can use
-    // 10-15K tokens just thinking — without enough headroom, the model
-    // runs out before producing JSON and we get an unparseable response.
-    maxTokens: 24000,
-    label: '== Deep Research scan (single-stage fallback) ==',
-    skipCustomTopics: true   // v1.7.5: deep scan focuses on per-product Pass 1 only
-  });
+  return runDeepScanTwoStage();
 }
 
 /**
@@ -702,9 +692,9 @@ export async function runDeepScanTwoStage(): Promise<{ runId: number; created: n
       throw new Error('Perplexity API key not configured. Open Settings and paste your key.');
     }
     if (!settings.anthropicApiKey) {
-      throw new Error('Anthropic API key not configured (needed for the two-stage deep scan qualifier). Open Settings and paste your key, or uncheck "Two-stage deep scan" to fall back to single-call mode.');
+      throw new Error('Anthropic API key not configured (needed for the deep scan qualifier). Open Settings and paste your key.');
     }
-    log(`engine: discovery=${settings.deepScanModel || 'sonar-deep-research'} qualify=${settings.triageModel || 'claude-sonnet-4-6'}`);
+    log(`engine: discovery=${settings.deepScanModel || 'sonar-deep-research'} qualify=claude-sonnet-4-6`);
 
     const brands = db.prepare('SELECT * FROM brands').all() as Brand[];
     const allProducts = db.prepare('SELECT * FROM products').all() as Product[];

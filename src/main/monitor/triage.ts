@@ -38,9 +38,11 @@ export async function triageItem(
   brand: Brand,
   matchedSignal: string
 ): Promise<TriageDecision> {
-  const { triageModel } = getSettings();
   const c = client();
-  const modelId = triageModel || 'claude-sonnet-4-6';
+  // v1.14.0: triageModel picker removed from Settings — sonnet 4.6 is the
+  // right cost/quality balance for the cheap yes/no/strong filter that
+  // runs on every Live Monitor candidate before the expensive qualify call.
+  const modelId = 'claude-sonnet-4-6';
 
   const disqBlock = buildDisqualificationsBlock(product.id, 6);
 

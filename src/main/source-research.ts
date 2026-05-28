@@ -19,7 +19,6 @@
  */
 
 import { completePerplexity } from './perplexity.js';
-import { getSettings } from './settings.js';
 import { addFeedback, buildFeedbackBlock, markFeedbackApplied } from './feedback.js';
 import { getDb } from './db.js';
 import type { Brand, SourceSuggestion, ResearchSourcesResult } from '@shared/types';
@@ -124,12 +123,12 @@ covering the same topic instead.
 
 Return JSON matching the schema.`;
 
-  const { perplexityResearchModel } = getSettings();
+  // v1.14.0: model picker removed from Settings — sonar-deep-research hardcoded.
   const { json } = await completePerplexity<ResearchSourcesResult>(
     SOURCE_RESEARCH_SYSTEM,
     prompt,
     {
-      model: perplexityResearchModel || 'sonar-deep-research',
+      model: 'sonar-deep-research',
       maxTokens: 6000,
       temperature: 0.2,
       jsonSchema: SOURCES_SCHEMA,

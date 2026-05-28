@@ -3,9 +3,9 @@ import { runDeepScan } from './scanner.js';
 import { getSettings } from './settings.js';
 
 // v1.12.0: manual scan retired. Only deep scan is scheduled now.
-// runScan() stays available for runDeepScan()'s single-stage fallback path,
-// but is no longer triggered by cron or user button. settings.scanCron /
-// scanEnabled are deprecated but kept in the type for back-compat reads.
+// v1.14.0: scanCron / scanEnabled removed from Settings entirely. runScan()
+// is now orphaned dead code that no caller invokes (kept temporarily to
+// avoid an invasive deletion in this release).
 
 let deepTask: ScheduledTask | null = null;
 

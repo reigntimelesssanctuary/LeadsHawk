@@ -303,22 +303,19 @@ export type DashboardStats = {
 
 export type Settings = {
   anthropicApiKey: string;          // sales-brief generation + live-monitor triage
-  model: string;                    // Claude model for sales-brief
-  triageModel: string;              // Claude model for live-monitor triage stage (default sonnet 4.6)
   perplexityApiKey: string;         // research + scans + live-monitor deep qualify
-  perplexityResearchModel: string;
-  perplexityScanModel: string;
+  // v1.14.0: model pickers removed from Settings UI; we hardcode the right
+  // model per call site instead (sonar-deep-research for research, sonar-pro
+  // for scan + qualify, claude-opus-4-7 for brief, claude-sonnet-4-6 for
+  // triage). Models are upgraded via code rather than user-tunable settings.
   scanRecency: 'day' | 'week' | 'month' | 'year';
-  scanCron: string;
-  scanEnabled: boolean;
-  // Deep scan — separate scheduled engine using sonar-deep-research
+  // v1.14.0: scanCron / scanEnabled (the retired v1.x manual scan) removed.
+  // Deep scan — the only scheduled engine since v1.12.0
   deepScanCron: string;
   deepScanEnabled: boolean;
   deepScanModel: string;
-  // v1.9: when true, runDeepScan() splits the call into Perplexity-led
-  // discovery (Stage 1) + Claude-led qualification (Stage 2). When false,
-  // falls back to the v1.8.7 monolithic single-call path.
-  deepScanTwoStage: boolean;
+  // v1.14.0: deepScanTwoStage removed. Two-stage is always-on; the v1.8.7
+  // monolithic single-call path is gone.
   minConfidence: number;
   maxItemsPerScan: number;
   // Live monitor

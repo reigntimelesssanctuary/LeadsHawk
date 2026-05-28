@@ -143,11 +143,11 @@ Conduct deep web research on this product and brand. Synthesize external
 sources with the internal excerpts above into a single dossier. Return the
 result as JSON matching the schema you've been given.`;
 
-    const { perplexityResearchModel } = getSettings();
-
+    // v1.14.0: research model picker removed from Settings — sonar-deep-research
+    // hardcoded for product research's Stage 1 Perplexity call.
     // v1.10.2: capture citations alongside JSON so Stage 4 can fetch them.
     const { json, citations: stage1Citations } = await completePerplexity<ResearchOutput>(SYSTEM, prompt, {
-      model: perplexityResearchModel || 'sonar-deep-research',
+      model: 'sonar-deep-research',
       maxTokens: 6000,
       temperature: 0.15,
       jsonSchema: RESEARCH_SCHEMA,
@@ -454,13 +454,13 @@ Conduct deep web research on this BRAND. Synthesize external sources with the
 internal excerpts above into a foundational brand-level dossier. Return JSON
 matching the schema you've been given.`;
 
-    const { perplexityResearchModel } = getSettings();
+    // v1.14.0: hardcoded sonar-deep-research (picker removed from Settings).
     // v1.10.2: capture citations for Stage 4 fact-check.
     const { json, citations: stage1Citations } = await completePerplexity<BrandResearchOutput>(
       BRAND_RESEARCH_SYSTEM,
       prompt,
       {
-        model: perplexityResearchModel || 'sonar-deep-research',
+        model: 'sonar-deep-research',
         maxTokens: 6000,
         temperature: 0.15,
         jsonSchema: BRAND_RESEARCH_SCHEMA,

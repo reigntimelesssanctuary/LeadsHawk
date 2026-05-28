@@ -26,7 +26,6 @@
 
 import { getDb } from './db.js';
 import { completePerplexity, type PplxResponse } from './perplexity.js';
-import { getSettings } from './settings.js';
 import { embedSignalsForProduct } from './monitor/embed.js';
 import { addFeedback, buildFeedbackBlock, markFeedbackApplied } from './feedback.js';
 import type { Brand, Product } from '@shared/types';
@@ -235,9 +234,9 @@ If reviewer feedback above directs specific changes (focus areas, signals
 to drop, signals to add), apply it — feedback outranks your own judgment
 for items it covers.`;
 
-  const { perplexityScanModel } = getSettings();
+  // v1.14.0: model picker removed from Settings — sonar-pro hardcoded.
   const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
-    model: perplexityScanModel || 'sonar-pro',
+    model: 'sonar-pro',
     stage: 'product_signals',
     relatedId: productId
   });
@@ -319,9 +318,9 @@ No preamble, no commentary, no closing remarks. Bullets only.
 If reviewer feedback above directs specific changes, apply it — feedback
 outranks your own judgment for items it covers.`;
 
-  const { perplexityScanModel } = getSettings();
+  // v1.14.0: model picker removed from Settings — sonar-pro hardcoded.
   const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
-    model: perplexityScanModel || 'sonar-pro',
+    model: 'sonar-pro',
     stage: 'brand_signals',
     relatedId: brandId
   });

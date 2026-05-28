@@ -906,5 +906,160 @@ test('buildFeedbackBlockFrom truncates oldest entries when over budget', () => {
   falsy(block.includes('F0 '), 'oldest (F0) should be truncated out');
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.14.0 — cron-free scheduler helpers (src/shared/schedule.ts).
+//
+// MUST stay byte-identical with the production source per the file-header
+// rule. Renderer's Settings card no longer accepts a cron string; instead
+// users pick a frequency + time and we synthesize the cron via
+// scheduleToCron. cronToSchedule reads the persisted string back into
+// picker state on app load. Defensive: cronToSchedule never throws — it
+// falls back to DEFAULT_SCHEDULE on any unrecognized pattern.
+// ════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_SCHEDULE = { freq: 'twice', hours: [9, 21], dayOfWeek: 1 };
+
+function clampHour(h) {
+  if (!Number.isFinite(h)) return 9;
+  return Math.max(0, Math.min(23, Math.round(h)));
+}
+function clampDow(d) {
+  if (!Number.isFinite(d)) return 1;
+  return Math.max(0, Math.min(6, Math.round(d)));
+}
+
+function scheduleToCron(s) {
+  switch (s.freq) {
+    case 'daily': {
+      const h = clampHour(s.hours[0] ?? 9);
+      return `0 ${h} * * *`;
+    }
+    case 'twice': {
+      const h1 = clampHour(s.hours[0] ?? 9);
+      const h2 = clampHour(s.hours[1] ?? 21);
+      return `0 ${h1},${h2} * * *`;
+    }
+    case 'every6':
+      return '0 */6 * * *';
+    case 'every12':
+      return '0 */12 * * *';
+    case 'weekly': {
+      const h = clampHour(s.hours[0] ?? 9);
+      const d = clampDow(s.dayOfWeek);
+      return `0 ${h} * * ${d}`;
+    }
+  }
+}
+
+function cronToSchedule(cron) {
+  if (!cron || typeof cron !== 'string') return { ...DEFAULT_SCHEDULE };
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return { ...DEFAULT_SCHEDULE };
+  const [min, hour, dom, month, dow] = parts;
+  if (min !== '0' || dom !== '*' || month !== '*') return { ...DEFAULT_SCHEDULE };
+  if (hour === '*/6' && dow === '*')  return { freq: 'every6',  hours: [], dayOfWeek: 1 };
+  if (hour === '*/12' && dow === '*') return { freq: 'every12', hours: [], dayOfWeek: 1 };
+  if (dow !== '*' && /^\d+$/.test(hour) && /^\d+$/.test(dow)) {
+    const h = Number(hour);
+    const d = Number(dow);
+    if (h >= 0 && h <= 23 && d >= 0 && d <= 6) {
+      return { freq: 'weekly', hours: [h], dayOfWeek: d };
+    }
+  }
+  if (dow === '*' && /^\d+,\d+$/.test(hour)) {
+    const [h1, h2] = hour.split(',').map(Number);
+    if ([h1, h2].every((h) => Number.isFinite(h) && h >= 0 && h <= 23)) {
+      return { freq: 'twice', hours: [h1, h2], dayOfWeek: 1 };
+    }
+  }
+  if (dow === '*' && /^\d+$/.test(hour)) {
+    const h = Number(hour);
+    if (h >= 0 && h <= 23) {
+      return { freq: 'daily', hours: [h], dayOfWeek: 1 };
+    }
+  }
+  return { ...DEFAULT_SCHEDULE };
+}
+
+test('scheduleToCron — daily at 9am', () => {
+  eq(scheduleToCron({ freq: 'daily', hours: [9], dayOfWeek: 1 }), '0 9 * * *');
+});
+test('scheduleToCron — daily at midnight', () => {
+  eq(scheduleToCron({ freq: 'daily', hours: [0], dayOfWeek: 1 }), '0 0 * * *');
+});
+test('scheduleToCron — twice daily 9am/9pm', () => {
+  eq(scheduleToCron({ freq: 'twice', hours: [9, 21], dayOfWeek: 1 }), '0 9,21 * * *');
+});
+test('scheduleToCron — every 6 hours ignores hours/dow', () => {
+  eq(scheduleToCron({ freq: 'every6', hours: [99], dayOfWeek: 9 }), '0 */6 * * *');
+});
+test('scheduleToCron — every 12 hours', () => {
+  eq(scheduleToCron({ freq: 'every12', hours: [], dayOfWeek: 1 }), '0 */12 * * *');
+});
+test('scheduleToCron — weekly Monday 9am', () => {
+  eq(scheduleToCron({ freq: 'weekly', hours: [9], dayOfWeek: 1 }), '0 9 * * 1');
+});
+test('scheduleToCron — weekly Sunday 6pm', () => {
+  eq(scheduleToCron({ freq: 'weekly', hours: [18], dayOfWeek: 0 }), '0 18 * * 0');
+});
+test('scheduleToCron — clamps out-of-range hour', () => {
+  eq(scheduleToCron({ freq: 'daily', hours: [25], dayOfWeek: 1 }), '0 23 * * *');
+});
+test('scheduleToCron — clamps negative hour', () => {
+  eq(scheduleToCron({ freq: 'daily', hours: [-5], dayOfWeek: 1 }), '0 0 * * *');
+});
+
+test('cronToSchedule — daily at 9am', () => {
+  eq(cronToSchedule('0 9 * * *'), { freq: 'daily', hours: [9], dayOfWeek: 1 });
+});
+test('cronToSchedule — twice daily 9am/9pm', () => {
+  eq(cronToSchedule('0 9,21 * * *'), { freq: 'twice', hours: [9, 21], dayOfWeek: 1 });
+});
+test('cronToSchedule — every 6 hours', () => {
+  eq(cronToSchedule('0 */6 * * *'), { freq: 'every6', hours: [], dayOfWeek: 1 });
+});
+test('cronToSchedule — every 12 hours', () => {
+  eq(cronToSchedule('0 */12 * * *'), { freq: 'every12', hours: [], dayOfWeek: 1 });
+});
+test('cronToSchedule — weekly Mon 9am', () => {
+  eq(cronToSchedule('0 9 * * 1'), { freq: 'weekly', hours: [9], dayOfWeek: 1 });
+});
+test('cronToSchedule — falls back to default on garbage', () => {
+  eq(cronToSchedule('this is not cron'), DEFAULT_SCHEDULE);
+});
+test('cronToSchedule — falls back on partial cron', () => {
+  eq(cronToSchedule('0 9'), DEFAULT_SCHEDULE);
+});
+test('cronToSchedule — falls back on non-zero minute (we only produce minute=0)', () => {
+  eq(cronToSchedule('15 9 * * *'), DEFAULT_SCHEDULE);
+});
+test('cronToSchedule — falls back on null/undefined', () => {
+  eq(cronToSchedule(null), DEFAULT_SCHEDULE);
+  eq(cronToSchedule(undefined), DEFAULT_SCHEDULE);
+});
+
+// Round-trip property: every cron we emit must parse back to the schedule
+// that produced it. Guards against drift between the two helpers.
+test('round-trip — daily 9am', () => {
+  const s = { freq: 'daily', hours: [9], dayOfWeek: 1 };
+  eq(cronToSchedule(scheduleToCron(s)), s);
+});
+test('round-trip — twice daily 9am/9pm', () => {
+  const s = { freq: 'twice', hours: [9, 21], dayOfWeek: 1 };
+  eq(cronToSchedule(scheduleToCron(s)), s);
+});
+test('round-trip — every 6 hours', () => {
+  const s = { freq: 'every6', hours: [], dayOfWeek: 1 };
+  eq(cronToSchedule(scheduleToCron(s)), s);
+});
+test('round-trip — every 12 hours', () => {
+  const s = { freq: 'every12', hours: [], dayOfWeek: 1 };
+  eq(cronToSchedule(scheduleToCron(s)), s);
+});
+test('round-trip — weekly Saturday 3pm', () => {
+  const s = { freq: 'weekly', hours: [15], dayOfWeek: 6 };
+  eq(cronToSchedule(scheduleToCron(s)), s);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

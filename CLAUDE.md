@@ -613,6 +613,32 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.14.0 (2026-05-29):** Settings cleanup + cron-free scheduler.
+
+A UX-level pass through Settings driven by the observation that the user is a non-coder who shouldn't be typing cron expressions or evaluating obscure model trade-offs. Three concurrent simplifications:
+
+1. **Cron-free scheduler.** The Scheduled Deep Scan card's cron text input + 4 preset buttons are replaced with a frequency picker (Daily / Twice daily / Every 6 hours / Every 12 hours / Weekly) and contextual time selectors (1 hour dropdown for daily; 2 for twice daily; day + hour for weekly; no extras for every-N-hours). A human-readable caption ("Twice daily — 9 AM and 9 PM") prints below the selectors. Single source of truth remains `settings.deepScanCron`; new pure helpers `scheduleToCron` and `cronToSchedule` in `src/shared/schedule.ts` translate between the cron string and picker state. Round-trip property test: `cronToSchedule(scheduleToCron(s)) === s` for all five frequencies. 23 new smoke tests cover both directions plus clamping and fallbacks.
+
+2. **Model pickers removed.** Five model pickers across the Perplexity API and Anthropic API cards are gone — `perplexityResearchModel`, `perplexityScanModel`, `model` (brief generation), `triageModel`. The right model per call site is now hardcoded:
+   - `research.ts`, `source-research.ts` → `sonar-deep-research`
+   - `signal-research.ts`, `monitor/qualify.ts`, `scanner/stage1-discovery.ts` → still uses `deepScanModel` (Stage 1 user-tunable), other call sites → `sonar-pro`
+   - `llm.ts` (brief) → `claude-opus-4-7`
+   - `monitor/triage.ts`, `scanner/stage2-qualify.ts` → `claude-sonnet-4-6`
+   The Perplexity API card now shows only the API key + recency window. The Anthropic API card shows only the API key. The "Deep scan model" picker on the Scheduled Deep Scan card stayed (it's still a real cost knob for Stage 1 discovery).
+
+3. **Two-stage deep scan toggle removed + v1.8 fallback retired.** `settings.deepScanTwoStage` is gone from the type, store, and UI. `runDeepScan()` in `scanner.ts` is now a one-liner that always calls `runDeepScanTwoStage()`. The single-stage fallback path inside `runScan({kind:'deep'})` is no longer reachable from production; the `runScan` function itself was left in place to keep this release's diff bounded (orphan-removal can happen in a follow-up). Comment in scanner.ts that warned "Do not remove the fallback until v1.10 at earliest" is now five releases stale, hence the cleanup.
+
+Additional cleanup:
+
+- `scanCron` + `scanEnabled` (the retired v1.x manual scan settings) removed from the type entirely. Scheduler comment updated.
+- Recency window caption no longer promises a future "per-brand and per-product overrides land in v1.8" feature — those overrides already shipped.
+- Settings card header renamed "Scan" → "Scheduled deep scan" to disambiguate from Live Monitor and clarify intent.
+- Scheduled-scan description rewritten to position it correctly: *"Currently the most productive lead source in LeadsHawk"* (Live Monitor is producing zero opportunities for this user; deep scan is the workhorse). Old text about *"slower and costlier than the retired v1.x manual scan"* removed — non-coder doesn't need version archaeology.
+
+Net effect on persisted settings: 5 fields removed (`model`, `triageModel`, `perplexityResearchModel`, `perplexityScanModel`, `deepScanTwoStage`, `scanCron`, `scanEnabled` — that's actually 7 if you count the two retired ones explicitly).
+
+Smoke tests: 81 → 104 passed.
+
 **v1.13.5 (2026-05-27):** Delete individual past-feedback entries.
 
 User feedback: feedback history shown in the re-research modals (signals, dossier, sources) was read-only — stale guidance kept getting re-injected into every future run, with no way to prune. Now every past entry has an inline `delete` link.
