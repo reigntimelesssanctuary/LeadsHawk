@@ -735,14 +735,42 @@ export async function runDeepScanTwoStage(): Promise<{ runId: number; created: n
       // ── Stage 1 — Perplexity discovery ───────────────────────────
       let stage1;
       try {
-        stage1 = await stage1Discovery(brand, product, settings, log);
+        stage1 = await stage1Discovery(brand, product, settings, log, 'strict');
       } catch (e: any) {
         log(`  ! Stage 1 error: ${String(e?.message || e).slice(0, 300)}`);
         continue;
       }
       log(`  Stage 1: ${stage1.candidates.length} raw candidates, ${stage1.citations.length} citations`);
+
+      // v1.16.1: when strict mode parses cleanly but returns 0 candidates,
+      // retry once with loose-mode instructions. The model is told to
+      // broaden interpretation and surface partial matches; Stage 2 keeps
+      // its strict filter so junk still gets dropped. Cost: ~$0.10-0.20
+      // extra per empty-strict product per run.
+      const { shouldAttemptLooseRetry } = await import('./scanner/stage1-discovery.js');
+      if (shouldAttemptLooseRetry(stage1)) {
+        log('  → 0 candidates from strict pass — retrying with loose-mode prompt');
+        try {
+          const looseResult = await stage1Discovery(brand, product, settings, log, 'loose');
+          // Merge: loose candidates become THE candidates; citations union
+          // so Stage 2 has the full URL set available.
+          const mergedCitations = Array.from(
+            new Set([...(stage1.citations || []), ...(looseResult.citations || [])])
+          );
+          stage1 = {
+            candidates: looseResult.candidates,
+            citations: mergedCitations,
+            raw: { strict: stage1.raw, loose: looseResult.raw },
+            parseSucceeded: looseResult.parseSucceeded
+          };
+        } catch (e: any) {
+          log(`  ! Stage 1 loose-mode retry error: ${String(e?.message || e).slice(0, 300)}`);
+          // Fall through with the original (empty) strict result.
+        }
+      }
+
       if (stage1.candidates.length === 0) {
-        log('  → 0 raw candidates from discovery — nothing to qualify');
+        log('  → 0 raw candidates after retries — nothing to qualify');
         continue;
       }
 

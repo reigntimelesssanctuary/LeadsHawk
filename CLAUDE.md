@@ -613,6 +613,38 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.16.1 (2026-05-29):** Stage 1 hardening — maxTokens bump + loose-mode fallback.
+
+Two-fix patch driven by diagnostic data from deep scan runs #30 / #31, which produced 0 opportunities across 4 product-scans for the Zyeta portfolio. Investigation showed two distinct failure modes:
+
+1. **One unparseable Stage 1 response** (Run #30 / Sustainability Consultation). sonar-deep-research entered `<think>` mode, used 22,331 completion tokens reasoning, and never emitted parseable JSON — it ran out mid-think with the 24,000-token budget set in v1.8.2. Fix: bump maxTokens 24,000 → **32,000**. Cheap insurance against the reasoning-overflow class of failure.
+
+2. **Three "parsed cleanly but 0 candidates" outcomes** (the other three product-scans). Perplexity successfully researched 48–50 sources per call and returned valid JSON with an empty candidates array — the model self-filtered to "nothing fits perfectly." This is the v1.8.x monolithic-scan failure pattern returning in a new place: Stage 1 was supposed to cast a wide net, but the strict prompt + structured schema were pushing it toward safe-and-empty.
+
+   Fix: **loose-mode retry**. When a strict Stage 1 call parses cleanly but returns 0 candidates, the orchestrator (`runDeepScanTwoStage`) automatically retries with a relaxed prompt that tells Perplexity to broaden interpretation, accept industry adjacency, and surface partial / speculative matches (target 10-20 candidates this time). Stage 2 keeps its strict filter so junk still gets dropped. Cost: ~$0.10-0.20 extra per empty-strict product per scan.
+
+**Key implementation detail — the retry is keyed by parse success, not just count:**
+
+```ts
+function shouldAttemptLooseRetry(result: Stage1Output): boolean {
+  return result.parseSucceeded && result.candidates.length === 0;
+}
+```
+
+Critical that this distinguishes "model honestly returned 0 candidates" (worth retrying with looser prompt) from "we never got valid JSON" (parse failure — retrying with a similar prompt would likely hit the same token-budget overflow). The fix for unparseable cases is the maxTokens bump in (1); loose-mode retry doesn't help there.
+
+New `parseSucceeded: boolean` field on `Stage1Output` so the orchestrator can make this distinction. Both fixes ship together so the loose-mode retry has more headroom to also succeed cleanly.
+
+**Loose-mode prompt addition** (injected only when `mode === 'loose'`):
+
+> "A previous strict pass on this same product returned ZERO candidates. Broaden your search significantly this time: treat the buying signals as ORIENTATION, not requirements. Candidates do not need to match a specific signal — they only need to plausibly fit the target customer profile. Include companies showing INDIRECT, PARTIAL, or SPECULATIVE relevance. Industry adjacency is enough. Lower your bar substantially. Surface 10–20 candidates this time even if the relevance is partial. Stage 2 will reject what doesn't hold up — your job here is REACH, not precision."
+
+**Logging:** scan run logs now show `Stage 1 (loose-mode retry) returned N candidates` and `→ 0 candidates from strict pass — retrying with loose-mode prompt` so the user can see in the diagnostic view exactly when loose mode fired and what it produced.
+
+**What this doesn't fix:** if the strict pass returns an unparseable response, we don't retry in loose mode (per the decision matrix above). The maxTokens bump alone is the fix for that case. v1.16.2+ could add a separate fallback path for unparseable strict (drop the schema, parse free-form text), but the cost-benefit is unclear until the 32K bump has had a chance to demonstrate whether unparseable becomes rare.
+
+Smoke tests: 152 → 157 passed (+5 covering the loose-mode retry decision matrix: parsed-empty → retry, parsed-non-empty → don't retry, unparsed-empty → don't retry, plus the defensive "unparsed-non-empty impossible state" case).
+
 **v1.16.0 (2026-05-29):** Outcome capture — the foundation of the learning loop.
 
 This is **Phase 1 of 3** of the long-term learning architecture (v1.16 → v1.17 → v1.18+). v1.16 ships the data-capture layer only; v1.17 will wire outcomes back into Stage 2 qualification, v1.18+ will design cross-tenant aggregation.

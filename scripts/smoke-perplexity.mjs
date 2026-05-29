@@ -1689,5 +1689,45 @@ test('timeDecayWeight — future occurrence (data clock skew) → weight = 1', (
   eq(w, 1);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.16.1 — Stage 1 loose-mode retry decision.
+//
+// MUST stay byte-identical with shouldAttemptLooseRetry in
+// src/main/scanner/stage1-discovery.ts.
+//
+// Decision matrix:
+//   parseSucceeded=true,  candidates=[]  → RETRY (loose mode)
+//   parseSucceeded=true,  candidates=[…] → DON'T retry (already have results)
+//   parseSucceeded=false, candidates=[]  → DON'T retry (parse failure ≠
+//                                          empty-result signal; loose mode
+//                                          would likely hit the same token
+//                                          budget overflow)
+// ════════════════════════════════════════════════════════════════════════
+
+function shouldAttemptLooseRetry(result) {
+  return result.parseSucceeded && result.candidates.length === 0;
+}
+
+test('shouldAttemptLooseRetry — parsed + 0 candidates → true', () => {
+  eq(shouldAttemptLooseRetry({ candidates: [], citations: [], raw: {}, parseSucceeded: true }), true);
+});
+test('shouldAttemptLooseRetry — parsed + 1 candidate → false', () => {
+  eq(shouldAttemptLooseRetry({ candidates: [{ company: 'X' }], citations: [], raw: {}, parseSucceeded: true }), false);
+});
+test('shouldAttemptLooseRetry — parsed + many candidates → false', () => {
+  const candidates = Array.from({ length: 25 }, (_, i) => ({ company: `Co${i}` }));
+  eq(shouldAttemptLooseRetry({ candidates, citations: [], raw: {}, parseSucceeded: true }), false);
+});
+test('shouldAttemptLooseRetry — unparsed + 0 candidates → false (parse failure case)', () => {
+  // Critical: this is the case where Perplexity ran out of tokens in <think>
+  // mode. A loose-mode retry would likely hit the same overflow.
+  eq(shouldAttemptLooseRetry({ candidates: [], citations: ['url1'], raw: null, parseSucceeded: false }), false);
+});
+test('shouldAttemptLooseRetry — unparsed + (impossible) some candidates → false', () => {
+  // Defensive: shouldn't happen in production but if parse failed we trust
+  // the parseSucceeded flag over the candidate count.
+  eq(shouldAttemptLooseRetry({ candidates: [{ company: 'X' }], citations: [], raw: null, parseSucceeded: false }), false);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

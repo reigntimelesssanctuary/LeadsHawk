@@ -9,6 +9,20 @@
  * constrained — asking ONE model to research + score + filter + match
  * signals + apply ICP + apply own-brand hygiene + obey scan rules at once
  * pushed it toward safe-and-empty. Stage 1 is intentionally permissive.
+ *
+ * v1.16.1: two additions to address the empty-result failure mode seen in
+ * deep scan runs #30/#31:
+ *   (1) maxTokens 24000 → 32000. sonar-deep-research's reasoning step
+ *       routinely uses 18-22K tokens; 24K left dangerously little budget
+ *       for the JSON output and we hit "unparseable response" (the model
+ *       ran out mid-think).
+ *   (2) Loose-mode retry. When a strict call parses cleanly but returns
+ *       zero candidates, the orchestrator can call stage1Discovery again
+ *       in 'loose' mode — same model + recency, broader prompt — to give
+ *       Stage 2 something to grade. shouldAttemptLooseRetry is the pure
+ *       decision helper (smoke-tested). Loose mode does NOT retry on
+ *       parse failure: that's a different failure class and retrying with
+ *       a similar prompt would likely fail the same way.
  */
 
 import { completePerplexity } from '../perplexity.js';
@@ -26,10 +40,18 @@ export type Stage1Candidate = {
   source_date?: string | null;
 };
 
+export type Stage1Mode = 'strict' | 'loose';
+
 export type Stage1Output = {
   candidates: Stage1Candidate[];
   citations: string[];
   raw: any;
+  // v1.16.1: true when the Perplexity response was JSON-parsed successfully.
+  // false on unparseable responses (typically reasoning-token overflow).
+  // The loose-mode retry decision uses this to distinguish "model honestly
+  // returned 0 candidates" (retry) from "we never got valid JSON back"
+  // (don't retry — same prompt would fail the same way).
+  parseSucceeded: boolean;
 };
 
 const STAGE1_SYSTEM = `You are a senior B2B sales-intelligence research analyst with
@@ -73,11 +95,29 @@ const STAGE1_SCHEMA = {
   }
 };
 
+/**
+ * Pure helper exposed for smoke testing AND used by the orchestrator
+ * (runDeepScanTwoStage) to decide whether a loose-mode retry is warranted.
+ *
+ * Returns true when:
+ *   - The Perplexity response parsed cleanly (parseSucceeded = true)
+ *   - AND the model returned zero candidates
+ *
+ * Returns false on:
+ *   - Parse failures (an unparseable response retrying with a similar prompt
+ *     would likely overflow tokens the same way; loose mode doesn't help)
+ *   - Non-empty results (we already have candidates to grade)
+ */
+export function shouldAttemptLooseRetry(result: Stage1Output): boolean {
+  return result.parseSucceeded && result.candidates.length === 0;
+}
+
 export async function stage1Discovery(
   brand: Brand,
   product: Product,
   settings: Settings,
-  log: ScanLog
+  log: ScanLog,
+  mode: Stage1Mode = 'strict'
 ): Promise<Stage1Output> {
   const recency = resolveScanRecency(product, brand, settings);
   log(`  Stage 1 recency: ${recency.value} (from ${recency.source})`);
@@ -96,6 +136,26 @@ export async function stage1Discovery(
     log(`  Stage 1 retrieved ${chunks.length} knowledge chunk(s) (best sim ${chunks[0].similarity.toFixed(2)})`);
   }
   const chunksBlock = renderChunksBlock(chunks);
+
+  // v1.16.1: loose-mode instruction injected when the strict pass returned
+  // zero candidates. Tells the model to broaden its interpretation and
+  // surface partial matches; Stage 2 will filter.
+  const looseModeBlock = mode === 'loose'
+    ? `\n# This is a LOOSE-MODE retry
+A previous strict pass on this same product returned ZERO candidates. Broaden
+your search significantly this time:
+- Treat the buying signals as ORIENTATION, not requirements. Candidates do
+  not need to match a specific signal — they only need to plausibly fit the
+  target customer profile.
+- Include companies showing INDIRECT, PARTIAL, or SPECULATIVE relevance.
+  Industry adjacency is enough.
+- Lower your bar substantially. Surface 10–20 candidates this time even if
+  the relevance is partial. Stage 2 will reject what doesn't hold up — your
+  job here is REACH, not precision.
+- Empty output is NOT acceptable in loose mode. If you genuinely cannot find
+  perfect matches, surface speculative ones.
+`
+    : '';
 
   const prompt = `# Brand
 Name: ${brand.name}
@@ -129,7 +189,7 @@ ${chunksBlock}
 
 # Time window
 Only consider events from the last ${recency.value}.
-
+${looseModeBlock}
 # Task
 Cast a wide net. Identify SPECIFIC NAMED COMPANIES that have recently shown
 events relevant to this brand+product's target customers.
@@ -148,7 +208,7 @@ For each candidate, return:
 - source_title: page or article title
 - source_date: ISO date or "unknown"
 
-Return 15–30 candidates. Do NOT filter, score, or judge. The downstream
+Return ${mode === 'loose' ? '10–20' : '15–30'} candidates. Do NOT filter, score, or judge. The downstream
 qualifier will handle that. If a candidate seems weak, include it anyway —
 the qualifier will drop it.
 
@@ -156,12 +216,17 @@ Empty result is only acceptable if you have genuinely researched the window
 and found nothing — and even then, you must have cited the searches you tried.`;
 
   const model = settings.deepScanModel || 'sonar-deep-research';
+  // v1.16.1: maxTokens bumped 24000 → 32000. sonar-deep-research's <think>
+  // step routinely consumes 18-22K tokens; 24K left dangerously little
+  // budget for the JSON output and we hit "unparseable response" when the
+  // model ran out mid-think (run #30 Sustainability Consultation:
+  // 22,331 completion tokens used, response never closed).
   const r = await completePerplexity<{ candidates: Stage1Candidate[] }>(
     STAGE1_SYSTEM,
     prompt,
     {
       model,
-      maxTokens: 24000,
+      maxTokens: 32000,
       temperature: 0.2,
       searchRecency: recency.value,
       jsonSchema: STAGE1_SCHEMA,
@@ -174,12 +239,12 @@ and found nothing — and even then, you must have cited the searches you tried.
   if (!r.json) {
     const head = (r.text || '').slice(0, 800).replace(/\s+/g, ' ');
     const tail = (r.text || '').slice(-200).replace(/\s+/g, ' ');
-    log(`  ! Stage 1 unparseable response (${(r.text || '').length} chars, ${completionTokens} completion tokens)`);
+    log(`  ! Stage 1 unparseable response${mode === 'loose' ? ' (loose-mode retry)' : ''} (${(r.text || '').length} chars, ${completionTokens} completion tokens)`);
     log(`    head: ${head}`);
     log(`    tail: …${tail}`);
-    return { candidates: [], citations: r.citations || [], raw: r.raw };
+    return { candidates: [], citations: r.citations || [], raw: r.raw, parseSucceeded: false };
   }
   const candidates = Array.isArray(r.json.candidates) ? r.json.candidates : [];
-  log(`  Stage 1 returned ${candidates.length} raw candidate(s), ${(r.citations || []).length} citation(s), ${completionTokens} completion tokens`);
-  return { candidates, citations: r.citations || [], raw: r.raw };
+  log(`  Stage 1${mode === 'loose' ? ' (loose-mode retry)' : ''} returned ${candidates.length} raw candidate(s), ${(r.citations || []).length} citation(s), ${completionTokens} completion tokens`);
+  return { candidates, citations: r.citations || [], raw: r.raw, parseSucceeded: true };
 }
