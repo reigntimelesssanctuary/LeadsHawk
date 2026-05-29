@@ -19,6 +19,8 @@ import { buildDisqualificationsBlock } from '../learning.js';
 import { buildOwnBrandsBlock } from '../lead-hygiene.js';
 import { getDb } from '../db.js';
 import { OPPS_SCHEMA } from '../scanner.js';
+import { getLearningSignals } from '../learning-signals.js';
+import { buildLearningPriorsBlock, applyPriorAdjustment } from '@shared/learning.js';
 import type { Brand, Product, Settings, ScanRule } from '@shared/types';
 import type { ScanLog, PplxOpportunity } from '../scanner.js';
 import type { Stage1Output, Stage1Candidate } from './stage1-discovery.js';
@@ -164,9 +166,21 @@ have an opportunity for them on this product):
 ${pipelineCompanies.map((c) => `- ${c}`).join('\n')}`
     : '';
 
+  // v1.17.0 — learning loop. Read aggregated close rates and synthesize a
+  // priors block to bias Sonnet toward patterns that have historically
+  // converted, and away from patterns that haven't. Empty string when
+  // we don't yet have any dimension that meets the 5W/5L threshold —
+  // cold start degrades gracefully to no-op.
+  const learnings = getLearningSignals();
+  const learningPriorsBlock = buildLearningPriorsBlock(learnings);
+  if (learningPriorsBlock) {
+    const informingCount = learnings.filter((l) => l.meets_threshold).length;
+    log(`  Stage 2 learning priors active: ${informingCount} informing dimension(s)`);
+  }
+
   const rawList = formatRawCandidates(stage1.candidates);
 
-  const prompt = `# Brand
+  const prompt = `${learningPriorsBlock}# Brand
 Name: ${brand.name}
 Category: ${brand.category || '(unspecified)'}
 Description: ${brand.description || '(none on file)'}
@@ -281,5 +295,35 @@ Return strict JSON of the form:
     const sample = rejected.slice(0, 3).map((r) => `      • ${r.company}: ${r.reason}`).join('\n');
     log(`    rejection sample:\n${sample}`);
   }
+
+  // v1.17.0 — apply the per-candidate confidence adjustment based on
+  // matched learning dimensions. Capped at ±0.15 by default; learning
+  // nudges, never overrides. If no learnings apply (cold start) this is
+  // a complete no-op — the function returns the input unchanged.
+  let adjustedCount = 0;
+  let upCount = 0;
+  let downCount = 0;
+  for (const opp of opportunities) {
+    const result = applyPriorAdjustment(
+      Number(opp.confidence ?? 0),
+      {
+        product_id: product.id,
+        industry: opp.industry ?? null,
+        confidence: Number(opp.confidence ?? 0),
+        matched_signal: opp.matched_signal ?? null
+      },
+      learnings
+    );
+    if (result.matches.length > 0) {
+      adjustedCount++;
+      if (result.capped > 0) upCount++;
+      else if (result.capped < 0) downCount++;
+      opp.confidence = result.adjusted;
+    }
+  }
+  if (adjustedCount > 0) {
+    log(`  Stage 2 learning adjusted ${adjustedCount} candidate confidence(s) (↑${upCount} ↓${downCount})`);
+  }
+
   return { opportunities, rejected };
 }

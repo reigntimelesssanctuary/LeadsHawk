@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { StatCard } from '../components/StatCard';
 import type { DashboardStats, Opportunity, Brand, Product } from '../../../shared/types';
 import { fmtDate, fmtDateShort, openExternal } from '../lib/api';
-import { Trash2, Download, ArrowUp, ArrowDown, AlertTriangle } from 'lucide-react';
+import { Trash2, Download, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronRight, Brain } from 'lucide-react';
 
 // v1.16.0 — pipeline summary from the state cache (events.ts/getPipelineSummary).
 type PipelineSummary = {
@@ -15,6 +15,26 @@ type PipelineSummary = {
   win_rate: number | null;
   closed_this_month: number;
   won_this_month_value: number;
+};
+
+// v1.17.0 — learning status from main/learning-signals.ts.
+type LearningStatus = {
+  total_outcomes_observed: number;
+  total_dimensions_tracked: number;
+  informing_dimensions: number;
+  by_dimension: Array<{
+    dimension: string;
+    label: string;
+    total_rows: number;
+    informing_rows: number;
+    sample_top: Array<{
+      dimension_value: string;
+      n_closed_won: number;
+      n_closed_lost: number;
+      smoothed_close_rate: number;
+      meets_threshold: boolean;
+    }>;
+  }>;
 };
 
 type ScanType = 'Manual Scan' | 'Live Monitor';
@@ -79,15 +99,18 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   // v1.16.0 — pipeline summary + stale-id set for the lifecycle widgets.
   const [pipeline, setPipeline] = useState<PipelineSummary | null>(null);
   const [staleIds, setStaleIds] = useState<Set<number>>(new Set());
+  // v1.17.0 — learning status (per-dimension counts + informing rows).
+  const [learning, setLearning] = useState<LearningStatus | null>(null);
 
   const refresh = async () => {
-    const [s, list, bs, ps, pipe, stale] = await Promise.all([
+    const [s, list, bs, ps, pipe, stale, learn] = await Promise.all([
       window.lh.dashboard.stats(),
       window.lh.opps.list('open'),
       window.lh.brands.list(),
       window.lh.products.list(),
       window.lh.pipeline.summary().catch(() => null),
-      window.lh.pipeline.staleIds(14).catch(() => [] as number[])
+      window.lh.pipeline.staleIds(14).catch(() => [] as number[]),
+      window.lh.learning.status().catch(() => null)
     ]);
     setStats(s);
     setOpps(list);
@@ -95,6 +118,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
     setProducts(ps);
     setPipeline(pipe);
     setStaleIds(new Set(stale));
+    setLearning(learn);
     setSelected((prev) => {
       const liveIds = new Set(list.map((o: Opportunity) => o.id));
       const next = new Set<number>();
@@ -304,6 +328,11 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
         <StatCard label="Qualified" value={stats?.qualified ?? 0} chip="Qualified" chipKind="qualified" />
         <StatCard label="Disqualified" value={stats?.disqualified ?? 0} chip="Disqualified" chipKind="disqualified" />
       </div>
+
+      {/* v1.17.0 — Learning status card. Surfaces what the learning loop
+          knows so far, which dimensions are informing scoring, and which
+          are still too thin to weigh in. Collapsible. */}
+      <LearningStatusCard status={learning} />
 
       <div className="card" style={{ padding: 20, marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
@@ -603,6 +632,117 @@ function PipelineCard({
         <div style={{ fontSize: 28, fontWeight: 700, color: '#111827', lineHeight: 1 }}>{value}</div>
         <span className={`chip chip-${chipKind}`} style={{ fontSize: 11 }}>{sub}</span>
       </div>
+    </div>
+  );
+}
+
+// v1.17.0 — Learning status card. Surfaces what the learning loop knows
+// so far, which dimensions are informing scoring, and which are still
+// too thin. Collapsible; collapsed by default to keep the Dashboard quiet
+// for users in cold-start phase.
+function LearningStatusCard({ status }: { status: LearningStatus | null }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!status) return null;
+
+  const informing = status.informing_dimensions;
+  const total = status.total_dimensions_tracked;
+  const outcomes = status.total_outcomes_observed;
+
+  // Headline summary line — varies by maturity.
+  const headline = (() => {
+    if (outcomes === 0) {
+      return 'No outcomes captured yet. Mark opportunities Closed-won or Closed-lost on Opportunity Detail to start training the learning loop.';
+    }
+    if (informing === 0) {
+      return `Tracking ${total} dimension/value combinations across ${outcomes} closed deals. None yet meet the ≥5 won AND ≥5 lost threshold to influence scoring.`;
+    }
+    return `Tracking ${total} dimension/value combinations across ${outcomes} closed deals. ${informing} ${informing === 1 ? 'dimension is' : 'dimensions are'} currently influencing Stage 2 scoring (±0.15 cap).`;
+  })();
+
+  return (
+    <div className="card" style={{ padding: 20, marginTop: 20 }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', width: '100%', textAlign: 'left' }}
+      >
+        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        <Brain size={16} style={{ color: '#6c5cf2' }} />
+        <span className="h-card" style={{ flex: 1 }}>Learning status</span>
+        {outcomes > 0 && (
+          <span className={`chip ${informing > 0 ? 'chip-qualified' : 'chip-muted'}`} style={{ fontSize: 11 }}>
+            {informing > 0 ? `${informing} informing` : 'cold start'}
+          </span>
+        )}
+      </button>
+      <div style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>{headline}</div>
+
+      {expanded && status.by_dimension.length > 0 && (
+        <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {status.by_dimension.map((dim) => (
+            <div key={dim.dimension} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{dim.label}</span>
+                <span style={{ fontSize: 12, color: '#6b7280' }}>
+                  {dim.total_rows} value{dim.total_rows === 1 ? '' : 's'} tracked
+                </span>
+                {dim.informing_rows > 0 && (
+                  <span className="chip chip-qualified" style={{ fontSize: 10 }}>
+                    {dim.informing_rows} informing
+                  </span>
+                )}
+              </div>
+              {dim.sample_top.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {dim.sample_top.map((row) => {
+                    const pct = Math.round(row.smoothed_close_rate * 100);
+                    return (
+                      <div
+                        key={row.dimension_value}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          fontSize: 12,
+                          color: '#1f2937',
+                          padding: '3px 0'
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            minWidth: 38,
+                            textAlign: 'right',
+                            fontVariantNumeric: 'tabular-nums',
+                            color: row.meets_threshold ? '#111827' : '#9ca3af',
+                            fontWeight: 600
+                          }}
+                        >
+                          {pct}%
+                        </span>
+                        <span style={{ flex: 1, color: row.meets_threshold ? '#1f2937' : '#9ca3af' }}>
+                          {row.dimension_value}
+                        </span>
+                        <span style={{ color: '#6b7280', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                          {row.n_closed_won}W / {row.n_closed_lost}L
+                        </span>
+                        {!row.meets_threshold && (
+                          <span className="chip chip-muted" style={{ fontSize: 10 }} title="Need ≥5 won AND ≥5 lost to influence scoring">
+                            too thin
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>
+                  No outcomes yet.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

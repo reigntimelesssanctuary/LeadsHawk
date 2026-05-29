@@ -9,6 +9,7 @@ import { getSettings } from './settings.js';
 import { getDb } from './db.js';
 import { backfillKnowledgeIndex } from './knowledge-index.js';
 import { backfillCreatedEvents } from './events.js';
+import { recomputeAllLearningSignals } from './learning-signals.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -56,6 +57,15 @@ app.whenReady().then(() => {
     if (n > 0) console.log(`[v1.16] backfilled ${n} created events`);
   } catch (e: any) {
     console.warn('[v1.16] created-event backfill failed:', e?.message || e);
+  }
+  // v1.17.0: rebuild the learning_signals table at startup so any closed
+  // outcomes that landed between sessions are reflected immediately.
+  // Idempotent — wipes + repopulates from the event log + state cache.
+  try {
+    const n = recomputeAllLearningSignals();
+    console.log(`[v1.17] learning_signals rebuilt: ${n} dimension/value rows`);
+  } catch (e: any) {
+    console.warn('[v1.17] learning rebuild failed:', e?.message || e);
   }
   startScheduler();
   // Resume live monitor if the user had it on

@@ -25,6 +25,7 @@ import {
   getPipelineSummary,
   getStaleOpportunityIds
 } from './events.js';
+import { getLearningStatusSummary } from './learning-signals.js';
 import type { EventType, ActorKind } from '@shared/lifecycle.js';
 import type { MonitorSource, SignalItem, SourceHealth, Opportunity } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
@@ -622,6 +623,8 @@ export function registerIpc() {
   ipcMain.handle('pipeline:staleIds', (_e, thresholdDays: number = 14) =>
     getStaleOpportunityIds(thresholdDays)
   );
+  // v1.17.0 — learning loop status for the Dashboard's "Learning status" card.
+  ipcMain.handle('learning:status', () => getLearningStatusSummary());
 
   ipcMain.handle('openExternal', (_e, url: string) => {
     shell.openExternal(url);

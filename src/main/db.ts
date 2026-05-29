@@ -398,6 +398,53 @@ function migrate(db: Database.Database) {
   // (learning_signals, etc.) but the parent gets it now so foreign-key
   // joins land on a tenant-aware boundary from day one.
   addColumnIfMissing(db, 'opportunities', 'tenant_id', 'INTEGER NOT NULL DEFAULT 1');
+
+  // v1.17.0 — learning loop. Per-dimension aggregates of closed-won / lost
+  // outcomes. Rebuilt from scratch by recomputeAllLearningSignals() (in
+  // src/main/learning-signals.ts) whenever an outcome event lands or at
+  // app startup. The dimension+value pair is the natural key per tenant;
+  // counts and smoothed/CI estimates are precomputed on write so Stage 2
+  // doesn't pay math at scan time.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS learning_signals (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id            INTEGER NOT NULL DEFAULT 1,
+      dimension            TEXT NOT NULL,
+      dimension_value      TEXT NOT NULL,
+      n_closed_won         INTEGER NOT NULL DEFAULT 0,
+      n_closed_lost        INTEGER NOT NULL DEFAULT 0,
+      sum_close_value      REAL NOT NULL DEFAULT 0,
+      smoothed_close_rate  REAL NOT NULL DEFAULT 0,
+      raw_close_rate       REAL NOT NULL DEFAULT 0,
+      ci_low               REAL NOT NULL DEFAULT 0,
+      ci_high              REAL NOT NULL DEFAULT 1,
+      meets_threshold      INTEGER NOT NULL DEFAULT 0,
+      last_recomputed_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, dimension, dimension_value)
+    );
+    CREATE INDEX IF NOT EXISTS idx_learning_dimension
+      ON learning_signals(tenant_id, dimension, meets_threshold);
+  `);
+
+  // v1.17.0 — external_priors schema, populated in v1.18+ by the central
+  // service. Each row is an anonymized aggregated stat from ≥k tenants
+  // (k_anonymity threshold = 5). v1.17 doesn't read or write to this
+  // table; it exists so v1.18 can add the federated layer without a
+  // schema migration. The Bayesian blend that combines local +
+  // external priors lives in shared/learning.ts and is dormant until
+  // there are external rows to consume.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS external_priors (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      dimension         TEXT NOT NULL,
+      dimension_value   TEXT NOT NULL,
+      close_rate        REAL NOT NULL,
+      n_tenants         INTEGER NOT NULL,
+      total_n           INTEGER NOT NULL,
+      received_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(dimension, dimension_value)
+    );
+  `);
 }
 
 function addColumnIfMissing(

@@ -1729,5 +1729,388 @@ test('shouldAttemptLooseRetry — unparsed + (impossible) some candidates → fa
   eq(shouldAttemptLooseRetry({ candidates: [{ company: 'X' }], citations: [], raw: null, parseSucceeded: false }), false);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.17.0 — learning loop math (src/shared/learning.ts).
+//
+// MUST stay byte-identical with production. These functions drive:
+//   - smoothedCloseRate: Bayesian smoothing toward a 20% prior so small
+//     samples don't lie ("1/1 won" smooths to 33%, not 100%)
+//   - wilsonScoreInterval: 95% CI on the raw rate so UI can show width
+//   - meetsLearningThreshold: cold-start gate (≥5 won AND ≥5 lost)
+//   - extractDimensions: which (dim, value) pairs an opportunity scores
+//     against (product_id, industry, matched_signal, confidence_bucket)
+//   - findRelevantLearnings: which learned rows fire for a candidate
+//   - applyPriorAdjustment: capped confidence delta (±0.15 default)
+//   - buildLearningPriorsBlock: the Stage 2 prompt block (empty when
+//     no dimension meets threshold — cold start = no-op)
+// ════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_BAYESIAN_ALPHA = 1;
+const DEFAULT_BAYESIAN_BETA = 4;
+const MIN_SAMPLES_FOR_THRESHOLD = 5;
+const MAX_PRIOR_ADJUSTMENT = 0.15;
+const BASELINE_CLOSE_RATE = 0.2;
+const MAX_PRIOR_ROWS_IN_PROMPT = 10;
+const DIMENSION_LABELS = {
+  product_id: 'Product',
+  industry: 'Industry',
+  matched_signal: 'Signal type',
+  confidence_bucket: 'Initial confidence'
+};
+
+function smoothedCloseRate(nWon, nLost, alpha = DEFAULT_BAYESIAN_ALPHA, beta = DEFAULT_BAYESIAN_BETA) {
+  if (alpha < 0 || beta < 0 || nWon < 0 || nLost < 0) return 0;
+  const denom = alpha + beta + nWon + nLost;
+  if (denom === 0) return 0;
+  return (alpha + nWon) / denom;
+}
+
+function wilsonScoreInterval(nWon, nTotal, confidence = 0.95) {
+  if (nTotal === 0) return { lower: 0, upper: 1 };
+  if (nWon < 0 || nWon > nTotal) return { lower: 0, upper: 1 };
+  const z = confidence >= 0.99 ? 2.576
+          : confidence >= 0.95 ? 1.96
+          : confidence >= 0.90 ? 1.645
+          : 1.96;
+  const p = nWon / nTotal;
+  const z2 = z * z;
+  const denominator = 1 + z2 / nTotal;
+  const centre = (p + z2 / (2 * nTotal)) / denominator;
+  const margin = (z * Math.sqrt((p * (1 - p) + z2 / (4 * nTotal)) / nTotal)) / denominator;
+  return {
+    lower: Math.max(0, centre - margin),
+    upper: Math.min(1, centre + margin)
+  };
+}
+
+function meetsLearningThreshold(row) {
+  return row.n_closed_won >= MIN_SAMPLES_FOR_THRESHOLD &&
+         row.n_closed_lost >= MIN_SAMPLES_FOR_THRESHOLD;
+}
+
+function extractDimensions(input) {
+  const dims = [];
+  if (typeof input.product_id === 'number' && input.product_id > 0) {
+    dims.push({ dimension: 'product_id', dimension_value: String(input.product_id) });
+  }
+  if (typeof input.industry === 'string' && input.industry.trim()) {
+    dims.push({ dimension: 'industry', dimension_value: input.industry.trim() });
+  }
+  const conf = typeof input.confidence === 'number' ? input.confidence : 0;
+  let bucket;
+  if (conf >= 0.75) bucket = 'high';
+  else if (conf >= 0.55) bucket = 'medium';
+  else bucket = 'low';
+  dims.push({ dimension: 'confidence_bucket', dimension_value: bucket });
+  let matched = typeof input.matched_signal === 'string' ? input.matched_signal.trim() : '';
+  if (!matched && typeof input.raw_signal === 'string') {
+    try {
+      const parsed = JSON.parse(input.raw_signal);
+      if (parsed && typeof parsed.matched_signal === 'string') {
+        matched = parsed.matched_signal.trim();
+      }
+    } catch { /* skip */ }
+  }
+  if (matched) {
+    dims.push({ dimension: 'matched_signal', dimension_value: matched });
+  }
+  return dims;
+}
+
+function findRelevantLearnings(candidate, learnings) {
+  const dims = extractDimensions({
+    product_id: candidate.product_id ?? null,
+    industry: candidate.industry ?? null,
+    confidence: candidate.confidence,
+    matched_signal: candidate.matched_signal ?? null
+  });
+  const keys = new Set(dims.map((d) => `${d.dimension}::${d.dimension_value}`));
+  return learnings.filter(
+    (l) => l.meets_threshold && keys.has(`${l.dimension}::${l.dimension_value}`)
+  );
+}
+
+function applyPriorAdjustment(rawConfidence, candidate, learnings, cap = MAX_PRIOR_ADJUSTMENT) {
+  const matches = findRelevantLearnings(candidate, learnings);
+  if (matches.length === 0) {
+    return { adjusted: rawConfidence, rawAdjustment: 0, capped: 0, matches: [] };
+  }
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const m of matches) {
+    const weight = Math.log(1 + m.n_closed_won + m.n_closed_lost);
+    const delta = m.smoothed_close_rate - BASELINE_CLOSE_RATE;
+    weightedSum += delta * weight;
+    totalWeight += weight;
+  }
+  const avgDelta = totalWeight > 0 ? weightedSum / totalWeight : 0;
+  const normalized = Math.max(-1, Math.min(1, avgDelta / 0.4));
+  const rawAdjustment = normalized * cap;
+  const capped = Math.max(-cap, Math.min(cap, rawAdjustment));
+  const adjusted = Math.max(0, Math.min(1, rawConfidence + capped));
+  return { adjusted, rawAdjustment, capped, matches };
+}
+
+function buildLearningPriorsBlock(learnings) {
+  const informing = learnings.filter((l) => l.meets_threshold);
+  if (informing.length === 0) return '';
+  const sorted = [...informing].sort(
+    (a, b) =>
+      Math.abs(b.smoothed_close_rate - BASELINE_CLOSE_RATE) -
+      Math.abs(a.smoothed_close_rate - BASELINE_CLOSE_RATE)
+  );
+  const top = sorted.slice(0, MAX_PRIOR_ROWS_IN_PROMPT);
+  const positives = top.filter((l) => l.smoothed_close_rate > 0.4);
+  const negatives = top.filter((l) => l.smoothed_close_rate < 0.15);
+  const neutral = top.filter((l) => l.smoothed_close_rate >= 0.15 && l.smoothed_close_rate <= 0.4);
+  if (positives.length === 0 && negatives.length === 0 && neutral.length === 0) return '';
+  let block = '# Historical performance (priors from your closed deals)\n\n';
+  block += 'These patterns come from REAL outcomes in this portfolio, not the model\'s\ntraining data. Weight them heavily when deciding fit and confidence.\n\n';
+  if (positives.length > 0) {
+    block += 'Patterns that have CLOSED-WON well for this portfolio:\n';
+    for (const p of positives) {
+      const label = DIMENSION_LABELS[p.dimension] || p.dimension;
+      const pct = Math.round(p.smoothed_close_rate * 100);
+      block += `  - ${label}: "${p.dimension_value}" — ${p.n_closed_won}/${p.n_closed_won + p.n_closed_lost} closed-won (${pct}% smoothed rate)\n`;
+    }
+    block += '\n';
+  }
+  if (negatives.length > 0) {
+    block += 'Patterns that have CLOSED-LOST often for this portfolio:\n';
+    for (const n of negatives) {
+      const label = DIMENSION_LABELS[n.dimension] || n.dimension;
+      const pct = Math.round(n.smoothed_close_rate * 100);
+      block += `  - ${label}: "${n.dimension_value}" — ${n.n_closed_won}/${n.n_closed_won + n.n_closed_lost} closed-won (${pct}% smoothed rate)\n`;
+    }
+    block += '\n';
+  }
+  block += 'GUIDANCE: if the new candidate shares POSITIVE patterns above, lean toward\nqualifying with confidence in the 0.65-0.85 range unless evidence is weak. If\nit shares NEGATIVE patterns, lean toward rejecting unless the rest of the\nevidence is exceptional. The downstream confidence adjuster will apply a\nsmall (±0.15) correction on top of your scoring — your job is the structural\nqualification call; the adjuster handles the magnitude tuning.\n\n';
+  return block;
+}
+
+// Helpers for building test learning rows.
+function mkLearning(dimension, value, won, lost, meets = null) {
+  const total = won + lost;
+  const smoothed = smoothedCloseRate(won, lost);
+  const ci = wilsonScoreInterval(won, total);
+  return {
+    dimension,
+    dimension_value: value,
+    n_closed_won: won,
+    n_closed_lost: lost,
+    sum_close_value: 0,
+    smoothed_close_rate: smoothed,
+    raw_close_rate: total > 0 ? won / total : 0,
+    ci_low: ci.lower,
+    ci_high: ci.upper,
+    meets_threshold: meets !== null ? meets : meetsLearningThreshold({ n_closed_won: won, n_closed_lost: lost })
+  };
+}
+
+// smoothedCloseRate ────────────────────────────────────────────────────
+test('smoothedCloseRate — zero observations → prior mean 0.2', () => {
+  eq(smoothedCloseRate(0, 0), 0.2);
+});
+test('smoothedCloseRate — 1 won, 0 lost → 33% (not 100%)', () => {
+  const r = smoothedCloseRate(1, 0);
+  truthy(Math.abs(r - 1/3) < 1e-6, `got ${r}`);
+});
+test('smoothedCloseRate — 10 won, 0 lost → ~73% (not 100%)', () => {
+  const r = smoothedCloseRate(10, 0);
+  truthy(Math.abs(r - 11/15) < 1e-6, `got ${r}`);
+});
+test('smoothedCloseRate — 0 won, 10 lost → ~7% (not 0%)', () => {
+  const r = smoothedCloseRate(0, 10);
+  truthy(Math.abs(r - 1/15) < 1e-6, `got ${r}`);
+});
+test('smoothedCloseRate — balanced large sample approaches raw rate', () => {
+  // 50 won, 50 lost, raw rate 0.5. Smoothed = (1+50)/(5+100) = 51/105 ≈ 0.486
+  const r = smoothedCloseRate(50, 50);
+  truthy(Math.abs(r - 51/105) < 1e-6);
+});
+test('smoothedCloseRate — negative input defended', () => {
+  eq(smoothedCloseRate(-1, 5), 0);
+});
+
+// wilsonScoreInterval ──────────────────────────────────────────────────
+test('wilsonScoreInterval — zero samples → [0, 1]', () => {
+  const ci = wilsonScoreInterval(0, 0);
+  eq(ci.lower, 0);
+  eq(ci.upper, 1);
+});
+test('wilsonScoreInterval — narrows as n grows', () => {
+  const ci10 = wilsonScoreInterval(5, 10);
+  const ci100 = wilsonScoreInterval(50, 100);
+  const ci1000 = wilsonScoreInterval(500, 1000);
+  const w10 = ci10.upper - ci10.lower;
+  const w100 = ci100.upper - ci100.lower;
+  const w1000 = ci1000.upper - ci1000.lower;
+  truthy(w10 > w100 && w100 > w1000, `expected narrowing: ${w10}, ${w100}, ${w1000}`);
+});
+test('wilsonScoreInterval — 100% raw rate has upper bound = 1', () => {
+  const ci = wilsonScoreInterval(10, 10);
+  eq(ci.upper, 1);
+  truthy(ci.lower < 1);
+});
+
+// meetsLearningThreshold ───────────────────────────────────────────────
+test('meetsThreshold — 5W/5L → true (exactly at floor)', () => {
+  eq(meetsLearningThreshold({ n_closed_won: 5, n_closed_lost: 5 }), true);
+});
+test('meetsThreshold — 4W/10L → false (won below floor)', () => {
+  eq(meetsLearningThreshold({ n_closed_won: 4, n_closed_lost: 10 }), false);
+});
+test('meetsThreshold — 10W/4L → false (lost below floor)', () => {
+  // This is the asymmetry that matters: you need BOTH sides to know
+  // whether a pattern works. 10/10/0 looks promising but until you've
+  // seen 5 losses you can't be sure.
+  eq(meetsLearningThreshold({ n_closed_won: 10, n_closed_lost: 4 }), false);
+});
+test('meetsThreshold — 0/0 → false', () => {
+  eq(meetsLearningThreshold({ n_closed_won: 0, n_closed_lost: 0 }), false);
+});
+
+// extractDimensions ────────────────────────────────────────────────────
+test('extractDimensions — full input → 4 dims', () => {
+  const dims = extractDimensions({
+    product_id: 7,
+    industry: 'Fintech',
+    confidence: 0.65,
+    matched_signal: 'CISO departure'
+  });
+  eq(dims.length, 4);
+  truthy(dims.some((d) => d.dimension === 'product_id' && d.dimension_value === '7'));
+  truthy(dims.some((d) => d.dimension === 'industry' && d.dimension_value === 'Fintech'));
+  truthy(dims.some((d) => d.dimension === 'confidence_bucket' && d.dimension_value === 'medium'));
+  truthy(dims.some((d) => d.dimension === 'matched_signal' && d.dimension_value === 'CISO departure'));
+});
+test('extractDimensions — confidence bucket boundaries', () => {
+  eq(extractDimensions({ confidence: 0.74 }).find((d) => d.dimension === 'confidence_bucket').dimension_value, 'medium');
+  eq(extractDimensions({ confidence: 0.75 }).find((d) => d.dimension === 'confidence_bucket').dimension_value, 'high');
+  eq(extractDimensions({ confidence: 0.54 }).find((d) => d.dimension === 'confidence_bucket').dimension_value, 'low');
+  eq(extractDimensions({ confidence: 0.55 }).find((d) => d.dimension === 'confidence_bucket').dimension_value, 'medium');
+});
+test('extractDimensions — falls back to raw_signal JSON for matched_signal', () => {
+  const dims = extractDimensions({
+    product_id: 3,
+    raw_signal: JSON.stringify({ matched_signal: 'lease renewal' })
+  });
+  truthy(dims.some((d) => d.dimension === 'matched_signal' && d.dimension_value === 'lease renewal'));
+});
+test('extractDimensions — missing optional fields skip cleanly', () => {
+  const dims = extractDimensions({ confidence: 0.6 });
+  // Only confidence_bucket should appear.
+  eq(dims.length, 1);
+  eq(dims[0].dimension, 'confidence_bucket');
+});
+
+// findRelevantLearnings ────────────────────────────────────────────────
+test('findRelevantLearnings — no learnings → empty', () => {
+  const r = findRelevantLearnings({ product_id: 1, confidence: 0.6 }, []);
+  eq(r.length, 0);
+});
+test('findRelevantLearnings — non-informing rows ignored', () => {
+  // Too-thin row: only 3 won / 3 lost. Should NOT fire even though product matches.
+  const learnings = [mkLearning('product_id', '1', 3, 3)];
+  const r = findRelevantLearnings({ product_id: 1, confidence: 0.6 }, learnings);
+  eq(r.length, 0);
+});
+test('findRelevantLearnings — informing row matches candidate dimension', () => {
+  const learnings = [
+    mkLearning('product_id', '1', 7, 6),
+    mkLearning('industry', 'OtherIndustry', 10, 10)
+  ];
+  const r = findRelevantLearnings({ product_id: 1, industry: 'Fintech', confidence: 0.6 }, learnings);
+  // Only product_id=1 should match — industry is OtherIndustry, not Fintech.
+  eq(r.length, 1);
+  eq(r[0].dimension, 'product_id');
+});
+
+// applyPriorAdjustment ─────────────────────────────────────────────────
+test('applyPriorAdjustment — no matches → no-op (cold start safe)', () => {
+  const r = applyPriorAdjustment(0.65, { product_id: 1, confidence: 0.65 }, []);
+  eq(r.adjusted, 0.65);
+  eq(r.capped, 0);
+});
+test('applyPriorAdjustment — positive pattern lifts confidence', () => {
+  // Strong won-pattern: 20/5 → smoothed ≈ 0.7, well above 0.2 baseline.
+  const learnings = [mkLearning('industry', 'Fintech', 20, 5)];
+  const r = applyPriorAdjustment(0.55, { industry: 'Fintech', confidence: 0.55 }, learnings);
+  truthy(r.adjusted > 0.55, `expected lift, got ${r.adjusted}`);
+  truthy(r.capped > 0);
+});
+test('applyPriorAdjustment — negative pattern lowers confidence', () => {
+  // Strong lost-pattern with sample passing threshold: 5W/50L → meets
+  // ≥5W AND ≥5L gate, smoothed ≈ 0.10 (well below 0.2 baseline).
+  const learnings = [mkLearning('industry', 'Retail', 5, 50)];
+  const r = applyPriorAdjustment(0.6, { industry: 'Retail', confidence: 0.6 }, learnings);
+  truthy(r.adjusted < 0.6, `expected drop, got ${r.adjusted}`);
+  truthy(r.capped < 0);
+});
+test('applyPriorAdjustment — cap enforces maximum magnitude', () => {
+  // Pathological: many strong matches all pointing the same way.
+  const learnings = [
+    mkLearning('industry', 'X', 50, 0),
+    mkLearning('product_id', '1', 50, 0),
+    mkLearning('matched_signal', 'win signal', 50, 0)
+  ];
+  const r = applyPriorAdjustment(0.5, {
+    industry: 'X',
+    product_id: 1,
+    matched_signal: 'win signal',
+    confidence: 0.5
+  }, learnings);
+  // capped must not exceed ±0.15
+  truthy(Math.abs(r.capped) <= 0.15 + 1e-9, `capped=${r.capped} exceeded ±0.15`);
+});
+test('applyPriorAdjustment — confidence stays within [0, 1] after adjustment', () => {
+  const learnings = [mkLearning('industry', 'X', 50, 0)];
+  const r1 = applyPriorAdjustment(0.95, { industry: 'X', confidence: 0.95 }, learnings);
+  truthy(r1.adjusted <= 1);
+  const r2 = applyPriorAdjustment(0.05, { industry: 'X', confidence: 0.05 }, [mkLearning('industry', 'X', 0, 50)]);
+  truthy(r2.adjusted >= 0);
+});
+
+// buildLearningPriorsBlock ─────────────────────────────────────────────
+test('buildLearningPriorsBlock — no learnings → empty string (cold start)', () => {
+  eq(buildLearningPriorsBlock([]), '');
+});
+test('buildLearningPriorsBlock — only non-informing rows → empty string', () => {
+  const block = buildLearningPriorsBlock([
+    mkLearning('industry', 'X', 3, 3),
+    mkLearning('product_id', '1', 4, 4)
+  ]);
+  eq(block, '');
+});
+test('buildLearningPriorsBlock — positive pattern surfaces in block', () => {
+  const block = buildLearningPriorsBlock([
+    mkLearning('industry', 'Fintech', 20, 5)
+  ]);
+  truthy(block.includes('CLOSED-WON well'), `expected positive section, got: ${block.slice(0, 200)}`);
+  truthy(block.includes('Fintech'));
+});
+test('buildLearningPriorsBlock — negative pattern surfaces in block', () => {
+  // 5W/50L → meets threshold AND has smoothed ≈ 0.10 (well below the
+  // 0.15 cutoff used for negatives in the prompt block).
+  const block = buildLearningPriorsBlock([
+    mkLearning('industry', 'Retail', 5, 50)
+  ]);
+  truthy(block.includes('CLOSED-LOST often'), `expected negatives section, got: ${block.slice(0, 300)}`);
+  truthy(block.includes('Retail'));
+});
+test('buildLearningPriorsBlock — caps at top K most-informative rows', () => {
+  // Build 15 informing rows; only top 10 should appear in the block.
+  const rows = [];
+  for (let i = 0; i < 15; i++) {
+    // Vary the rate so absolute-distance-from-baseline ordering picks
+    // the strongest signals first.
+    rows.push(mkLearning('industry', `Industry${i}`, 10 + i, 5));
+  }
+  const block = buildLearningPriorsBlock(rows);
+  // Count occurrences of "Industry" labels in the block.
+  const matches = block.match(/Industry\d+/g) || [];
+  truthy(matches.length <= 10, `expected ≤10 rows surfaced, got ${matches.length}`);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

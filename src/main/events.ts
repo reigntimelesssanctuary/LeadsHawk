@@ -22,6 +22,7 @@
 
 import { getDb } from './db.js';
 import { embedText } from './monitor/embed.js';
+import { recomputeAllLearningSignals } from './learning-signals.js';
 import {
   projectOpportunityState,
   eventValidator,
@@ -30,6 +31,12 @@ import {
   type OpportunityEvent,
   type ActorKind
 } from '@shared/lifecycle.js';
+
+// v1.17.0: events that resolve (or unresolve) an outcome trigger a
+// learning_signals recompute. recomputeAllLearningSignals is cheap
+// (~50ms even on portfolios with hundreds of closed deals) so we don't
+// bother with incremental updates.
+const RECOMPUTE_LEARNING_TYPES: EventType[] = ['closed_won', 'closed_lost', 'reopened'];
 
 // Events that get embedded at record time so v1.17 RAG retrieval can
 // later find semantically similar past outcomes when scoring a new
@@ -97,6 +104,19 @@ export async function appendEvent(input: AppendEventInput): Promise<OpportunityE
   // Rebuild derived state + sync the legacy opportunities.status.
   rebuildStateCache(input.opportunityId);
   syncOpportunityStatus(input.opportunityId);
+
+  // v1.17.0: recompute the learning aggregates when an outcome resolves
+  // or unresolves. Non-fatal: if the recompute throws, the event is
+  // still persisted and the state cache is consistent — just the
+  // learning_signals table is stale until the next trigger.
+  if (RECOMPUTE_LEARNING_TYPES.includes(input.eventType)) {
+    try {
+      const n = recomputeAllLearningSignals();
+      console.log(`[learning] recomputed ${n} dimension/value rows after ${input.eventType}`);
+    } catch (e: any) {
+      console.warn('[learning] recompute failed:', e?.message || e);
+    }
+  }
 
   return db.prepare('SELECT * FROM opportunity_events WHERE id = ?').get(eventId) as OpportunityEvent;
 }

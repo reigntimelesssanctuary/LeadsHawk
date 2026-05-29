@@ -120,6 +120,10 @@ const api = {
     staleIds: (thresholdDays: number = 14) =>
       ipcRenderer.invoke('pipeline:staleIds', thresholdDays)
   },
+  // v1.17.0: learning loop status (per-dimension counts + informing rows).
+  learning: {
+    status: () => ipcRenderer.invoke('learning:status')
+  },
   spend: {
     summary: () => ipcRenderer.invoke('spend:summary')
   },

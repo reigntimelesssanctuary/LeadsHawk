@@ -613,6 +613,75 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.17.0 (2026-05-29):** Learning loop — phase 2 of the three-phase architecture.
+
+v1.16 captured outcomes. v1.17 reads them and feeds them back into Stage 2 qualification scoring. v1.18+ will add cross-tenant aggregation.
+
+**Architecture:**
+
+- `learning_signals` table — per-dimension aggregates of close rates, smoothed via Bayesian prior, with Wilson 95% CIs, gated by a 5W/5L sample floor.
+- `external_priors` table — empty in v1.17, schema-ready for v1.18 federated learning.
+- Full rebuild on every outcome event (closed_won / closed_lost / reopened) and at app startup. Rebuild is cheap (~50ms even for hundreds of closed deals); incremental updates aren't worth the complexity.
+
+**Dimensions tracked in v1.17:**
+
+| Dimension | Source |
+|---|---|
+| `product_id` | opportunities.product_id |
+| `industry` | opportunities.industry |
+| `matched_signal` | opportunities.raw_signal.matched_signal JSON field |
+| `confidence_bucket` | `high` (≥0.75) / `medium` (≥0.55) / `low` (<0.55) derived from initial confidence |
+
+`recency_bucket` and `dossier_field` from the v1.16 design proposal are deferred to v1.17.x or later — the four above are the most informative and v1.17's job is to demonstrate the loop works end-to-end.
+
+**The five cold-start safeguards (all active in v1.17):**
+
+1. **Sample floor** — `meetsLearningThreshold` requires `n_closed_won ≥ 5 AND n_closed_lost ≥ 5` for a dimension value before its smoothed rate is allowed to influence scoring. Rows below the floor exist in the table (UI shows them as "too thin") but are excluded from `buildLearningPriorsBlock` and `applyPriorAdjustment`. The both-sides requirement is critical: 10W/0L looks promising but until you've seen 5 losses you don't know which way the pattern actually leans.
+2. **Bayesian smoothing** — `smoothedCloseRate(nWon, nLost)` uses α=1, β=4 (prior mean 0.2, weight 5 pseudo-observations). "1/1 closed-won" smooths to 33%, not 100%. As n grows, the prior fades and the estimate approaches the raw rate.
+3. **Confidence intervals** — `wilsonScoreInterval` returns 95% CI bounds on the raw rate. UI surfaces the CI width so the user can see which dimensions are still statistically thin.
+4. **Magnitude cap** — `applyPriorAdjustment` clamps the per-candidate confidence delta to ±`MAX_PRIOR_ADJUSTMENT` (0.15). Even with every dimension pointing the same direction, the candidate's confidence shifts by at most 15 percentage points. Learning nudges, never overrides.
+5. **Explicit UI surface** — Dashboard "Learning status" card always shows "Tracking N dimensions across M closed deals, K informing scoring." Cold start says so clearly: *"No outcomes captured yet. Mark opportunities Closed-won or Closed-lost on Opportunity Detail to start training the learning loop."*
+
+**Stage 2 integration** (`src/main/scanner/stage2-qualify.ts`):
+
+- `buildLearningPriorsBlock(learnings)` prepends a `# Historical performance` section to the Sonnet prompt. Two sub-sections (CLOSED-WON well / CLOSED-LOST often), top-10 rows ranked by absolute distance from the 0.2 baseline. Empty string when no rows meet threshold — cold start degrades silently to no-op.
+- After Sonnet returns, every opportunity's `confidence` runs through `applyPriorAdjustment` which finds matching learned rows, computes a sample-weighted average delta from baseline, normalizes to ±1, and scales by the ±0.15 cap.
+- Log lines surface what happened: `Stage 2 learning priors active: N informing dimension(s)` and `Stage 2 learning adjusted N candidate confidence(s) (↑X ↓Y)` so the user can see learning at work in scan run logs.
+
+**Confidence adjustment math** (`applyPriorAdjustment`):
+
+```
+For each matched learning row:
+  delta = row.smoothed_close_rate - 0.2
+  weight = log(1 + row.n_closed_won + row.n_closed_lost)
+
+avgDelta = sum(delta * weight) / sum(weight)
+normalized = clamp(avgDelta / 0.4, -1, +1)
+adjustment = normalized * cap            # cap = 0.15
+adjusted_confidence = clamp(rawConf + adjustment, 0, 1)
+```
+
+The `0.4` divisor was picked so a typical positive pattern (smoothed rate around 0.6, delta 0.4) maps to a full +cap nudge, and a strong negative pattern (smoothed 0.0, delta -0.2) maps to about half-cap. Big-sample rows count more than small-sample rows (`log(1+n)` weight) so a 100-deal-history dimension doesn't get swamped by a barely-threshold 10-deal one.
+
+**Dashboard "Learning status" card:**
+
+Collapsible card below the lifecycle widget row. Headline summary line varies by maturity:
+
+- 0 outcomes → *"No outcomes captured yet. Mark opportunities Closed-won or Closed-lost on Opportunity Detail to start training the learning loop."*
+- N outcomes, 0 informing → *"Tracking N dimension/value combinations across M closed deals. None yet meet the ≥5 won AND ≥5 lost threshold to influence scoring."*
+- N outcomes, K informing → *"Tracking N dimension/value combinations across M closed deals. K dimensions are currently influencing Stage 2 scoring (±0.15 cap)."*
+
+Expanding the card shows per-dimension cards with the top 5 rows each. Informing rows are bold; below-threshold rows are dimmed with a "too thin" chip. Close rate %, W/L counts, and dimension value displayed inline.
+
+**Recompute triggers:**
+
+1. App startup (`backfillCreatedEvents` → `recomputeAllLearningSignals` in `main/index.ts`). Idempotent. Wipes + repopulates from event log + state cache.
+2. After every `appendEvent` whose `event_type` is `closed_won`, `closed_lost`, or `reopened` (in `main/events.ts`). Non-fatal: failures log but don't block the event recording.
+
+**Smoke tests: 157 → 187 passed (+30).**
+
+The new tests cover: Bayesian smoothing edge cases (zero, single observation, balanced large sample, negative input defended), Wilson interval narrowing as n grows + 100% rate boundary, threshold gate asymmetry (both sides required), confidence bucket boundaries (0.54, 0.55, 0.74, 0.75), raw_signal JSON fallback for matched_signal extraction, findRelevantLearnings filtering by both informing AND dimension match, applyPriorAdjustment cold-start no-op + positive lift + negative drop + magnitude cap + [0,1] clamping, buildLearningPriorsBlock cold start (empty) + positives section + negatives section + top-K cap at 10 rows.
+
 **v1.16.1 (2026-05-29):** Stage 1 hardening — maxTokens bump + loose-mode fallback.
 
 Two-fix patch driven by diagnostic data from deep scan runs #30 / #31, which produced 0 opportunities across 4 product-scans for the Zyeta portfolio. Investigation showed two distinct failure modes:
