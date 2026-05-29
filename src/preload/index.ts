@@ -18,6 +18,9 @@ const api = {
       ipcRenderer.invoke('brands:research', id, opts),
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('brands:researchSignals', id, opts),
+    // v1.15.0: persist edits to brand-level signals + lock state.
+    updateSignals: (id: number, signalsText: string, lockedJson: string) =>
+      ipcRenderer.invoke('brands:updateSignals', id, signalsText, lockedJson),
     researchSources: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('brands:researchSources', id, opts),
     addSuggestedSources: (
@@ -42,6 +45,11 @@ const api = {
       ipcRenderer.invoke('products:research', id, opts),
     researchSignals: (id: number, opts?: { feedback?: string }) =>
       ipcRenderer.invoke('products:researchSignals', id, opts),
+    // v1.15.0: persist edits to product-level signals + lock state.
+    // Main also auto-re-embeds after the write, so Live Monitor's
+    // pre-filter stays in sync.
+    updateSignals: (id: number, signalsText: string, lockedJson: string) =>
+      ipcRenderer.invoke('products:updateSignals', id, signalsText, lockedJson),
     reembed: (id: number) => ipcRenderer.invoke('products:reembed', id),
     embeddingStatus: (): Promise<Record<number, number>> =>
       ipcRenderer.invoke('products:embeddingStatus'),

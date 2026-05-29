@@ -10,6 +10,7 @@ export type Brand = {
   target_icp: string | null;          // ideal customer profile narrative
   category: string | null;             // market category
   signals: string | null;              // brand-level signals (bulleted)
+  locked_signals: string | null;       // v1.15.0: JSON array of bullet-text strings the user has pinned
   last_researched_at: string | null;
   // v1.8: recency window for scans, derived by brand research.
   scan_recency_auto: 'day' | 'week' | 'month' | 'year' | null;
@@ -42,6 +43,7 @@ export type Product = {
   competitors: string | null;
   differentiators: string | null;
   signals: string | null;
+  locked_signals: string | null;       // v1.15.0: JSON array of bullet-text strings the user has pinned
   research_status: 'pending' | 'researching' | 'ready' | 'error';
   research_summary: string | null;
   last_researched_at: string | null;

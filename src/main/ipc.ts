@@ -126,6 +126,18 @@ export function registerIpc() {
   ipcMain.handle('brands:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
     researchBrandSignals(id, opts || {})
   );
+  // v1.15.0: persist user edits to brand-level signals + lock state.
+  // Both writes happen in one statement so the lock array never points at
+  // text that no longer exists in `signals`. Caller is responsible for
+  // sending the new list and the new lock set together — the renderer
+  // updates them in lockstep via the EditableSignalList component.
+  ipcMain.handle('brands:updateSignals', (_e, id: number, signalsText: string, lockedJson: string) => {
+    const db = getDb();
+    db.prepare(
+      "UPDATE brands SET signals = ?, locked_signals = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(signalsText, lockedJson, id);
+    return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
+  });
   // v1.13.0: brand-level auto-source-discovery. Returns suggestions WITHOUT
   // persisting them as live sources — user reviews + picks via the modal.
   // v1.13.2: the result is ALSO cached in pending_source_suggestions so
@@ -316,6 +328,20 @@ export function registerIpc() {
   ipcMain.handle('products:researchSignals', async (_e, id: number, opts?: { feedback?: string }) =>
     researchProductSignals(id, opts || {})
   );
+  // v1.15.0: persist user edits to product-level signals + lock state.
+  // After the DB write, kick off re-embedding so the Live Monitor pre-filter
+  // doesn't keep matching against stale vectors. Fire-and-forget so the
+  // edit returns instantly to the UI.
+  ipcMain.handle('products:updateSignals', (_e, id: number, signalsText: string, lockedJson: string) => {
+    const db = getDb();
+    db.prepare(
+      "UPDATE products SET signals = ?, locked_signals = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(signalsText, lockedJson, id);
+    embedSignalsForProduct(id).catch((e) => {
+      console.warn('[products:updateSignals] re-embed failed:', e?.message || e);
+    });
+    return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+  });
   // Re-embed the product's signals string in-place — no Perplexity call.
   // Used after the user manually edits the signals via the product editor.
   ipcMain.handle('products:reembed', async (_e, id: number) => {

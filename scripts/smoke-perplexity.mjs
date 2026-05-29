@@ -1061,5 +1061,188 @@ test('round-trip — weekly Saturday 3pm', () => {
   eq(cronToSchedule(scheduleToCron(s)), s);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.15.0 — signals helpers (src/shared/signals.ts).
+//
+// MUST stay byte-identical with production. The renderer's
+// EditableSignalList writes via these for serialization, and
+// signal-research.ts reads via these for the post-LLM merge that
+// enforces locked signals across re-research.
+// ════════════════════════════════════════════════════════════════════════
+
+function parseSignalsBlob(raw) {
+  if (!raw) return [];
+  return raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .map((l) => l.replace(/^[-*•]\s*/, '').trim())
+    .filter((l) => l.length > 0);
+}
+
+function serializeSignals(bullets) {
+  return bullets
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0)
+    .map((b) => `- ${b}`)
+    .join('\n');
+}
+
+function parseLockedSignals(raw) {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((s) => typeof s === 'string' && s.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function serializeLockedSignals(locked) {
+  return JSON.stringify(locked.filter((s) => typeof s === 'string' && s.trim().length > 0));
+}
+
+function mergeLockedIntoSignals(llmBullets, locked) {
+  const cleanLocked = locked.map((s) => s.trim()).filter((s) => s.length > 0);
+  const lockedSet = new Set(cleanLocked);
+  const fresh = llmBullets
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .filter((s) => !lockedSet.has(s));
+  return [...cleanLocked, ...fresh];
+}
+
+function renameLockedSignal(locked, oldText, newText) {
+  const newTrim = newText.trim();
+  if (!newTrim) return locked.filter((s) => s !== oldText);
+  return locked.map((s) => (s === oldText ? newTrim : s));
+}
+
+function removeLockedSignal(locked, text) {
+  return locked.filter((s) => s !== text);
+}
+
+// parseSignalsBlob ───────────────────────────────────────────────
+test('parseSignalsBlob — strips - bullet marker', () => {
+  eq(parseSignalsBlob('- foo\n- bar'), ['foo', 'bar']);
+});
+test('parseSignalsBlob — strips * and • markers', () => {
+  eq(parseSignalsBlob('* foo\n• bar'), ['foo', 'bar']);
+});
+test('parseSignalsBlob — drops empty + whitespace lines', () => {
+  eq(parseSignalsBlob('- foo\n\n  \n- bar'), ['foo', 'bar']);
+});
+test('parseSignalsBlob — returns [] for null/empty', () => {
+  eq(parseSignalsBlob(null), []);
+  eq(parseSignalsBlob(''), []);
+  eq(parseSignalsBlob(undefined), []);
+});
+
+// serializeSignals ──────────────────────────────────────────────
+test('serializeSignals — round-trips through parse', () => {
+  const bullets = ['APAC HQ relocation', 'Lease renewal'];
+  eq(parseSignalsBlob(serializeSignals(bullets)), bullets);
+});
+test('serializeSignals — drops empty strings', () => {
+  eq(serializeSignals(['foo', '', '  ', 'bar']), '- foo\n- bar');
+});
+
+// parseLockedSignals ────────────────────────────────────────────
+test('parseLockedSignals — parses JSON array', () => {
+  eq(parseLockedSignals('["foo","bar"]'), ['foo', 'bar']);
+});
+test('parseLockedSignals — returns [] for malformed JSON', () => {
+  eq(parseLockedSignals('not json'), []);
+  eq(parseLockedSignals('{"oops": true}'), []);
+});
+test('parseLockedSignals — drops non-string entries', () => {
+  eq(parseLockedSignals('["foo", 42, null, "bar"]'), ['foo', 'bar']);
+});
+test('parseLockedSignals — returns [] for null/empty', () => {
+  eq(parseLockedSignals(null), []);
+  eq(parseLockedSignals(''), []);
+});
+
+// mergeLockedIntoSignals ────────────────────────────────────────
+test('mergeLocked — locked first, LLM fresh follows', () => {
+  eq(
+    mergeLockedIntoSignals(['c', 'd'], ['a', 'b']),
+    ['a', 'b', 'c', 'd']
+  );
+});
+test('mergeLocked — dedupes LLM output that matches locked', () => {
+  eq(
+    mergeLockedIntoSignals(['a', 'c', 'b'], ['a', 'b']),
+    ['a', 'b', 'c']
+  );
+});
+test('mergeLocked — force-inserts locked even when LLM dropped them', () => {
+  // Critical regression guard: this is the safety net for when Perplexity
+  // ignores the prompt-side instruction to keep locked signals.
+  eq(
+    mergeLockedIntoSignals(['x', 'y'], ['pinned1', 'pinned2']),
+    ['pinned1', 'pinned2', 'x', 'y']
+  );
+});
+test('mergeLocked — no locked = LLM output unchanged (just trimmed)', () => {
+  eq(
+    mergeLockedIntoSignals(['  foo  ', 'bar'], []),
+    ['foo', 'bar']
+  );
+});
+test('mergeLocked — all locked (LLM returned nothing new)', () => {
+  eq(
+    mergeLockedIntoSignals([], ['a', 'b']),
+    ['a', 'b']
+  );
+});
+test('mergeLocked — near-duplicates pass through (no semantic dedupe)', () => {
+  // Recommend-accept-duplicate decision: we don't auto-dedupe by similarity
+  // because it risks silently dropping legitimately different signals.
+  eq(
+    mergeLockedIntoSignals(['APAC HQ relocations'], ['APAC headquarter relocations']),
+    ['APAC headquarter relocations', 'APAC HQ relocations']
+  );
+});
+
+// renameLockedSignal ────────────────────────────────────────────
+test('renameLocked — replaces matching entry in place', () => {
+  eq(
+    renameLockedSignal(['a', 'b', 'c'], 'b', 'B-new'),
+    ['a', 'B-new', 'c']
+  );
+});
+test('renameLocked — no-op when old text not locked', () => {
+  eq(
+    renameLockedSignal(['a', 'b'], 'z', 'Z-new'),
+    ['a', 'b']
+  );
+});
+test('renameLocked — empty new text removes the lock', () => {
+  eq(
+    renameLockedSignal(['a', 'b'], 'b', '   '),
+    ['a']
+  );
+});
+
+// removeLockedSignal ────────────────────────────────────────────
+test('removeLocked — removes exact match', () => {
+  eq(removeLockedSignal(['a', 'b', 'c'], 'b'), ['a', 'c']);
+});
+test('removeLocked — no-op when not present', () => {
+  eq(removeLockedSignal(['a', 'b'], 'z'), ['a', 'b']);
+});
+
+// Round-trip integrity ─────────────────────────────────────────
+test('signals round-trip — serialize→parse preserves bullets', () => {
+  const bullets = ['First signal', 'Second signal', 'Third signal'];
+  eq(parseSignalsBlob(serializeSignals(bullets)), bullets);
+});
+test('locked round-trip — serialize→parse preserves locks', () => {
+  const locked = ['pinned A', 'pinned B'];
+  eq(parseLockedSignals(serializeLockedSignals(locked)), locked);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

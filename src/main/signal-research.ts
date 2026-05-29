@@ -28,6 +28,13 @@ import { getDb } from './db.js';
 import { completePerplexity, type PplxResponse } from './perplexity.js';
 import { embedSignalsForProduct } from './monitor/embed.js';
 import { addFeedback, buildFeedbackBlock, markFeedbackApplied } from './feedback.js';
+import {
+  parseLockedSignals,
+  parseSignalsBlob,
+  serializeSignals,
+  mergeLockedIntoSignals,
+  buildLockedSignalsPromptBlock
+} from '@shared/signals.js';
 import type { Brand, Product } from '@shared/types';
 
 // v1.9.4: Ask for bullets directly. No JSON wrapper. The model returns a
@@ -196,6 +203,12 @@ export async function researchProductSignals(
   }
   const feedbackBlock = buildFeedbackBlock('product_signals', productId);
 
+  // v1.15.0: locked signals MUST survive re-research. Two-pronged:
+  //   (1) prompt block tells the LLM to include them verbatim
+  //   (2) post-LLM merge force-inserts any the model still dropped
+  const lockedList = parseLockedSignals(product.locked_signals);
+  const lockedBlock = buildLockedSignalsPromptBlock(lockedList);
+
   const prompt = `# Brand
 ${brand.name} — ${brand.description || ''}
 
@@ -213,7 +226,7 @@ ${product.differentiators || '(none)'}
 
 Existing signals (for reference — refresh them, don't just copy):
 ${product.signals || '(none)'}
-${feedbackBlock ? `\n${feedbackBlock}` : ''}
+${lockedBlock ? `\n${lockedBlock}` : ''}${feedbackBlock ? `\n${feedbackBlock}` : ''}
 
 # Task
 Re-derive a fresh list of buying-signal bullets for THIS product. Lean on
@@ -235,11 +248,19 @@ to drop, signals to add), apply it — feedback outranks your own judgment
 for items it covers.`;
 
   // v1.14.0: model picker removed from Settings — sonar-pro hardcoded.
-  const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
+  const rawSignals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
     model: 'sonar-pro',
     stage: 'product_signals',
     relatedId: productId
   });
+
+  // v1.15.0: enforce the locks post-LLM. If Perplexity dropped or
+  // paraphrased any pinned bullet, mergeLockedIntoSignals force-inserts
+  // it at the top. Always re-serialize the canonical "- bullet" form
+  // so the stored text stays clean.
+  const llmBullets = parseSignalsBlob(rawSignals);
+  const merged = mergeLockedIntoSignals(llmBullets, lockedList);
+  const signals = serializeSignals(merged);
 
   db.prepare(
     "UPDATE products SET signals = ?, updated_at = datetime('now') WHERE id = ?"
@@ -287,6 +308,12 @@ export async function researchBrandSignals(
   }
   const feedbackBlock = buildFeedbackBlock('brand_signals', brandId);
 
+  // v1.15.0: locked signals MUST survive re-research. See product version
+  // above for the rationale + two-pronged approach (prompt block +
+  // post-LLM merge).
+  const lockedList = parseLockedSignals(brand.locked_signals);
+  const lockedBlock = buildLockedSignalsPromptBlock(lockedList);
+
   const prompt = `# Brand
 Name: ${brand.name}
 Category: ${brand.category || '(unspecified)'}
@@ -298,7 +325,7 @@ ${brand.research_summary ? `\nBrand research summary:\n${brand.research_summary.
 
 # Existing brand-level signals (for reference — refresh them, don't just copy)
 ${brand.signals || '(none)'}
-${feedbackBlock ? `\n${feedbackBlock}` : ''}
+${lockedBlock ? `\n${lockedBlock}` : ''}${feedbackBlock ? `\n${feedbackBlock}` : ''}
 
 # Task
 Re-derive a fresh list of BRAND-LEVEL buying-signal bullets — events that
@@ -319,11 +346,16 @@ If reviewer feedback above directs specific changes, apply it — feedback
 outranks your own judgment for items it covers.`;
 
   // v1.14.0: model picker removed from Settings — sonar-pro hardcoded.
-  const signals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
+  const rawSignals = await callWithRetry(SIGNAL_RESEARCH_SYSTEM, prompt, {
     model: 'sonar-pro',
     stage: 'brand_signals',
     relatedId: brandId
   });
+
+  // v1.15.0: enforce locks post-LLM. See product version for rationale.
+  const llmBullets = parseSignalsBlob(rawSignals);
+  const merged = mergeLockedIntoSignals(llmBullets, lockedList);
+  const signals = serializeSignals(merged);
 
   db.prepare(
     "UPDATE brands SET signals = ?, updated_at = datetime('now') WHERE id = ?"

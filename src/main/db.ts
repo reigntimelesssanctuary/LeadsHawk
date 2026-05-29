@@ -324,6 +324,15 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_feedback_target
       ON dossier_feedback(target_kind, target_id, created_at DESC);
   `);
+
+  // v1.15.0: per-signal locks. The signals column stays a newline-joined
+  // text blob; locked_signals holds a JSON array of bullet-text strings
+  // the user has explicitly pinned. Re-research preserves locked entries:
+  // signal-research.ts prepends them to the prompt as "must keep exactly
+  // as-is" instructions AND merges them back into the LLM output if it
+  // dropped any (see mergeLockedIntoSignals in src/shared/signals.ts).
+  addColumnIfMissing(db, 'brands', 'locked_signals', 'TEXT');
+  addColumnIfMissing(db, 'products', 'locked_signals', 'TEXT');
 }
 
 function addColumnIfMissing(

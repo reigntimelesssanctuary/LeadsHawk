@@ -613,6 +613,44 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.15.0 (2026-05-29):** Editable signals + lock through re-research.
+
+User asked for two changes to Signal Config: (1) each brand/product signal should be selectable for edit or deletion, (2) brand-level signals should be collapsible like product-level cards. Then asked for a third: a lock/unlock toggle so re-research preserves explicitly-pinned signals. The lock feature is materially larger than the first two — it changes the research pipeline, not just the UI — so the whole bundle ships as v1.15.0.
+
+**1. Edit / delete / + Add signal inline.** Each bullet in a brand or product card now renders with three on-hover actions: edit pencil, lock toggle, delete trash. Click pencil to inline-edit the text (Enter saves, Esc cancels). Click trash to confirm + delete. "+ Add signal" button at the bottom of each list opens an inline input row; Enter commits and re-opens for another (chainable). All edits write atomically via two new IPCs:
+- `brands:updateSignals(id, signalsText, lockedJson)` — `UPDATE brands SET signals = ?, locked_signals = ?, updated_at = datetime('now')`
+- `products:updateSignals(id, signalsText, lockedJson)` — same plus a fire-and-forget `embedSignalsForProduct(id)` so the Live Monitor pre-filter doesn't keep matching against stale vectors.
+
+**2. Brand-level signals collapsible.** Each brand card now has the chevron + click-to-expand pattern that product cards already had. Collapsed by default — matches the product card behavior and keeps the page short for portfolios with many brands.
+
+**3. Lock through re-research.** New schema columns `brands.locked_signals` and `products.locked_signals` (JSON array of bullet-text strings, idempotent migration via `addColumnIfMissing`). The signal-research pipeline now has two safeguards:
+- **Prompt-side**: `buildLockedSignalsPromptBlock(locked)` prepends a "MUST KEEP exactly as written" instruction block before the regular signal-research prompt, listing every locked bullet verbatim.
+- **Post-LLM merge**: `mergeLockedIntoSignals(llmOutput, locked)` runs after Perplexity returns. Locked bullets are forced into the result (in their stored order, at the top) regardless of what the LLM produced. If the model dropped or paraphrased a locked one, it gets re-inserted. If the model returned an exact-match duplicate of a locked bullet, the duplicate is removed (single dedupe pass).
+
+Both safeguards apply to both `researchProductSignals` and `researchBrandSignals`, including the "Re-research with feedback" path.
+
+**Design decisions agreed with user:**
+- **Locked signals appear at the top of the list**, distinct from LLM-discovered fresh signals below.
+- **Re-research with feedback also honors locks** — the lock is unconditional; unlock first if you want to retire a signal.
+- **Near-duplicates pass through** (we accept the duplicate rather than try semantic dedupe). The user can manually delete duplicates if any appear. Auto-deduping by similarity is fragile and risks silently dropping legitimately different signals.
+- **Editing a locked signal keeps it locked** (Option A — treat as rename in place). `renameLockedSignal(locked, oldText, newText)` updates the locked array atomically alongside the text edit, so the lock never points at text that no longer exists in `signals`. The reasoning: edit-locked is almost always a refinement of wording, not a removal of importance. Silent auto-unlock-on-edit would surprise users at the next re-research.
+
+**Visual treatment:**
+- Locked signals: subtle purple background (`#f5f3ff`) + lock icon (`Lock` from lucide-react) shown permanently.
+- Unlocked signals: white background + unlock icon revealed on hover.
+- Chip on the row header: `🔒 N locked` shown next to the signal count when any are locked.
+
+**New shared module:** `src/shared/signals.ts` — pure helpers, byte-identical copies inlined into `scripts/smoke-perplexity.mjs` per the established convention:
+- `parseSignalsBlob(raw)` — newline-delimited text → bullet array (replaces the inline `parseBullets` previously duplicated in SignalConfig.tsx)
+- `serializeSignals(bullets)` — bullet array → "- bullet" joined text
+- `parseLockedSignals(json)` / `serializeLockedSignals(arr)` — JSON column round-trip
+- `mergeLockedIntoSignals(llm, locked)` — the enforcement merge (locked first, dedupe, force-insert)
+- `renameLockedSignal(locked, old, new)` — atomic rename for edit-in-place
+- `removeLockedSignal(locked, text)` — for delete
+- `buildLockedSignalsPromptBlock(locked)` — the "MUST KEEP" prompt block
+
+Smoke tests: 104 → 127 passed (+23 for the signals helpers, covering parse/serialize round-trips, the critical "force-insert when LLM dropped a locked bullet" regression guard, rename-in-place, malformed JSON, and the no-semantic-dedupe decision).
+
 **v1.14.0 (2026-05-29):** Settings cleanup + cron-free scheduler.
 
 A UX-level pass through Settings driven by the observation that the user is a non-coder who shouldn't be typing cron expressions or evaluating obscure model trade-offs. Three concurrent simplifications:

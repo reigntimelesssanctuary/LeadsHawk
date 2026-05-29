@@ -5,8 +5,17 @@ import type { FeedbackTargetKind } from '../../../shared/types';
 type SignalFeedbackKind = Extract<FeedbackTargetKind, 'brand_signals' | 'product_signals'>;
 import type { SignalSource, Product, Brand, ScanRule } from '../../../shared/types';
 import {
+  parseSignalsBlob,
+  serializeSignals,
+  parseLockedSignals,
+  serializeLockedSignals,
+  renameLockedSignal,
+  removeLockedSignal
+} from '../../../shared/signals';
+import {
   Plus, Trash2, Sparkles, ChevronDown, ChevronRight,
-  AlertCircle, CheckCircle2, Ban, Globe, MessageSquare, RefreshCw
+  AlertCircle, CheckCircle2, Ban, Globe, MessageSquare, RefreshCw,
+  Lock, Unlock, Pencil, Check, X
 } from 'lucide-react';
 
 export function SignalConfig() {
@@ -91,7 +100,7 @@ export function SignalConfig() {
         <div className="h-page">Signal Config</div>
         <div style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
           LeadsHawk scans the web for the buying signals it learned from your product research.
-          Expand a product to see its signals and set include / exclude rules.
+          Click any signal to edit, delete, or pin it. Pinned signals (🔒) survive re-research.
         </div>
       </div>
 
@@ -154,54 +163,19 @@ export function SignalConfig() {
           <div style={{ color: '#6b7280', fontSize: 13 }}>No brands yet.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {brands.map((b) => {
-              const lines = parseBullets(b.signals || '');
-              const researched = b.research_status === 'ready';
-              const hasSignals = lines.length > 0;
-              const busyKey = `brand-${b.id}`;
-              const isBusy = busy === busyKey;
-              return (
-                <div key={b.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: researched ? 'white' : '#fafafa' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 200 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</div>
-                      {!researched ? (
-                        <span className="chip chip-muted" title="Run brand research from Brands & Products first.">brand not researched yet</span>
-                      ) : !hasSignals ? (
-                        <span className="chip chip-muted">no signals yet</span>
-                      ) : (
-                        <span className="chip chip-qualified">{lines.length} signal{lines.length === 1 ? '' : 's'}</span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        className="btn-ghost"
-                        onClick={() => researchBrandSignals(b)}
-                        disabled={!researched || !!busy}
-                        title={researched ? 'Run signal research for this brand (Perplexity sonar-pro, cheap).' : 'Run brand research first from Brands & Products.'}
-                      >
-                        {hasSignals ? <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> : <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />}
-                        {isBusy ? 'Researching…' : (hasSignals ? 'Re-research signals' : 'Research signals')}
-                      </button>
-                      <button
-                        className="btn-ghost"
-                        onClick={() => setFeedbackTarget({ kind: 'brand_signals', id: b.id, name: b.name })}
-                        disabled={!researched || !!busy}
-                        title="Re-research signals while injecting reviewer feedback into the prompt."
-                      >
-                        <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
-                        Re-research with feedback
-                      </button>
-                    </div>
-                  </div>
-                  {hasSignals && (
-                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#1f2937', lineHeight: 1.5 }}>
-                      {lines.map((line, i) => <li key={i} style={{ marginBottom: 2 }}>{line}</li>)}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
+            {brands.map((b) => (
+              <BrandSignals
+                key={b.id}
+                brand={b}
+                isBusy={busy === `brand-${b.id}`}
+                anyBusy={busy !== null}
+                onResearchSignals={() => researchBrandSignals(b)}
+                onResearchSignalsWithFeedback={() =>
+                  setFeedbackTarget({ kind: 'brand_signals', id: b.id, name: b.name })
+                }
+                onSaved={refresh}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -239,6 +213,7 @@ export function SignalConfig() {
                   embeddingCount={embeddingStatus[p.id] ?? 0}
                   isEmbedding={busy === `embed-${p.id}`}
                   onEmbedNow={() => embedNow(p)}
+                  onSaved={refresh}
                 />
               );
             })}
@@ -342,10 +317,102 @@ export function SignalConfig() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.15.0 — BrandSignals: collapsible card mirroring ProductSignals.
+// Default collapsed. Click anywhere on the header row to expand.
+// ════════════════════════════════════════════════════════════════════════
+function BrandSignals({
+  brand, isBusy, anyBusy, onResearchSignals, onResearchSignalsWithFeedback, onSaved
+}: {
+  brand: Brand;
+  isBusy: boolean;
+  anyBusy: boolean;
+  onResearchSignals: () => void;
+  onResearchSignalsWithFeedback: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const bullets = parseSignalsBlob(brand.signals || '');
+  const locked = parseLockedSignals(brand.locked_signals);
+  const researched = brand.research_status === 'ready';
+  const hasSignals = bullets.length > 0;
+  const lockedCount = locked.length;
+
+  const saveSignals = async (newBullets: string[], newLocked: string[]) => {
+    const signalsText = serializeSignals(newBullets);
+    const lockedJson = serializeLockedSignals(newLocked);
+    await window.lh.brands.updateSignals(brand.id, signalsText, lockedJson);
+    await onSaved();
+  };
+
+  return (
+    <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: researched ? 'white' : '#fafafa' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', minWidth: 200 }}
+        >
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <div style={{ fontWeight: 600, fontSize: 14 }}>{brand.name}</div>
+          {!researched ? (
+            <span className="chip chip-muted" title="Run brand research from Brands & Products first.">brand not researched yet</span>
+          ) : !hasSignals ? (
+            <span className="chip chip-muted">no signals yet</span>
+          ) : (
+            <>
+              <span className="chip chip-qualified">{bullets.length} signal{bullets.length === 1 ? '' : 's'}</span>
+              {lockedCount > 0 && (
+                <span
+                  className="chip"
+                  style={{ background: '#ede9fe', color: '#5b21b6', fontSize: 11 }}
+                  title={`${lockedCount} signal${lockedCount === 1 ? '' : 's'} pinned — re-research will preserve ${lockedCount === 1 ? 'it' : 'them'}.`}
+                >
+                  🔒 {lockedCount} locked
+                </span>
+              )}
+            </>
+          )}
+        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className="btn-ghost"
+            onClick={onResearchSignals}
+            disabled={!researched || anyBusy}
+            title={researched ? 'Run signal research for this brand (Perplexity sonar-pro, cheap).' : 'Run brand research first from Brands & Products.'}
+          >
+            {hasSignals ? <RefreshCw size={13} style={{ display: 'inline', marginRight: 4 }} /> : <Sparkles size={13} style={{ display: 'inline', marginRight: 4 }} />}
+            {isBusy ? 'Researching…' : (hasSignals ? 'Re-research signals' : 'Research signals')}
+          </button>
+          <button
+            className="btn-ghost"
+            onClick={onResearchSignalsWithFeedback}
+            disabled={!researched || anyBusy}
+            title="Re-research signals while injecting reviewer feedback into the prompt."
+          >
+            <MessageSquare size={13} style={{ display: 'inline', marginRight: 4 }} />
+            Re-research with feedback
+          </button>
+        </div>
+      </div>
+      {expanded && researched && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
+          <EditableSignalList
+            bullets={bullets}
+            locked={locked}
+            disabled={anyBusy}
+            onSave={saveSignals}
+            emptyMessage="No signals yet. Click Research signals above to populate, or + Add signal below to add one manually."
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductSignals({
   product, brandName, onToggle,
   onResearchSignals, onResearchSignalsWithFeedback, isBusy, anyBusy,
-  embeddingCount, isEmbedding, onEmbedNow
+  embeddingCount, isEmbedding, onEmbedNow, onSaved
 }: {
   product: Product; brandName: string; onToggle: () => void;
   onResearchSignals: () => void;
@@ -356,18 +423,28 @@ function ProductSignals({
   embeddingCount: number;
   isEmbedding: boolean;
   onEmbedNow: () => void;
+  onSaved: () => Promise<void> | void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [rules, setRules] = useState<ScanRule[]>([]);
-  const signalLines = parseBullets(product.signals || '');
+  const bullets = parseSignalsBlob(product.signals || '');
+  const locked = parseLockedSignals(product.locked_signals);
   const enabled = product.scan_enabled === 1;
-  const hasSignals = signalLines.length > 0;
+  const hasSignals = bullets.length > 0;
+  const lockedCount = locked.length;
 
   const loadRules = async () => setRules(await window.lh.rules.list(product.id));
   useEffect(() => { if (expanded) loadRules(); }, [expanded]);
 
   const includes = rules.filter((r) => r.kind === 'include');
   const excludes = rules.filter((r) => r.kind === 'exclude');
+
+  const saveSignals = async (newBullets: string[], newLocked: string[]) => {
+    const signalsText = serializeSignals(newBullets);
+    const lockedJson = serializeLockedSignals(newLocked);
+    await window.lh.products.updateSignals(product.id, signalsText, lockedJson);
+    await onSaved();
+  };
 
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14, background: enabled ? 'white' : '#fafafa' }}>
@@ -391,7 +468,16 @@ function ProductSignals({
               <span style={{ color: '#6b7280', fontWeight: 400 }}> · {brandName}</span>
             </div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span>{hasSignals ? `${signalLines.length} signal${signalLines.length === 1 ? '' : 's'} ${enabled ? 'tracked' : 'paused'}` : 'no signals yet'}</span>
+              <span>{hasSignals ? `${bullets.length} signal${bullets.length === 1 ? '' : 's'} ${enabled ? 'tracked' : 'paused'}` : 'no signals yet'}</span>
+              {lockedCount > 0 && (
+                <span
+                  className="chip"
+                  style={{ background: '#ede9fe', color: '#5b21b6', fontSize: 11, padding: '1px 6px' }}
+                  title={`${lockedCount} signal${lockedCount === 1 ? '' : 's'} pinned — re-research will preserve ${lockedCount === 1 ? 'it' : 'them'}.`}
+                >
+                  🔒 {lockedCount} locked
+                </span>
+              )}
               {/* v1.12.1: embedding status indicator. Critical because Live
                   Monitor's pre-filter ONLY works when embeddings exist. */}
               {hasSignals && embeddingCount > 0 && (
@@ -450,18 +536,13 @@ function ProductSignals({
       {expanded && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #e5e7eb' }}>
           <div className="label" style={{ marginBottom: 6 }}>Signals to watch for</div>
-          {signalLines.length === 0 ? (
-            <div style={{ color: '#6b7280', fontSize: 13 }}>No signals yet. Click <b>Research signals</b> above to populate.</div>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#1f2937', lineHeight: 1.6 }}>
-              {signalLines.map((line, i) => (
-                <li key={i} style={{ marginBottom: 4 }}>{line}</li>
-              ))}
-            </ul>
-          )}
-          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-            To change these signals, use the <b>Research signals</b> or <b>Re-research with feedback</b> buttons above. Dossier re-research from Brands &amp; Products no longer touches signals.
-          </div>
+          <EditableSignalList
+            bullets={bullets}
+            locked={locked}
+            disabled={anyBusy}
+            onSave={saveSignals}
+            emptyMessage="No signals yet. Click Research signals above to populate, or + Add signal below to add one manually."
+          />
 
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px dashed #e5e7eb' }}>
             <div className="label" style={{ marginBottom: 4 }}>Scan guidance for this product</div>
@@ -497,6 +578,275 @@ function ProductSignals({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// v1.15.0 — EditableSignalList: bullets with inline edit / delete / lock
+// actions, plus an "+ Add signal" input at the bottom. Used by both
+// BrandSignals and ProductSignals.
+// ════════════════════════════════════════════════════════════════════════
+function EditableSignalList({
+  bullets, locked, disabled, onSave, emptyMessage
+}: {
+  bullets: string[];
+  locked: string[];
+  disabled?: boolean;
+  onSave: (newBullets: string[], newLocked: string[]) => Promise<void>;
+  emptyMessage: string;
+}) {
+  // Local mirror so optimistic updates render immediately.
+  const [localBullets, setLocalBullets] = useState<string[]>(bullets);
+  const [localLocked, setLocalLocked] = useState<string[]>(locked);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editText, setEditText] = useState('');
+  const [addText, setAddText] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Sync local state when parent updates (e.g. after research finishes).
+  useEffect(() => { setLocalBullets(bullets); }, [bullets.join('§§§')]);
+  useEffect(() => { setLocalLocked(locked); }, [locked.join('§§§')]);
+
+  const lockedSet = new Set(localLocked);
+
+  const persist = async (nextBullets: string[], nextLocked: string[]) => {
+    setLocalBullets(nextBullets);
+    setLocalLocked(nextLocked);
+    setSaving(true);
+    try {
+      await onSave(nextBullets, nextLocked);
+    } catch (e: any) {
+      alert(`Save failed: ${e?.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEdit = (i: number) => {
+    if (disabled) return;
+    setEditingIdx(i);
+    setEditText(localBullets[i]);
+  };
+
+  const cancelEdit = () => {
+    setEditingIdx(null);
+    setEditText('');
+  };
+
+  const saveEdit = async () => {
+    if (editingIdx === null) return;
+    const newText = editText.trim();
+    if (!newText) { cancelEdit(); return; }
+    const oldText = localBullets[editingIdx];
+    if (newText === oldText) { cancelEdit(); return; }
+    const nextBullets = localBullets.map((b, j) => (j === editingIdx ? newText : b));
+    // v1.15.0 Option A: editing a locked signal keeps it locked (rename in place).
+    const nextLocked = renameLockedSignal(localLocked, oldText, newText);
+    cancelEdit();
+    await persist(nextBullets, nextLocked);
+  };
+
+  const deleteBullet = async (i: number) => {
+    if (disabled) return;
+    const text = localBullets[i];
+    const wasLocked = lockedSet.has(text);
+    const msg = wasLocked
+      ? 'This signal is locked. Delete anyway?'
+      : 'Delete this signal?';
+    if (!confirm(msg)) return;
+    const nextBullets = localBullets.filter((_, j) => j !== i);
+    const nextLocked = removeLockedSignal(localLocked, text);
+    await persist(nextBullets, nextLocked);
+  };
+
+  const toggleLock = async (i: number) => {
+    if (disabled) return;
+    const text = localBullets[i];
+    const currentlyLocked = lockedSet.has(text);
+    const nextLocked = currentlyLocked
+      ? removeLockedSignal(localLocked, text)
+      : [...localLocked, text];
+    await persist(localBullets, nextLocked);
+  };
+
+  const startAdd = () => {
+    if (disabled) return;
+    setAdding(true);
+    setAddText('');
+  };
+
+  const cancelAdd = () => {
+    setAdding(false);
+    setAddText('');
+  };
+
+  const commitAdd = async () => {
+    const trimmed = addText.trim();
+    if (!trimmed) { cancelAdd(); return; }
+    if (localBullets.includes(trimmed)) {
+      alert('That signal already exists.');
+      return;
+    }
+    const nextBullets = [...localBullets, trimmed];
+    setAddText('');
+    // Keep adding mode active so user can chain multiple adds with Enter.
+    await persist(nextBullets, localLocked);
+  };
+
+  return (
+    <div>
+      {localBullets.length === 0 && !adding ? (
+        <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 10 }}>{emptyMessage}</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+          {localBullets.map((bullet, i) => {
+            const isLocked = lockedSet.has(bullet);
+            const isEditing = editingIdx === i;
+            return (
+              <div
+                key={`${bullet}::${i}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  background: isLocked ? '#f5f3ff' : 'transparent',
+                  border: isLocked ? '1px solid #ddd6fe' : '1px solid transparent',
+                  transition: 'background 0.1s'
+                }}
+                onMouseEnter={(e) => {
+                  if (!isLocked && !isEditing) (e.currentTarget as HTMLDivElement).style.background = '#fafafa';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isLocked && !isEditing) (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+                }}
+              >
+                {isLocked ? (
+                  <Lock size={12} style={{ color: '#6c5cf2', flexShrink: 0 }} />
+                ) : (
+                  <span style={{ color: '#9ca3af', fontSize: 12, flexShrink: 0, width: 12, textAlign: 'center' }}>•</span>
+                )}
+                {isEditing ? (
+                  <>
+                    <input
+                      autoFocus
+                      className="input"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveEdit();
+                        if (e.key === 'Escape') cancelEdit();
+                      }}
+                      style={{ flex: 1, fontSize: 13 }}
+                    />
+                    <button
+                      onClick={saveEdit}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#065f46' }}
+                      title="Save"
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#6b7280' }}
+                      title="Cancel"
+                    >
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ flex: 1, fontSize: 13, color: '#1f2937', lineHeight: 1.5 }}>
+                      {bullet}
+                    </div>
+                    <button
+                      onClick={() => toggleLock(i)}
+                      disabled={!!disabled || saving}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        padding: 2,
+                        color: isLocked ? '#6c5cf2' : '#9ca3af',
+                        opacity: isLocked ? 1 : 0.6
+                      }}
+                      title={isLocked ? 'Unlock — re-research can change this signal' : 'Lock — preserve this signal through re-research'}
+                    >
+                      {isLocked ? <Lock size={13} /> : <Unlock size={13} />}
+                    </button>
+                    <button
+                      onClick={() => startEdit(i)}
+                      disabled={!!disabled || saving}
+                      style={{ background: 'transparent', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', padding: 2, color: '#6b7280' }}
+                      title="Edit"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      onClick={() => deleteBullet(i)}
+                      disabled={!!disabled || saving}
+                      style={{ background: 'transparent', border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', padding: 2, color: '#9ca3af' }}
+                      title="Delete"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {adding ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+          <span style={{ color: '#9ca3af', fontSize: 12, flexShrink: 0, width: 12, textAlign: 'center' }}>+</span>
+          <input
+            autoFocus
+            className="input"
+            value={addText}
+            onChange={(e) => setAddText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitAdd();
+              if (e.key === 'Escape') cancelAdd();
+            }}
+            placeholder="Describe a buying signal (e.g. APAC HQ relocation)"
+            style={{ flex: 1, fontSize: 13 }}
+          />
+          <button
+            onClick={commitAdd}
+            disabled={!addText.trim() || saving}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#065f46' }}
+            title="Add"
+          >
+            <Check size={14} />
+          </button>
+          <button
+            onClick={cancelAdd}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#6b7280' }}
+            title="Done"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : (
+        <button
+          className="btn-ghost"
+          onClick={startAdd}
+          disabled={!!disabled || saving}
+          style={{ fontSize: 12, padding: '4px 10px' }}
+        >
+          <Plus size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+          Add signal
+        </button>
+      )}
+
+      <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af', fontStyle: 'italic' }}>
+        Re-research replaces unlocked signals. Click <Lock size={11} style={{ display: 'inline', verticalAlign: '-1px' }} /> to pin a signal so it survives the next research run.
+      </div>
     </div>
   );
 }
@@ -609,16 +959,6 @@ function RuleColumn({
       </div>
     </div>
   );
-}
-
-function parseBullets(raw: string): string[] {
-  if (!raw) return [];
-  return raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0)
-    .map((l) => l.replace(/^[-*•]\s*/, '').trim())
-    .filter((l) => l.length > 0);
 }
 
 function AddSourceForm({ products, onDone }: { products: Product[]; onDone: () => void }) {
