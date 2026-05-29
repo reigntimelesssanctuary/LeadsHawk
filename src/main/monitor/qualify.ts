@@ -3,6 +3,7 @@ import { completePerplexity } from '../perplexity.js';
 import { getSettings } from '../settings.js';
 import { buildDisqualificationsBlock } from '../learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from '../lead-hygiene.js';
+import { recordCreatedEventForOpportunity } from '../events.js';
 import type { Brand, Product, SignalItem, ScanRule } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales intelligence analyst. You will be
@@ -190,9 +191,18 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
     "INSERT OR IGNORE INTO seen_urls(url) VALUES (?)"
   ).run(item.url);
 
+  // v1.16.0: auto-emit a 'created' lifecycle event so this opportunity
+  // shows up in pipeline summaries from the moment Live Monitor lands it.
+  const oppId = Number(info.lastInsertRowid);
+  try {
+    if (oppId) recordCreatedEventForOpportunity(oppId, 'live_monitor:qualify');
+  } catch (e: any) {
+    console.warn(`[qualify] created-event emission failed for opp ${oppId}:`, e?.message || e);
+  }
+
   return {
     kind: 'opportunity',
-    opportunityId: Number(info.lastInsertRowid),
+    opportunityId: oppId,
     confidence: j.confidence
   };
 }

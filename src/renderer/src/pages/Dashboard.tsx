@@ -2,7 +2,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { StatCard } from '../components/StatCard';
 import type { DashboardStats, Opportunity, Brand, Product } from '../../../shared/types';
 import { fmtDate, fmtDateShort, openExternal } from '../lib/api';
-import { Trash2, Download, ArrowUp, ArrowDown } from 'lucide-react';
+import { Trash2, Download, ArrowUp, ArrowDown, AlertTriangle } from 'lucide-react';
+
+// v1.16.0 — pipeline summary from the state cache (events.ts/getPipelineSummary).
+type PipelineSummary = {
+  by_stage: Record<string, number>;
+  total_opportunities: number;
+  total_won: number;
+  total_lost: number;
+  total_won_value: number;
+  avg_cycle_days: number | null;
+  win_rate: number | null;
+  closed_this_month: number;
+  won_this_month_value: number;
+};
 
 type ScanType = 'Manual Scan' | 'Live Monitor';
 
@@ -63,18 +76,25 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [exporting, setExporting] = useState(false);
   const [exportToast, setExportToast] = useState<string | null>(null);
+  // v1.16.0 — pipeline summary + stale-id set for the lifecycle widgets.
+  const [pipeline, setPipeline] = useState<PipelineSummary | null>(null);
+  const [staleIds, setStaleIds] = useState<Set<number>>(new Set());
 
   const refresh = async () => {
-    const [s, list, bs, ps] = await Promise.all([
+    const [s, list, bs, ps, pipe, stale] = await Promise.all([
       window.lh.dashboard.stats(),
       window.lh.opps.list('open'),
       window.lh.brands.list(),
-      window.lh.products.list()
+      window.lh.products.list(),
+      window.lh.pipeline.summary().catch(() => null),
+      window.lh.pipeline.staleIds(14).catch(() => [] as number[])
     ]);
     setStats(s);
     setOpps(list);
     setBrands(bs);
     setProducts(ps);
+    setPipeline(pipe);
+    setStaleIds(new Set(stale));
     setSelected((prev) => {
       const liveIds = new Set(list.map((o: Opportunity) => o.id));
       const next = new Set<number>();
@@ -237,11 +257,52 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 16, marginTop: 24 }}>
-        <StatCard label="Open Opportunities" value={stats?.open ?? 0} chip="Open" chipKind="open" />
-        <StatCard label="Qualified Leads" value={stats?.qualified ?? 0} chip="Qualified" chipKind="qualified" />
+      {/* v1.16.0 — lifecycle widget row. Reads from opportunity_state_cache. */}
+      <div style={{ display: 'flex', gap: 16, marginTop: 24, flexWrap: 'wrap' }}>
+        <PipelineCard
+          label="New"
+          value={(pipeline?.by_stage['created'] ?? 0) + (pipeline?.by_stage['delivered'] ?? 0)}
+          sub="awaiting decision"
+          chipKind="open"
+        />
+        <PipelineCard
+          label="Working pipeline"
+          value={(pipeline?.by_stage['accepted'] ?? 0) + (pipeline?.by_stage['engaged'] ?? 0) + (pipeline?.by_stage['proposal_sent'] ?? 0)}
+          sub="accepted → proposal sent"
+          chipKind="qualified"
+        />
+        <PipelineCard
+          label="Won this month"
+          value={pipeline?.closed_this_month ? `${pipeline.by_stage['closed_won'] ?? 0}` : '0'}
+          sub={pipeline && pipeline.won_this_month_value > 0
+            ? `$${pipeline.won_this_month_value.toLocaleString()}`
+            : 'no value recorded'}
+          chipKind="qualified"
+        />
+        <PipelineCard
+          label="Win rate"
+          value={pipeline?.win_rate !== null && pipeline?.win_rate !== undefined
+            ? `${Math.round(pipeline.win_rate * 100)}%`
+            : '—'}
+          sub={pipeline && (pipeline.total_won + pipeline.total_lost) > 0
+            ? `${pipeline.total_won}W / ${pipeline.total_lost}L`
+            : 'need ≥ 3 closed deals'}
+          chipKind={(pipeline?.win_rate ?? 0) > 0.4 ? 'qualified' : 'open'}
+        />
+        <PipelineCard
+          label="Active brands"
+          value={stats?.brands ?? 0}
+          sub="in portfolio"
+          chipKind="brand"
+        />
+      </div>
+
+      {/* Legacy aggregates — left in for back-compat during v1.16. Will be
+          removed in v1.17 once users are reading the lifecycle widget. */}
+      <div style={{ display: 'flex', gap: 16, marginTop: 16 }}>
+        <StatCard label="Open" value={stats?.open ?? 0} chip="Open" chipKind="open" />
+        <StatCard label="Qualified" value={stats?.qualified ?? 0} chip="Qualified" chipKind="qualified" />
         <StatCard label="Disqualified" value={stats?.disqualified ?? 0} chip="Disqualified" chipKind="disqualified" />
-        <StatCard label="Active Brands" value={stats?.brands ?? 0} chip="Brands" chipKind="brand" />
       </div>
 
       <div className="card" style={{ padding: 20, marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -373,6 +434,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                     brandName={brandName}
                     productName={productName}
                     selected={selected.has(opp.id)}
+                    isStale={staleIds.has(opp.id)}
                     onToggleSelect={() => toggleOne(opp.id)}
                     onOpen={() => onOpenOpp(opp.id)}
                     onDelete={async () => {
@@ -464,13 +526,14 @@ function FilterSelect({ value, onChange, options }: { value: string; onChange: (
 }
 
 function OppRow({
-  opp, scanType, brandName, productName, selected, onToggleSelect, onOpen, onDelete
+  opp, scanType, brandName, productName, selected, isStale, onToggleSelect, onOpen, onDelete
 }: {
   opp: Opportunity;
   scanType: ScanType;
   brandName: string;
   productName: string;
   selected: boolean;
+  isStale: boolean;
   onToggleSelect: () => void;
   onOpen: () => void;
   onDelete: () => void;
@@ -481,7 +544,26 @@ function OppRow({
         <input type="checkbox" checked={selected} onChange={onToggleSelect} aria-label="Select" />
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>{fmtDateShort(opp.created_at)}</td>
-      <td style={{ fontWeight: 500 }}>{opp.company}</td>
+      <td style={{ fontWeight: 500 }}>
+        {opp.company}
+        {isStale && (
+          <span
+            className="chip"
+            style={{
+              marginLeft: 8,
+              background: '#fef3c7',
+              color: '#92400e',
+              fontSize: 10,
+              padding: '2px 6px',
+              verticalAlign: 'middle'
+            }}
+            title="No lifecycle event in the last 14 days — this opportunity may be stalled"
+          >
+            <AlertTriangle size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: '-1px' }} />
+            stale
+          </span>
+        )}
+      </td>
       <td>{opp.industry || '—'}</td>
       <td style={{ whiteSpace: 'nowrap' }}>{opp.country || '—'}</td>
       <td>{brandName}</td>
@@ -501,5 +583,26 @@ function OppRow({
         <button className="btn-danger" onClick={onDelete}>Delete</button>
       </td>
     </tr>
+  );
+}
+
+// v1.16.0 — pipeline-aware stat card variant. Same shape as StatCard but
+// with a value+sub layout that suits "X · $89k" or "12% · 3W/4L" pairs.
+function PipelineCard({
+  label, value, sub, chipKind
+}: {
+  label: string;
+  value: string | number;
+  sub: string;
+  chipKind: 'open' | 'qualified' | 'disqualified' | 'brand' | 'archived' | 'muted';
+}) {
+  return (
+    <div className="card" style={{ padding: 16, minWidth: 180, flex: 1 }}>
+      <div className="label" style={{ marginBottom: 8 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontSize: 28, fontWeight: 700, color: '#111827', lineHeight: 1 }}>{value}</div>
+        <span className={`chip chip-${chipKind}`} style={{ fontSize: 11 }}>{sub}</span>
+      </div>
+    </div>
   );
 }

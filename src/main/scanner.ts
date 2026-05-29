@@ -7,6 +7,7 @@ import { pickBestSourceUrl, dedupeCleanCitations } from './url-hygiene.js';
 import { retrieveRelevantChunks, renderChunksBlock } from './knowledge-index.js';
 import { embedText, cosineSim, loadCachedSignalsForProduct } from './monitor/embed.js';
 import { resolveScanRecency } from './recency.js';
+import { recordCreatedEventForOpportunity } from './events.js';
 import type { LlmStage } from './pricing.js';
 import type { Brand, Product, SignalSource, ScanRule } from '@shared/types';
 
@@ -916,7 +917,7 @@ export function insertCandidates(
 
     try {
       ctx.insertSeen.run(url);
-      ctx.insertOpp.run(
+      const insertResult = ctx.insertOpp.run(
         attrib.brand?.id ?? null,
         attrib.product?.id ?? null,
         company,
@@ -940,6 +941,16 @@ export function insertCandidates(
           url_source: picked.source
         })
       );
+      // v1.16.0: auto-emit a 'created' lifecycle event so the new
+      // opportunity shows up in pipeline summaries from the moment it
+      // lands. Sync — embedding is skipped for 'created' (only outcome
+      // events get embedded). Non-fatal if it errors out.
+      try {
+        const oppId = Number(insertResult.lastInsertRowid);
+        if (oppId) recordCreatedEventForOpportunity(oppId, `scanner:${attrib.sourceLabel}`);
+      } catch (e: any) {
+        ctx.log(`  ~ created-event emission failed for ${company}: ${String(e?.message || e).slice(0, 200)}`);
+      }
       inserted++;
       ctx.log(
         `  ✓ ${company} (${(cand.confidence ?? 0).toFixed(2)}) → ${attrib.brand?.name || '?'} / ${attrib.product?.name || '?'}`

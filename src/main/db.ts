@@ -333,6 +333,71 @@ function migrate(db: Database.Database) {
   // dropped any (see mergeLockedIntoSignals in src/shared/signals.ts).
   addColumnIfMissing(db, 'brands', 'locked_signals', 'TEXT');
   addColumnIfMissing(db, 'products', 'locked_signals', 'TEXT');
+
+  // v1.16.0 — outcome capture / learning event log.
+  //
+  // opportunity_events is the IMMUTABLE source of truth: append-only, no
+  // updates, no deletes. Current state lives in opportunity_state_cache,
+  // which is a derived projection rebuilt by replaying the log via
+  // projectOpportunityState() in src/shared/lifecycle.ts.
+  //
+  // tenant_id is hardcoded 1 in single-tenant mode but the column exists
+  // from day one so v1.18 cross-client aggregation doesn't need a schema
+  // rewrite. embedding (JSON Float32 array) is populated for closed_won /
+  // closed_lost events at record time so v1.17 RAG retrieval can find
+  // semantically similar past outcomes when scoring new candidates.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS opportunity_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id       INTEGER NOT NULL DEFAULT 1,
+      opportunity_id  INTEGER NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+      event_type      TEXT NOT NULL,
+      payload_json    TEXT,
+      occurred_at     TEXT NOT NULL,
+      recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      actor_kind      TEXT NOT NULL DEFAULT 'user',
+      actor_id        TEXT,
+      provenance      TEXT,
+      embedding       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_events_opp
+      ON opportunity_events(opportunity_id, occurred_at, id);
+    CREATE INDEX IF NOT EXISTS idx_opp_events_type
+      ON opportunity_events(event_type, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_opp_events_tenant
+      ON opportunity_events(tenant_id, event_type);
+  `);
+
+  // Derived state. Renderer reads from here for the Stage column,
+  // pipeline summary, stale-check, etc. Never written directly — only
+  // rebuilt by main/events.ts after each append.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS opportunity_state_cache (
+      opportunity_id          INTEGER PRIMARY KEY REFERENCES opportunities(id) ON DELETE CASCADE,
+      current_stage           TEXT NOT NULL,
+      delivered_at            TEXT,
+      accepted_at             TEXT,
+      closed_at               TEXT,
+      close_value             REAL,
+      close_currency          TEXT,
+      cycle_days              INTEGER,
+      primary_factor          TEXT,
+      is_closed_won           INTEGER NOT NULL DEFAULT 0,
+      is_closed_lost          INTEGER NOT NULL DEFAULT 0,
+      effective_close_event_id INTEGER,
+      last_event_id           INTEGER NOT NULL,
+      last_event_at           TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_state_stage
+      ON opportunity_state_cache(current_stage);
+    CREATE INDEX IF NOT EXISTS idx_opp_state_closed
+      ON opportunity_state_cache(closed_at) WHERE closed_at IS NOT NULL;
+  `);
+
+  // Tenancy field on opportunities. v1.17 will add it to other tables
+  // (learning_signals, etc.) but the parent gets it now so foreign-key
+  // joins land on a tenant-aware boundary from day one.
+  addColumnIfMissing(db, 'opportunities', 'tenant_id', 'INTEGER NOT NULL DEFAULT 1');
 }
 
 function addColumnIfMissing(

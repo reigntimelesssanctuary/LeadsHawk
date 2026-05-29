@@ -613,6 +613,77 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.16.0 (2026-05-29):** Outcome capture — the foundation of the learning loop.
+
+This is **Phase 1 of 3** of the long-term learning architecture (v1.16 → v1.17 → v1.18+). v1.16 ships the data-capture layer only; v1.17 will wire outcomes back into Stage 2 qualification, v1.18+ will design cross-tenant aggregation.
+
+The premise: LeadsHawk should get measurably better at picking opportunities over time by learning which characteristics correlate with closed-won outcomes. That requires (a) an immutable timestamped record of each opportunity's lifecycle, (b) feedback into qualification, (c) a tenancy model that doesn't foreclose cross-client aggregation later. v1.16 builds (a) and the schema scaffolding for (b) and (c).
+
+**Architecture: event sourcing.**
+
+- `opportunity_events` is **append-only**. No updates, no deletes. Source of truth.
+- `opportunity_state_cache` is a **derived projection** rebuilt by replaying the event log via `projectOpportunityState()` in `src/shared/lifecycle.ts`.
+- The legacy `opportunities.status` column (open/qualified/disqualified/archived) is kept in sync with the projected stage by `syncOpportunityStatus` so all existing UI continues to work unchanged.
+
+**Schema additions** (idempotent migrations in `db.ts`):
+
+- `opportunity_events(id, tenant_id, opportunity_id, event_type, payload_json, occurred_at, recorded_at, actor_kind, actor_id, provenance, embedding)` — three indexes (per-opportunity timeline, per-type analytics, per-tenant aggregation).
+- `opportunity_state_cache(opportunity_id PK, current_stage, delivered_at, accepted_at, closed_at, close_value, close_currency, cycle_days, primary_factor, is_closed_won, is_closed_lost, effective_close_event_id, last_event_id, last_event_at)`.
+- `opportunities.tenant_id` column added. Hardcoded `1` in single-tenant mode but present from day one so v1.18 cross-tenant aggregation doesn't need a schema rewrite. v1.17 will extend tenancy to `learning_signals` when that table lands.
+
+**Event taxonomy** (controlled vocab in `src/shared/lifecycle.ts`):
+
+- `created` — auto-emitted by scanner.ts `insertCandidates` and monitor/qualify.ts when a new opportunity row lands. Sync; no embedding.
+- `delivered` — user passed it to the AE. Optional `channel` field.
+- `accepted` — AE will pursue. Implicit reopen if it follows a close.
+- `rejected` — AE bounces back. Required `reason_code` from REJECTION_REASONS vocab.
+- `engaged` — prospect responded. `engagement_type` from ENGAGEMENT_TYPES.
+- `proposal_sent` — quote out the door. Optional `amount`.
+- `closed_won` — deal won. Optional `amount` and `primary_factor` from CLOSE_WON_FACTORS. **Embedded** at record time via MiniLM so v1.17 RAG retrieval can find semantically similar past wins.
+- `closed_lost` — deal lost. Required `reason_code` from CLOSE_LOST_REASONS. **Embedded** for the same reason.
+- `archived` — removed from pipeline without explicit close.
+- `reopened` — reverses a prior close. Stage reverts to `accepted` (if ever accepted) or `delivered`. The prior close event STAYS in the log; if another `closed_won`/`closed_lost` lands later, it becomes authoritative for learning (`effective_close_event_id` moves forward). Per design Decide 4.
+
+**Design decisions confirmed with user:**
+
+- **Decide 1**: Don't modify Stage 1 (Perplexity discovery). Learning lives in Stage 2 only. v1.17 will inject a learning-priors block into the Sonnet qualify prompt; Stage 1's wide-net discovery stays untouched so we don't exclude entire candidate categories.
+- **Decide 2**: Ship as three separate releases (v1.16 → v1.17 → v1.18) rather than one big v2.0. Lower risk; data capture starts immediately while the learning loop builds in parallel.
+- **Decide 3 (BA recommendation)**: Lifecycle buttons on Opportunity Detail (low-friction capture). Hybrid Dashboard touch — lifecycle widget at top + stale-warning chip in the opportunities table. Dedicated Pipeline view deferred to v1.17/v1.18 if real workflow demand emerges.
+- **Decide 4**: Reopen preserves the prior close in the event log. If the opportunity gets closed again, the new close becomes authoritative for learning (overrides the prior). Implementation in `projectOpportunityState`: latest close-event wins for `effective_close_event_id`.
+- **Decide 5**: Close value is **optional** per `closed_won`. Lower friction wins. `n_closed_won` count still increments (close-rate learning works); `sum_close_value` only sums events that supplied a value.
+
+**UI additions:**
+
+- **OpportunityDetail page** — rewritten lifecycle action area. Primary actions adapt to current stage:
+  - Stage `created`/`delivered` → [Accept] [Reject] primary buttons.
+  - Stages `accepted`/`engaged`/`proposal_sent` → [Closed-won] [Closed-lost] primary.
+  - Closed/rejected stages → [Reopen] primary.
+  - Secondary "Mark…" dropdown surfaces the less-common transitions (Delivered, Engaged, Proposal sent, plus a way back into closed states from anywhere).
+- **LifecycleModal** — single component handling reason-picker / amount-input / free-text-note dialogs for the five events that need extra info (rejected, engaged, proposal_sent, closed_won, closed_lost, delivered).
+- **Event timeline** — chronological list of all events on the opportunity, with stage chip + payload summary per row.
+- **Stage chip + close-value chip + cycle-days chip** in the Opportunity Detail header.
+- **Dashboard pipeline widget** — 5 cards above the legacy StatCards row: New, Working pipeline, Won this month, Win rate (cold-start safeguard: only shown when ≥3 closed deals), Active brands.
+- **Dashboard stale chip** — opportunities sitting in working stages with no event activity in 14+ days get a `⚠ stale` chip next to the company name. Driven by `getStaleOpportunityIds(thresholdDays)`.
+
+**Backfill at startup:**
+
+`backfillCreatedEvents()` runs once per app startup in `main/index.ts` after `getDb()` + `seedDefaults()`. For every existing opportunity that doesn't have a `created` event in its log, a synthetic one is emitted with `actor_kind='system'`, `provenance='backfill-v1.16'`, and `occurred_at` copied from the opportunity's `created_at`. State cache is rebuilt for each. Idempotent on re-run. On the live dev DB the backfill emitted 30 events on first launch — everything that existed pre-v1.16 now has a lifecycle starting point.
+
+**Context-bloat preparation (per the architectural Q before coding):**
+
+- Outcome events (`closed_won`/`closed_lost`) get **embedded on record** via MiniLM so v1.17 can retrieve the top-K semantically relevant past outcomes when scoring a new candidate. Embedding fails non-fatally; events still record without it.
+- The schema is RAG-ready without adding a vector DB. `sqlite-vec` is the upgrade path if vector count ever crosses ~100K (we're at ~1K today).
+- `timeDecayWeight(occurredAt, halfLifeDays, nowIso)` is implemented + smoke-tested. Default half-life 180 days. v1.17 will use it to weight learned `close_rate` so recent outcomes outweigh ancient ones.
+
+**Cold-start safeguards** (some active in v1.16, some staged for v1.17):
+
+- Win rate widget shows `—` until at least 3 deals have closed (`MIN_DEALS_FOR_WIN_RATE = 3`). Active in v1.16.
+- Bayesian smoothing, confidence intervals, magnitude cap on learned adjustments, explicit per-dimension count UI — all designed in the v1.16 proposal but not exercised until v1.17 actually wires learned weights into Stage 2.
+
+**Smoke tests: 127 → 152 passed (+25).**
+
+The new tests cover `projectOpportunityState` across the full lifecycle including the two tricky cases (reopen-after-close preserves history but clears active close state; reopen-then-close-again has the latest close win for learning), the validator enforcing controlled vocab on rejected/won/lost, `isStale` thresholding, and the `timeDecayWeight` half-life math (180 days → 0.5, 360 days → 0.25, future timestamps → 1).
+
 **v1.15.0 (2026-05-29):** Editable signals + lock through re-research.
 
 User asked for two changes to Signal Config: (1) each brand/product signal should be selectable for edit or deletion, (2) brand-level signals should be collapsible like product-level cards. Then asked for a third: a lock/unlock toggle so re-research preserves explicitly-pinned signals. The lock feature is materially larger than the first two — it changes the research pipeline, not just the UI — so the whole bundle ships as v1.15.0.

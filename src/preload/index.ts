@@ -105,7 +105,20 @@ const api = {
     exportXlsx: (ids: number[]) => ipcRenderer.invoke('opps:exportXlsx', ids),
     brief: (id: number) => ipcRenderer.invoke('opps:brief', id),
     dispatch: (id: number, target: string, payload: string) =>
-      ipcRenderer.invoke('opps:dispatch', id, target, payload)
+      ipcRenderer.invoke('opps:dispatch', id, target, payload),
+    // v1.16.0: derived lifecycle state for a single opportunity.
+    state: (id: number) => ipcRenderer.invoke('opps:state', id)
+  },
+  // v1.16.0: opportunity lifecycle event log.
+  events: {
+    append: (opportunityId: number, eventType: string, payload?: any) =>
+      ipcRenderer.invoke('events:append', opportunityId, eventType, payload),
+    list: (opportunityId: number) => ipcRenderer.invoke('events:list', opportunityId)
+  },
+  pipeline: {
+    summary: () => ipcRenderer.invoke('pipeline:summary'),
+    staleIds: (thresholdDays: number = 14) =>
+      ipcRenderer.invoke('pipeline:staleIds', thresholdDays)
   },
   spend: {
     summary: () => ipcRenderer.invoke('spend:summary')

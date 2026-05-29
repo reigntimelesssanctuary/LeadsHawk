@@ -1244,5 +1244,450 @@ test('locked round-trip — serialize→parse preserves locks', () => {
   eq(parseLockedSignals(serializeLockedSignals(locked)), locked);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.16.0 — lifecycle event log (src/shared/lifecycle.ts).
+//
+// MUST stay byte-identical with production. projectOpportunityState is
+// the source of truth for derived state; the main process uses it to
+// populate opportunity_state_cache, and the renderer uses it through the
+// state cache to render lifecycle widgets.
+//
+// Key correctness properties tested:
+//   - Empty event list returns null (no opportunity, no state).
+//   - Reopen-after-close clears close_value but keeps history.
+//   - Latest close event wins for learning (effective_close_event_id).
+//   - delivered_at is set only on the FIRST delivered event (idempotent).
+//   - Cycle days computed as floor((closed - delivered) / 1 day).
+//   - eventValidator enforces controlled vocab on rejected/lost/won.
+//   - timeDecayWeight follows half-life math correctly.
+// ════════════════════════════════════════════════════════════════════════
+
+const REJECTION_REASONS = [
+  { code: 'not_icp_fit', label: 'Not ICP fit' },
+  { code: 'wrong_industry', label: 'Wrong industry' },
+  { code: 'too_small', label: 'Company too small' },
+  { code: 'too_large', label: 'Company too large' },
+  { code: 'bad_timing', label: 'Bad timing' },
+  { code: 'bad_data', label: 'Bad data / hallucination' },
+  { code: 'duplicate', label: 'Already in pipeline (duplicate)' },
+  { code: 'other', label: 'Other' }
+];
+
+const CLOSE_LOST_REASONS = [
+  { code: 'budget', label: 'No budget' },
+  { code: 'timing', label: 'Timing mismatch' },
+  { code: 'competitor_won', label: 'Competitor won' },
+  { code: 'no_decision', label: 'No decision made' },
+  { code: 'internal_priority_shift', label: 'Internal priority shift' },
+  { code: 'fit_mismatch', label: 'Product fit mismatch' },
+  { code: 'champion_left', label: 'Champion left the company' },
+  { code: 'other', label: 'Other' }
+];
+
+const CLOSE_WON_FACTORS = [
+  { code: 'compelling_event', label: 'Compelling event' },
+  { code: 'relationship', label: 'Existing relationship' },
+  { code: 'product_fit', label: 'Strong product fit' },
+  { code: 'price', label: 'Price advantage' },
+  { code: 'urgency', label: 'Urgency / deadline' },
+  { code: 'other', label: 'Other' }
+];
+
+function parsePayload(json) {
+  if (!json) return null;
+  try { return JSON.parse(json); } catch { return null; }
+}
+
+function computeCycleDaysFromAnchors(deliveredAt, closedAt) {
+  if (!deliveredAt || !closedAt) return null;
+  const start = Date.parse(deliveredAt);
+  const end = Date.parse(closedAt);
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  const days = Math.floor((end - start) / 86400000);
+  return days < 0 ? 0 : days;
+}
+
+function projectOpportunityState(events) {
+  if (events.length === 0) return null;
+  const sorted = [...events].sort((a, b) => {
+    const t = (a.occurred_at || '').localeCompare(b.occurred_at || '');
+    return t !== 0 ? t : a.id - b.id;
+  });
+
+  let stage = 'created';
+  let delivered_at = null;
+  let accepted_at = null;
+  let closed_at = null;
+  let close_value = null;
+  let close_currency = null;
+  let primary_factor = null;
+  let is_closed_won = false;
+  let is_closed_lost = false;
+  let effective_close_event_id = null;
+
+  for (const event of sorted) {
+    const payload = parsePayload(event.payload_json);
+    switch (event.event_type) {
+      case 'created':
+        stage = 'created';
+        break;
+      case 'delivered':
+        stage = 'delivered';
+        if (!delivered_at) delivered_at = event.occurred_at;
+        break;
+      case 'accepted':
+        stage = 'accepted';
+        if (!accepted_at) accepted_at = event.occurred_at;
+        is_closed_won = false;
+        is_closed_lost = false;
+        close_value = null;
+        close_currency = null;
+        primary_factor = null;
+        closed_at = null;
+        effective_close_event_id = null;
+        break;
+      case 'rejected':
+        stage = 'rejected';
+        break;
+      case 'engaged':
+        stage = 'engaged';
+        break;
+      case 'proposal_sent':
+        stage = 'proposal_sent';
+        break;
+      case 'closed_won':
+        stage = 'closed_won';
+        closed_at = event.occurred_at;
+        close_value = typeof payload?.amount === 'number' ? payload.amount : null;
+        close_currency = typeof payload?.currency === 'string' ? payload.currency : 'USD';
+        primary_factor = typeof payload?.primary_factor === 'string' ? payload.primary_factor : null;
+        is_closed_won = true;
+        is_closed_lost = false;
+        effective_close_event_id = event.id;
+        break;
+      case 'closed_lost':
+        stage = 'closed_lost';
+        closed_at = event.occurred_at;
+        close_value = null;
+        close_currency = null;
+        primary_factor = typeof payload?.reason_code === 'string' ? payload.reason_code : null;
+        is_closed_won = false;
+        is_closed_lost = true;
+        effective_close_event_id = event.id;
+        break;
+      case 'archived':
+        stage = 'archived';
+        break;
+      case 'reopened':
+        if (accepted_at) {
+          stage = 'accepted';
+        } else if (delivered_at) {
+          stage = 'delivered';
+        } else {
+          stage = 'created';
+        }
+        is_closed_won = false;
+        is_closed_lost = false;
+        close_value = null;
+        close_currency = null;
+        primary_factor = null;
+        closed_at = null;
+        effective_close_event_id = null;
+        break;
+    }
+  }
+
+  const cycle_days = computeCycleDaysFromAnchors(delivered_at, closed_at);
+  const last = sorted[sorted.length - 1];
+
+  return {
+    current_stage: stage,
+    delivered_at,
+    accepted_at,
+    closed_at,
+    close_value,
+    close_currency,
+    cycle_days,
+    primary_factor,
+    is_closed_won,
+    is_closed_lost,
+    effective_close_event_id,
+    last_event_id: last.id,
+    last_event_at: last.occurred_at
+  };
+}
+
+function eventValidator(type, payload) {
+  switch (type) {
+    case 'created':
+    case 'delivered':
+    case 'accepted':
+    case 'archived':
+    case 'reopened':
+    case 'engaged':
+    case 'proposal_sent':
+      return null;
+    case 'rejected':
+      if (payload?.reason_code && !REJECTION_REASONS.some((r) => r.code === payload.reason_code)) {
+        return `rejected.reason_code must be one of: ${REJECTION_REASONS.map((r) => r.code).join(', ')}`;
+      }
+      return null;
+    case 'closed_won':
+      if (payload?.amount !== undefined && payload.amount !== null) {
+        if (typeof payload.amount !== 'number' || !Number.isFinite(payload.amount) || payload.amount < 0) {
+          return 'closed_won.amount must be a non-negative number';
+        }
+      }
+      if (payload?.primary_factor && !CLOSE_WON_FACTORS.some((f) => f.code === payload.primary_factor)) {
+        return `closed_won.primary_factor must be one of: ${CLOSE_WON_FACTORS.map((f) => f.code).join(', ')}`;
+      }
+      return null;
+    case 'closed_lost':
+      if (!payload?.reason_code) {
+        return 'closed_lost.reason_code is required for learning';
+      }
+      if (!CLOSE_LOST_REASONS.some((r) => r.code === payload.reason_code)) {
+        return `closed_lost.reason_code must be one of: ${CLOSE_LOST_REASONS.map((r) => r.code).join(', ')}`;
+      }
+      return null;
+    default:
+      return `unknown event type: ${type}`;
+  }
+}
+
+function isStale(events, thresholdDays, nowIso) {
+  const state = projectOpportunityState(events);
+  if (!state) return false;
+  const workingStages = ['delivered', 'accepted', 'engaged', 'proposal_sent'];
+  if (!workingStages.includes(state.current_stage)) return false;
+  const now = Date.parse(nowIso);
+  const last = Date.parse(state.last_event_at);
+  if (Number.isNaN(now) || Number.isNaN(last)) return false;
+  const ageMs = now - last;
+  return ageMs > thresholdDays * 86400000;
+}
+
+function timeDecayWeight(occurredAt, halfLifeDays, nowIso) {
+  const occurred = Date.parse(occurredAt);
+  const now = Date.parse(nowIso);
+  if (Number.isNaN(occurred) || Number.isNaN(now) || halfLifeDays <= 0) return 1;
+  const ageDays = Math.max(0, (now - occurred) / 86400000);
+  return Math.pow(0.5, ageDays / halfLifeDays);
+}
+
+// Test helpers ─────────────────────────────────────────────────────────
+let nextEventId = 1;
+function mkEvent(type, occurredAt, payload) {
+  return {
+    id: nextEventId++,
+    tenant_id: 1,
+    opportunity_id: 1,
+    event_type: type,
+    payload_json: payload ? JSON.stringify(payload) : null,
+    occurred_at: occurredAt,
+    recorded_at: occurredAt,
+    actor_kind: 'user',
+    actor_id: null,
+    provenance: null,
+    embedding: null
+  };
+}
+function resetEventIds() { nextEventId = 1; }
+
+// projectOpportunityState ──────────────────────────────────────────────
+test('project — empty events → null', () => {
+  eq(projectOpportunityState([]), null);
+});
+test('project — single created event', () => {
+  resetEventIds();
+  const s = projectOpportunityState([mkEvent('created', '2026-05-01T10:00:00Z')]);
+  eq(s.current_stage, 'created');
+  eq(s.delivered_at, null);
+  eq(s.is_closed_won, false);
+});
+test('project — full happy path: created → delivered → accepted → engaged → closed_won', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('created',       '2026-05-01T10:00:00Z'),
+    mkEvent('delivered',     '2026-05-02T10:00:00Z'),
+    mkEvent('accepted',      '2026-05-03T10:00:00Z'),
+    mkEvent('engaged',       '2026-05-05T10:00:00Z'),
+    mkEvent('closed_won',    '2026-05-20T10:00:00Z', { amount: 50000, primary_factor: 'product_fit' })
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.current_stage, 'closed_won');
+  eq(s.is_closed_won, true);
+  eq(s.close_value, 50000);
+  eq(s.primary_factor, 'product_fit');
+  eq(s.cycle_days, 18);  // delivered 2026-05-02 → closed 2026-05-20 = 18 days
+  truthy(s.effective_close_event_id !== null);
+});
+test('project — closed_won without amount still records the win', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',  '2026-05-02T10:00:00Z'),
+    mkEvent('closed_won', '2026-05-10T10:00:00Z') // no payload
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.is_closed_won, true);
+  eq(s.close_value, null);
+});
+test('project — closed_lost requires reason_code in payload', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',   '2026-05-02T10:00:00Z'),
+    mkEvent('closed_lost', '2026-05-10T10:00:00Z', { reason_code: 'budget' })
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.is_closed_lost, true);
+  eq(s.primary_factor, 'budget');
+});
+test('project — reopen-after-close clears close state but keeps stage as "accepted"', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',   '2026-05-02T10:00:00Z'),
+    mkEvent('accepted',    '2026-05-03T10:00:00Z'),
+    mkEvent('closed_lost', '2026-05-10T10:00:00Z', { reason_code: 'budget' }),
+    mkEvent('reopened',    '2026-05-15T10:00:00Z', { note: 'budget freed up' })
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.current_stage, 'accepted');
+  eq(s.is_closed_won, false);
+  eq(s.is_closed_lost, false);
+  eq(s.close_value, null);
+  eq(s.effective_close_event_id, null);
+});
+test('project — reopen-then-close-again: latest close wins for learning', () => {
+  // Per Decide 4: when reopened then closed again, the latest close is
+  // authoritative for learning. History is preserved (4 events still in
+  // the log) but only the final closed_won drives effective_close_event_id.
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',   '2026-05-02T10:00:00Z'),
+    mkEvent('closed_lost', '2026-05-10T10:00:00Z', { reason_code: 'timing' }),
+    mkEvent('reopened',    '2026-05-15T10:00:00Z'),
+    mkEvent('closed_won',  '2026-05-20T10:00:00Z', { amount: 42000, primary_factor: 'urgency' })
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.current_stage, 'closed_won');
+  eq(s.is_closed_won, true);
+  eq(s.is_closed_lost, false);
+  eq(s.close_value, 42000);
+  // The effective close event is the LATEST (closed_won), not the earlier closed_lost.
+  truthy(s.effective_close_event_id !== null);
+  // events sorted by occurred_at — the closed_won is event #4.
+  eq(s.effective_close_event_id, 4);
+});
+test('project — delivered_at is set only on the FIRST delivered event (idempotent on reset-reopen)', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered', '2026-05-02T10:00:00Z'),
+    mkEvent('accepted',  '2026-05-03T10:00:00Z'),
+    mkEvent('delivered', '2026-05-10T10:00:00Z') // shouldn't overwrite original
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.delivered_at, '2026-05-02T10:00:00Z');
+});
+test('project — accepted-after-close clears close state (implicit reopen)', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',   '2026-05-02T10:00:00Z'),
+    mkEvent('closed_won',  '2026-05-10T10:00:00Z', { amount: 50000 }),
+    mkEvent('accepted',    '2026-05-15T10:00:00Z')
+  ];
+  const s = projectOpportunityState(events);
+  eq(s.current_stage, 'accepted');
+  eq(s.is_closed_won, false);
+  eq(s.close_value, null);
+});
+test('project — cycle days never negative', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',  '2026-05-10T10:00:00Z'),
+    mkEvent('closed_won', '2026-05-01T10:00:00Z') // earlier than delivered (data anomaly)
+  ];
+  const s = projectOpportunityState(events);
+  // sorted by occurred_at, closed_won comes first; delivered comes later.
+  // So delivered_at is set after the close. Cycle would compute negative
+  // if we used the events directly, but we clamp to 0.
+  eq(s.cycle_days, 0);
+});
+
+// eventValidator ───────────────────────────────────────────────────────
+test('validator — closed_lost without reason_code → error', () => {
+  const err = eventValidator('closed_lost', {});
+  truthy(err !== null);
+});
+test('validator — closed_lost with unknown reason_code → error', () => {
+  const err = eventValidator('closed_lost', { reason_code: 'made_up' });
+  truthy(err !== null);
+});
+test('validator — closed_lost with valid reason_code → null', () => {
+  eq(eventValidator('closed_lost', { reason_code: 'budget' }), null);
+});
+test('validator — closed_won with negative amount → error', () => {
+  const err = eventValidator('closed_won', { amount: -100 });
+  truthy(err !== null);
+});
+test('validator — closed_won without amount → null (per Decide 5: optional)', () => {
+  eq(eventValidator('closed_won', {}), null);
+});
+test('validator — closed_won with unknown primary_factor → error', () => {
+  const err = eventValidator('closed_won', { primary_factor: 'wishful_thinking' });
+  truthy(err !== null);
+});
+test('validator — rejected with unknown reason_code → error', () => {
+  const err = eventValidator('rejected', { reason_code: 'just_because' });
+  truthy(err !== null);
+});
+test('validator — unknown event_type → error', () => {
+  const err = eventValidator('teleported', {});
+  truthy(err !== null);
+});
+
+// isStale ───────────────────────────────────────────────────────────────
+test('isStale — opportunity 30 days untouched in accepted → stale', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered', '2026-04-01T10:00:00Z'),
+    mkEvent('accepted',  '2026-04-15T10:00:00Z')
+  ];
+  truthy(isStale(events, 14, '2026-05-29T10:00:00Z'));
+});
+test('isStale — opportunity 5 days old → not stale', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered', '2026-05-20T10:00:00Z'),
+    mkEvent('accepted',  '2026-05-25T10:00:00Z')
+  ];
+  falsy(isStale(events, 14, '2026-05-29T10:00:00Z'));
+});
+test('isStale — closed opportunities are never stale', () => {
+  resetEventIds();
+  const events = [
+    mkEvent('delivered',  '2026-01-01T10:00:00Z'),
+    mkEvent('closed_won', '2026-01-10T10:00:00Z', { amount: 1000 })
+  ];
+  falsy(isStale(events, 14, '2026-05-29T10:00:00Z'));
+});
+
+// timeDecayWeight ──────────────────────────────────────────────────────
+test('timeDecayWeight — same day → weight ≈ 1', () => {
+  const w = timeDecayWeight('2026-05-29T10:00:00Z', 180, '2026-05-29T10:00:00Z');
+  truthy(Math.abs(w - 1) < 1e-6, `got ${w}`);
+});
+test('timeDecayWeight — 180 days ago with 180d half-life → weight ≈ 0.5', () => {
+  const w = timeDecayWeight('2025-11-30T10:00:00Z', 180, '2026-05-29T10:00:00Z');
+  truthy(Math.abs(w - 0.5) < 0.01, `got ${w}`);
+});
+test('timeDecayWeight — 360 days ago with 180d half-life → weight ≈ 0.25', () => {
+  const w = timeDecayWeight('2025-06-03T10:00:00Z', 180, '2026-05-29T10:00:00Z');
+  truthy(Math.abs(w - 0.25) < 0.01, `got ${w}`);
+});
+test('timeDecayWeight — future occurrence (data clock skew) → weight = 1', () => {
+  const w = timeDecayWeight('2027-01-01T10:00:00Z', 180, '2026-05-29T10:00:00Z');
+  eq(w, 1);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

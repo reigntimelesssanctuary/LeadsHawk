@@ -8,6 +8,7 @@ import { startMonitor, stopMonitor } from './monitor/index.js';
 import { getSettings } from './settings.js';
 import { getDb } from './db.js';
 import { backfillKnowledgeIndex } from './knowledge-index.js';
+import { backfillCreatedEvents } from './events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +47,16 @@ app.whenReady().then(() => {
   getDb();
   registerIpc();
   seedDefaults();
+  // v1.16.0: synthesize 'created' lifecycle events for any pre-existing
+  // opportunities so historical data shows up in the new pipeline
+  // widgets immediately on install. Sync + idempotent: no-op after the
+  // first run since each opportunity gains exactly one 'created' event.
+  try {
+    const n = backfillCreatedEvents();
+    if (n > 0) console.log(`[v1.16] backfilled ${n} created events`);
+  } catch (e: any) {
+    console.warn('[v1.16] created-event backfill failed:', e?.message || e);
+  }
   startScheduler();
   // Resume live monitor if the user had it on
   if (getSettings().liveMonitoringEnabled) {

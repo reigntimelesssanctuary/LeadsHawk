@@ -18,6 +18,14 @@ import {
 } from './monitor/index.js';
 import { fetchUrl as fetchUrlForKnowledge } from './knowledge.js';
 import { recordDisqualifyVector, embedSignalsForProduct } from './monitor/embed.js';
+import {
+  appendEvent,
+  listEvents,
+  getOpportunityState,
+  getPipelineSummary,
+  getStaleOpportunityIds
+} from './events.js';
+import type { EventType, ActorKind } from '@shared/lifecycle.js';
 import type { MonitorSource, SignalItem, SourceHealth, Opportunity } from '@shared/types';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, basename } from 'path';
@@ -587,6 +595,33 @@ export function registerIpc() {
     recordDispatch(id, target, payload);
     return true;
   });
+
+  // -------- v1.16.0 — Outcome capture / lifecycle event log --------
+  // Append a lifecycle event. Validates against the controlled vocab in
+  // src/shared/lifecycle.ts. For closed_won / closed_lost the main module
+  // also embeds the event text via MiniLM so v1.17 RAG retrieval works.
+  ipcMain.handle('events:append', async (
+    _e,
+    opportunityId: number,
+    eventType: EventType,
+    payload?: any,
+    actorKind: ActorKind = 'user'
+  ) => {
+    return appendEvent({ opportunityId, eventType, payload, actorKind });
+  });
+  // Full event log for a single opportunity — drives the timeline view
+  // on OpportunityDetail.
+  ipcMain.handle('events:list', (_e, opportunityId: number) => listEvents(opportunityId));
+  // Derived state row for a single opportunity — read directly from the
+  // state cache so the renderer doesn't need to replay events itself.
+  ipcMain.handle('opps:state', (_e, opportunityId: number) => getOpportunityState(opportunityId));
+  // Pipeline counts + win rate + $ totals for the Dashboard widget.
+  ipcMain.handle('pipeline:summary', () => getPipelineSummary());
+  // Opportunity IDs sitting in a working stage with no event activity in
+  // `thresholdDays`. Used by the Dashboard's stale-warning chip.
+  ipcMain.handle('pipeline:staleIds', (_e, thresholdDays: number = 14) =>
+    getStaleOpportunityIds(thresholdDays)
+  );
 
   ipcMain.handle('openExternal', (_e, url: string) => {
     shell.openExternal(url);
