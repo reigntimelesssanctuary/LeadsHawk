@@ -2112,5 +2112,110 @@ test('buildLearningPriorsBlock — caps at top K most-informative rows', () => {
   truthy(matches.length <= 10, `expected ≤10 rows surfaced, got ${matches.length}`);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.17.2 — dossierLabelState helper (src/renderer/src/pages/BrandsProducts.tsx).
+//
+// MUST stay byte-identical with production. This decides whether to
+// display "Opus verified" and "+ fact-checked" labels in the dossier
+// header. Critical that it READS the latest status_detail and doesn't
+// fall back to persistent timestamps when status_detail says the
+// latest run failed — that was the v1.17.0 bug that caused
+// "Opus verified + fact-checked" to display on Design and Build even
+// though its latest re-research had Stage 2 failed and Stages 3/4
+// skipped.
+// ════════════════════════════════════════════════════════════════════════
+
+function parseStatusDetail(raw) {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object') return null;
+    return j;
+  } catch { return null; }
+}
+
+function dossierLabelState(statusDetailRaw, lastAdvancedAt, lastFactCheckAt) {
+  const parsed = parseStatusDetail(statusDetailRaw);
+  if (parsed && (parsed.stage2 || parsed.stage1)) {
+    const stage2Ok = parsed.stage2 === 'completed';
+    const stage4Ok = parsed.stage4 === 'completed' ||
+                     (!!parsed.stage4 && /^partial:/.test(parsed.stage4));
+    return { verified: stage2Ok, factChecked: stage4Ok };
+  }
+  return {
+    verified: !!lastAdvancedAt,
+    factChecked: !!lastFactCheckAt
+  };
+}
+
+test('dossierLabelState — latest run all-completed → verified + factChecked', () => {
+  const detail = JSON.stringify({
+    stage1: 'completed', stage2: 'completed', stage3: 'completed', stage4: 'completed'
+  });
+  const r = dossierLabelState(detail, '2026-01-01', '2026-01-01');
+  eq(r.verified, true);
+  eq(r.factChecked, true);
+});
+
+test('dossierLabelState — latest Stage 2 failed → both false even with stale timestamps', () => {
+  // The exact bug from Design and Build screenshot: Stage 2 failed but
+  // persistent timestamps from a previous successful run are still set.
+  // Pre-fix, the label gated on the timestamps and lied. Post-fix, the
+  // label reflects the latest run's reality.
+  const detail = JSON.stringify({
+    stage1: 'completed',
+    stage2: 'failed: Unparseable Stage 2 response',
+    stage3: 'skipped: stage2 failed',
+    stage4: 'skipped: stage2 failed'
+  });
+  const r = dossierLabelState(detail, '2026-01-01T10:00:00Z', '2026-01-01T10:00:00Z');
+  eq(r.verified, false);
+  eq(r.factChecked, false);
+});
+
+test('dossierLabelState — Stage 2 OK but Stage 4 skipped (toggle off) → verified only', () => {
+  const detail = JSON.stringify({
+    stage1: 'completed', stage2: 'completed', stage3: 'completed',
+    stage4: 'skipped: productResearchFactCheck toggle is off'
+  });
+  const r = dossierLabelState(detail, '2026-01-01', null);
+  eq(r.verified, true);
+  eq(r.factChecked, false);
+});
+
+test('dossierLabelState — Stage 4 partial → factChecked stays true', () => {
+  // Partial Stage 4 (some sources couldn't be fetched) still counts as
+  // fact-checked. The chip separately shows the partial percentage.
+  const detail = JSON.stringify({
+    stage1: 'completed', stage2: 'completed', stage3: 'completed',
+    stage4: 'partial: 9/10 sources verified'
+  });
+  const r = dossierLabelState(detail, '2026-01-01', '2026-01-01');
+  eq(r.verified, true);
+  eq(r.factChecked, true);
+});
+
+test('dossierLabelState — null status_detail falls back to timestamps (legacy data)', () => {
+  // Pre-v1.10.1 rows have status_detail = NULL. Don't strip the label
+  // entirely just because the schema was newer than the row.
+  const r = dossierLabelState(null, '2026-01-01T10:00:00Z', '2026-01-01T10:00:00Z');
+  eq(r.verified, true);
+  eq(r.factChecked, true);
+});
+
+test('dossierLabelState — malformed status_detail JSON falls back to timestamps', () => {
+  const r = dossierLabelState('not json', '2026-01-01', null);
+  eq(r.verified, true);
+  eq(r.factChecked, false);
+});
+
+test('dossierLabelState — empty-object status_detail still falls back to timestamps', () => {
+  // An empty object (no stage1/2 keys) is treated as "no data" and falls
+  // back to timestamps. Defensive against unusual writes.
+  const r = dossierLabelState('{}', '2026-01-01', '2026-01-01');
+  eq(r.verified, true);
+  eq(r.factChecked, true);
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

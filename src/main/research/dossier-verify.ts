@@ -194,7 +194,12 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
   try {
     raw = await complete(VERIFY_SYSTEM, prompt, {
       model: 'claude-opus-4-7',
-      maxTokens: 6000,
+      // v1.17.2: bumped 6000 → 12000. The Stage 2 JSON output is sizeable
+      // (6 fields × ~100-200 words each + 6 confidence levels + unknowns
+      // list + optional flagged_claims). Opus also reasons before output,
+      // and the 6K budget left too little headroom — we were seeing
+      // unparseable responses where the JSON truncated mid-field.
+      maxTokens: 12000,
       // v1.10.1: temperature is deprecated on Opus 4.7 — llm.ts gates it
       // automatically via modelSupportsTemperature.
       temperature: 0.2,
@@ -209,10 +214,18 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
 
   const parsed = tryParseJson<Stage2BrandOutput>(raw);
   if (!parsed || !parsed.fields || !parsed.confidence_levels) {
-    const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
+    const head = (raw || '').slice(0, 200).replace(/\s+/g, ' ').trim();
     console.warn(`[dossier-verify:brand ${input.brandId}] unparseable Stage 2 response`);
     console.warn(`  head: ${head}`);
-    return { ok: false, error: 'Unparseable Stage 2 response (check console log for head/tail preview)' };
+    // v1.17.2: include the response preview in the error itself so the
+    // user sees it directly in the chip's expanded view — no terminal
+    // access required to diagnose.
+    return {
+      ok: false,
+      error: head
+        ? `Unparseable Stage 2 response. Head: ${head}`
+        : 'Unparseable Stage 2 response (empty body)'
+    };
   }
   // Coerce missing string fields to safe defaults so downstream DB write
   // doesn't violate NOT NULL.
@@ -306,7 +319,9 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
   try {
     raw = await complete(VERIFY_SYSTEM, prompt, {
       model: 'claude-opus-4-7',
-      maxTokens: 6000,
+      // v1.17.2: bumped 6000 → 12000 to give the verified-dossier JSON
+      // enough output headroom. See brand version above for full rationale.
+      maxTokens: 12000,
       temperature: 0.2,
       stage: 'product_research_verify',
       relatedId: input.productId
@@ -319,10 +334,17 @@ flagged_claims is optional — omit the array (or leave empty) if nothing is fla
 
   const parsed = tryParseJson<Stage2ProductOutput>(raw);
   if (!parsed || !parsed.fields || !parsed.confidence_levels) {
-    const head = (raw || '').slice(0, 800).replace(/\s+/g, ' ');
+    const head = (raw || '').slice(0, 200).replace(/\s+/g, ' ').trim();
     console.warn(`[dossier-verify:product ${input.productId}] unparseable Stage 2 response`);
     console.warn(`  head: ${head}`);
-    return { ok: false, error: 'Unparseable Stage 2 response (check console log for head/tail preview)' };
+    // v1.17.2: include the response preview in the error itself so the
+    // user sees it directly in the chip's expanded view.
+    return {
+      ok: false,
+      error: head
+        ? `Unparseable Stage 2 response. Head: ${head}`
+        : 'Unparseable Stage 2 response (empty body)'
+    };
   }
   return {
     ok: true,

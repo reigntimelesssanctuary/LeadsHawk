@@ -613,6 +613,46 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.17.2 (2026-05-30):** Stale label fix + Stage 2 maxTokens bump + inline error preview.
+
+Triggered by user observation after installing v1.17.1: re-research on Design and Build now correctly shows the Stage chip (amber "Stage 2 ✗ · Stage 3 – · Stage 4 –" with the failure reason in the expanded view), but the dossier header label STILL reads "Opus verified + fact-checked". User correctly asked: "How could it be fact-checked if Stage 3 and 4 failed?"
+
+**Three fixes, all in v1.17.2:**
+
+1. **Stale label bug — `dossierLabelState` helper.** The pre-v1.17.2 labels gated on `last_advanced_research_at` and `last_fact_check_at` — persistent timestamps that get set on successful Stage 2 / Stage 4 runs and never cleared. When a re-research failed after Stage 1 wrote new raw_dossier (so the user knew the re-research had run), the labels kept showing values from previous successful runs. Misleading.
+
+   New pure helper `dossierLabelState(statusDetailRaw, lastAdvancedAt, lastFactCheckAt)` reads the LATEST run's `research_status_detail` and returns `{ verified, factChecked }` based on the current Stage 2 / Stage 4 status. Falls back to persistent timestamps only when `status_detail` is null/malformed (pre-v1.10.1 legacy rows). Used by both product and brand renderers.
+
+2. **Stage 2 (Opus verify) maxTokens 6000 → 12000.** Same class of fix as v1.16.1's Stage 1 bump. The Stage 2 JSON output is large (6 fields × ~100-200 words + 6 confidence levels + unknowns list + optional flagged_claims) and Opus reasons before output. 6K was leaving the response truncated mid-field, producing the unparseable response Design and Build hit. 12K gives reasonable headroom. Applied to both `verifyProductDossier` and `verifyBrandDossier` in `src/main/research/dossier-verify.ts`.
+
+3. **Inline error preview — remove the "check console log" instruction.** Pre-v1.17.2, when Stage 2 produced unparseable JSON, the error string said `'Unparseable Stage 2 response (check console log for head/tail preview)'`. But the user has no easy terminal access — running the .app via Finder doesn't show stdout. Changed the error to include the first 200 chars of the unparseable response directly: `'Unparseable Stage 2 response. Head: <first 200 chars cleaned>'`. The chip's existing expanded view shows the full status string, so the user now sees the actual response preview without leaving the UI. Empty-body case falls back to `'Unparseable Stage 2 response (empty body)'`.
+
+**Pure helper signature** (exported from `BrandsProducts.tsx` for smoke testing):
+
+```ts
+export function dossierLabelState(
+  statusDetailRaw: string | null,
+  lastAdvancedAt: string | null,
+  lastFactCheckAt: string | null
+): { verified: boolean; factChecked: boolean }
+```
+
+Decision matrix:
+
+| status_detail | lastAdvancedAt | lastFactCheckAt | result |
+|---|---|---|---|
+| `{stage2: 'completed', stage4: 'completed'}` | (ignored) | (ignored) | `{verified: T, factChecked: T}` |
+| `{stage2: 'failed: ...'}` | set | set | `{verified: F, factChecked: F}` ← bug fix |
+| `{stage2: 'completed', stage4: 'skipped: toggle off'}` | set | null | `{verified: T, factChecked: F}` |
+| `{stage2: 'completed', stage4: 'partial: 9/10 sources'}` | set | set | `{verified: T, factChecked: T}` |
+| null (pre-v1.10.1) | set | set | `{verified: T, factChecked: T}` ← legacy fallback |
+| 'not json' (malformed) | set | null | `{verified: T, factChecked: F}` ← fallback |
+| `{}` (empty obj) | set | set | `{verified: T, factChecked: T}` ← falls back |
+
+**Smoke tests: 187 → 194 (+7).** The Stage 2 maxTokens bump is structural (no new pure logic to test); the dossierLabelState helper gets full coverage of the decision matrix including the critical regression guard "latest Stage 2 failed → both labels false even when timestamps are stale" (which is the exact bug from the Design and Build screenshot).
+
+**What this still doesn't fix:** if Stage 2 keeps producing unparseable responses even with the 12K budget, the chip will now show the preview (so we can diagnose), but the underlying issue (Opus refusing? rate-limited? returning something exotic?) would need a different fix. Re-running v1.17.2 on Design and Build is the next data point.
+
 **v1.17.1 (2026-05-29):** Visible failures — finally-block status write + product error chip + skipped-Stage-4 fix.
 
 Diagnostic patch triggered by user observation: re-research on "Design and Build" (renamed from Renovation Services) produced a dossier and "Opus verified" label but no Stage 1–4 chip and no "+ fact-checked" suffix, with both Research depth toggles confirmed ON the whole time. Root cause: research pipeline could throw to the outer catch in `research.ts` after a successful Stage 1 (so raw_dossier and Stage 2's verified_dossier were updated) but **before** the line-344 `research_status_detail` write, leaving the chip silently invisible.

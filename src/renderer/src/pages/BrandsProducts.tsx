@@ -146,6 +146,46 @@ export function stage4SourceCoverage(stage4Status: string | undefined): number |
   return fetched / attempted;
 }
 
+/**
+ * v1.17.2: decide which dossier-status labels ("Opus verified",
+ * "+ fact-checked") to display in the dossier header.
+ *
+ * The labels must reflect the LATEST research attempt's outcome, not
+ * persistent timestamps from previous successful runs. Pre-v1.17.2 the
+ * labels gated on `last_advanced_research_at` and `last_fact_check_at`
+ * (persistent), which meant a failed re-research left the labels lying
+ * about the current state.
+ *
+ * Semantics:
+ *   - verified:    Latest run's Stage 2 completed.
+ *   - factChecked: Latest run's Stage 4 completed or partial.
+ *
+ * Fallback: if status_detail is null/malformed (e.g. pre-v1.10.1 row
+ * that never had a status write), fall back to the timestamps so the
+ * label doesn't disappear from legacy data.
+ *
+ * Pure helper, exported for smoke testing.
+ */
+export function dossierLabelState(
+  statusDetailRaw: string | null,
+  lastAdvancedAt: string | null,
+  lastFactCheckAt: string | null
+): { verified: boolean; factChecked: boolean } {
+  const parsed = parseStatusDetail(statusDetailRaw);
+  if (parsed && (parsed.stage2 || parsed.stage1)) {
+    // Latest run's status is authoritative.
+    const stage2Ok = parsed.stage2 === 'completed';
+    const stage4Ok = parsed.stage4 === 'completed' ||
+                     (!!parsed.stage4 && /^partial:/.test(parsed.stage4));
+    return { verified: stage2Ok, factChecked: stage4Ok };
+  }
+  // Legacy fallback — no status_detail to read from.
+  return {
+    verified: !!lastAdvancedAt,
+    factChecked: !!lastFactCheckAt
+  };
+}
+
 function ResearchStatusChip({ raw }: { raw: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const parsed = parseStatusDetail(raw);
@@ -731,13 +771,23 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                 const conf = parseConfidenceLevels(p.confidence_levels);
                 const strategic = parseStrategicIntel(p.strategic_intel);
                 const factCheck = parseFactCheckReport(p.fact_check_report);
+                // v1.17.2: gate labels on the LATEST run's status_detail
+                // instead of persistent timestamps. Prevents the "Opus
+                // verified + fact-checked" label from lying after a failed
+                // re-research overwrites Stage 1 but leaves Stage 2/4
+                // timestamps from a previous successful run.
+                const labelState = dossierLabelState(
+                  p.research_status_detail,
+                  p.last_advanced_research_at,
+                  p.last_fact_check_at
+                );
                 return (
                   <details style={{ marginTop: 10 }}>
                     <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
                       View research dossier
-                      {p.last_advanced_research_at && (
+                      {labelState.verified && (
                         <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>
-                          · Opus verified{p.last_fact_check_at ? ' + fact-checked' : ''}
+                          · Opus verified{labelState.factChecked ? ' + fact-checked' : ''}
                         </span>
                       )}
                     </summary>
@@ -1079,13 +1129,20 @@ function BrandResearchPanel({ brand, knowledge }: { brand: Brand; knowledge: Kno
         const conf = parseConfidenceLevels(brand.confidence_levels);
         const strategic = parseStrategicIntel(brand.strategic_intel);
         const factCheck = parseFactCheckReport(brand.fact_check_report);
+        // v1.17.2: see dossierLabelState rationale — labels must reflect
+        // the LATEST run's status, not stale persistent timestamps.
+        const labelState = dossierLabelState(
+          brand.research_status_detail,
+          brand.last_advanced_research_at,
+          brand.last_fact_check_at
+        );
         return (
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: 'pointer', color: '#6b7280', fontSize: 12 }}>
               View brand dossier
-              {brand.last_advanced_research_at && (
+              {labelState.verified && (
                 <span style={{ marginLeft: 8, fontSize: 11, color: '#4c1d95' }}>
-                  · Opus verified{brand.last_fact_check_at ? ' + fact-checked' : ''}
+                  · Opus verified{labelState.factChecked ? ' + fact-checked' : ''}
                 </span>
               )}
             </summary>
