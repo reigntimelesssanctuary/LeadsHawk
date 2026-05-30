@@ -613,6 +613,36 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.17.1 (2026-05-29):** Visible failures — finally-block status write + product error chip + skipped-Stage-4 fix.
+
+Diagnostic patch triggered by user observation: re-research on "Design and Build" (renamed from Renovation Services) produced a dossier and "Opus verified" label but no Stage 1–4 chip and no "+ fact-checked" suffix, with both Research depth toggles confirmed ON the whole time. Root cause: research pipeline could throw to the outer catch in `research.ts` after a successful Stage 1 (so raw_dossier and Stage 2's verified_dossier were updated) but **before** the line-344 `research_status_detail` write, leaving the chip silently invisible.
+
+**Three fixes, all in v1.17.1:**
+
+1. **Move `research_status_detail` write into a `finally` block** (both `researchProduct` and `researchBrand`). `status` is now declared **before** the outer try so the finally block can always access it, and the catch annotates `status.stage1` if Stage 1 itself threw. The finally write is wrapped in its own try/catch so a DB error during persistence can't mask the original error. After this change, **every research run leaves a chip — even when the pipeline crashes mid-way.** The chip will surface exactly which stage failed and the truncated error message, eliminating the "silent failure" class of bug.
+
+2. **Surface `research_status='error'` on product cards.** Pre-v1.17.1 the brand-level UI showed a `research error` chip when `brand.research_status === 'error'` (line ~1031) but the product-level rendering had no equivalent. Now `p.research_status === 'error'` renders a red `chip-disqualified` chip next to the scans-on chip with a tooltip pointing the user at the dossier section and Stage chip for details. Mirror of the existing brand-level pattern.
+
+3. **Fix the chip rendering when `stage4` is explicitly `'skipped: …'`** (the toggle-off case). Pre-v1.17.1, `stagesGreen` required `stage4 === undefined || isOk(stage4) || stage4PartialHigh` — an explicit "skipped" status didn't satisfy any branch, so rendering fell through to the misleading `'pending'` label. Added `stage4SkippedExplicit = isSkip(stage4)` to the green-equivalent branch. Skipped-stage4 now shows as green with "Stage 4 –" in the summary (the dash being the existing convention for skipped stages).
+
+**Surgical edits — full diff:**
+
+| File | Change |
+|---|---|
+| `src/main/research.ts` | `researchProduct`: status declared before try, stage1='completed' set after Stage 1 DB write, unparseable-Stage-1 annotates status.stage1 before throw, status_detail write moved from end-of-try into a new finally block, catch annotates status.stage1 if still 'pending'. |
+| `src/main/research.ts` | `researchBrand`: identical pattern applied. |
+| `src/renderer/src/pages/BrandsProducts.tsx` | Added `stage4SkippedExplicit` boolean to `stagesGreen` so toggle-off Stage 4 renders green. Added `research_status === 'error'` chip on product cards. |
+
+**What this patch prevents:**
+- ✅ Silent failure where the chip disappeared entirely after a re-research errored mid-pipeline. After v1.17.1 the chip ALWAYS renders.
+- ✅ Silent product `research_status='error'` state with no visible indicator. Now surfaces as a red chip.
+- ✅ Misleading `'pending'` label when Stage 4 was deliberately skipped by toggle. Now renders as green with explicit dash.
+
+**What this patch does NOT prevent:**
+- ❌ The underlying error in Stage 2/3 that caused the original failure. v1.17.1 makes failures *visible*; debugging the specific Stage 3 error (most likely culprit for Design and Build) requires capturing the chip's error message from the new failed-state chip after re-running.
+
+187 smoke tests still pass — this is a control-flow / UI patch, not new pure logic that needs regression tests. The architectural property "status_detail is always written" is a structural guarantee from the finally block, not something a unit test can really probe without a full pipeline.
+
 **v1.17.0 (2026-05-29):** Learning loop — phase 2 of the three-phase architecture.
 
 v1.16 captured outcomes. v1.17 reads them and feeds them back into Stage 2 qualification scoring. v1.18+ will add cross-tenant aggregation.

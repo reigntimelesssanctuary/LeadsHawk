@@ -169,8 +169,15 @@ function ResearchStatusChip({ raw }: { raw: string | null }) {
   const stage4PartialMid  = stage4Coverage !== null && stage4Coverage >= 0.5 && stage4Coverage < 0.8;
   const stage4PartialLow  = stage4Coverage !== null && stage4Coverage < 0.5;
 
+  // v1.17.1: an explicitly-SKIPPED stage4 (toggle off, etc.) should count
+  // as green-equivalent. The user deliberately turned it off; surfacing
+  // the rest of the pipeline as green is more accurate than falling
+  // through to "pending" (the pre-v1.17.1 behavior). The summary string
+  // still renders "Stage 4 –" so the user sees the explicit dash and
+  // understands Stage 4 wasn't run.
+  const stage4SkippedExplicit = isSkip(stage4);
   const stagesGreen = isOk(parsed.stage1) && isOk(parsed.stage2) && isOk(parsed.stage3) &&
-                      (stage4 === undefined || isOk(stage4) || stage4PartialHigh);
+                      (stage4 === undefined || isOk(stage4) || stage4PartialHigh || stage4SkippedExplicit);
   const stagesAmber = !stagesGreen && (stage2Skipped || stage4PartialMid);
   const stagesRed   = anyFailed || stage4PartialLow;
 
@@ -673,6 +680,19 @@ function BrandPanel({ brand, onChanged, onNavigate }: { brand: Brand; onChanged:
                   <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>{p.description || 'No description.'}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  {/* v1.17.1: surface research_status='error' on product
+                      cards. Mirrors the brand-level pattern (line ~1031).
+                      Pre-v1.17.1 this was completely silent — research
+                      could fail mid-pipeline and the user would only
+                      notice via missing dossier sections. */}
+                  {p.research_status === 'error' && (
+                    <span
+                      className="chip chip-disqualified"
+                      title="The most recent re-research run failed before completing. Expand the dossier section below for details, or check the Stage chip for which stage broke."
+                    >
+                      research error
+                    </span>
+                  )}
                   <span
                     className={`chip ${p.scan_enabled === 1 && brand.scan_enabled === 1 ? 'chip-qualified' : 'chip-muted'}`}
                     title="Toggle on the Scan Jobs tab → Scan inclusion card."

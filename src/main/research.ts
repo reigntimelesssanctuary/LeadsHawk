@@ -99,6 +99,14 @@ export async function researchProduct(
     pendingFeedbackId = addFeedback('product', productId, options.feedback);
   }
 
+  // v1.17.1: status declared BEFORE the try so the finally block can write
+  // it regardless of which stage throws. Pre-v1.17.1 the status_detail
+  // write lived inside the try and got bypassed by the outer catch
+  // whenever Stage 2/3 errored — resulting in the UI losing the chip
+  // entirely (silent failure). Now every research run leaves a chip the
+  // user can interpret, even when the pipeline crashes mid-way.
+  const status = newStatus();
+
   try {
     // Pull this brand's knowledge, prioritising items tied to THIS product,
     // then brand-level items, then items tied to OTHER products of the same brand.
@@ -156,6 +164,10 @@ result as JSON matching the schema you've been given.`;
     });
 
     if (!json) {
+      // v1.17.1: annotate status before throw so the finally block writes
+      // a chip-rendering record. Without this, an unparseable Stage 1 left
+      // the chip blank — exactly the silent-failure class of bug.
+      status.stage1 = 'failed: unparseable Perplexity response';
       throw new Error('Perplexity returned an unparseable response. Try again or pick a different research model in Settings.');
     }
 
@@ -195,7 +207,7 @@ result as JSON matching the schema you've been given.`;
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
     // v1.10.1: track per-stage status for UI surfacing.
     // v1.10.2: track Stage 4 fact-check too.
-    const status = newStatus();
+    // v1.17.1: status now declared above the try; just mark Stage 1 done.
     status.stage1 = 'completed';
     const settings = getSettings();
     if (!settings.productResearchAdvanced) {
@@ -339,17 +351,32 @@ result as JSON matching the schema you've been given.`;
       }
     }
 
-    // Persist per-stage status for UI surfacing.
-    db.prepare(
-      "UPDATE products SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(JSON.stringify(status), productId);
-
+    // v1.17.1: status_detail write moved to the finally block below so it
+    // ALWAYS runs even when Stage 2/3 throws to the outer catch. Markers
+    // for feedback-applied stay inside the try since they only fire on
+    // full success.
     if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
     return db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as Product;
-  } catch (e) {
+  } catch (e: any) {
+    // v1.17.1: if Stage 1 itself threw before the explicit 'failed:'
+    // annotation, capture the error message here so the chip surfaces it.
+    if (status.stage1 === 'pending') {
+      status.stage1 = `failed: ${String(e?.message || e).slice(0, 200)}`;
+    }
     db.prepare('UPDATE products SET research_status = ? WHERE id = ?').run('error', productId);
     throw e;
+  } finally {
+    // v1.17.1: ALWAYS persist status_detail. Wrapped in its own try/catch
+    // so a DB error in this write can't mask the original error from the
+    // outer try/catch chain.
+    try {
+      db.prepare(
+        "UPDATE products SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
+      ).run(JSON.stringify(status), productId);
+    } catch (persistErr) {
+      console.warn('[researchProduct] failed to persist status_detail:', persistErr);
+    }
   }
 }
 
@@ -422,6 +449,11 @@ export async function researchBrand(
     pendingFeedbackId = addFeedback('brand', brandId, options.feedback);
   }
 
+  // v1.17.1: status declared before the try; finally block writes it
+  // regardless of which stage throws. See researchProduct for full
+  // rationale.
+  const status = newStatus();
+
   try {
     // Brand research prioritises brand-level material, then takes a sample
     // of product-scoped material for breadth.
@@ -470,6 +502,9 @@ matching the schema you've been given.`;
     );
 
     if (!json) {
+      // v1.17.1: annotate status before throw so the finally block writes
+      // a chip-rendering record.
+      status.stage1 = 'failed: unparseable Perplexity brand-research response';
       throw new Error('Perplexity returned an unparseable brand-research response. Try again.');
     }
 
@@ -504,7 +539,7 @@ matching the schema you've been given.`;
     // ─── v1.10.0 Stage 2 — Opus verify + sharpen ────────────────────
     // v1.10.1: track per-stage status for UI surfacing.
     // v1.10.2: track Stage 4 fact-check too.
-    const status = newStatus();
+    // v1.17.1: status declared above the try; just mark Stage 1 done.
     status.stage1 = 'completed';
     const settings = getSettings();
     if (!settings.brandResearchAdvanced) {
@@ -634,17 +669,25 @@ matching the schema you've been given.`;
       }
     }
 
-    // Persist per-stage status for UI surfacing.
-    db.prepare(
-      "UPDATE brands SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(JSON.stringify(status), brandId);
-
+    // v1.17.1: status_detail write moved to the finally block below.
     if (pendingFeedbackId !== null) markFeedbackApplied(pendingFeedbackId);
 
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(brandId) as Brand;
-  } catch (e) {
+  } catch (e: any) {
+    if (status.stage1 === 'pending') {
+      status.stage1 = `failed: ${String(e?.message || e).slice(0, 200)}`;
+    }
     db.prepare("UPDATE brands SET research_status = 'error' WHERE id = ?").run(brandId);
     throw e;
+  } finally {
+    // v1.17.1: ALWAYS persist status_detail so the UI chip never disappears.
+    try {
+      db.prepare(
+        "UPDATE brands SET research_status_detail = ?, updated_at = datetime('now') WHERE id = ?"
+      ).run(JSON.stringify(status), brandId);
+    } catch (persistErr) {
+      console.warn('[researchBrand] failed to persist status_detail:', persistErr);
+    }
   }
 }
 

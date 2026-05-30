@@ -1,6 +1,6 @@
 {
   "name": "leadshawk",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "description": "B2B Signal Intelligence — autonomous corporate sales opportunity hunter",
   "main": "out/main/index.js",
   "author": "LeadsHawk",
