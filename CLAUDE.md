@@ -613,6 +613,40 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.17.3 (2026-06-03):** Small-screen support — drop window minimums, fit-to-screen, zoom menu.
+
+Critical usability fix. User reported: on a portable screen the app was truncated, couldn't zoom out, couldn't scroll horizontally or vertically to reveal hidden parts of the UI. Root cause traced to three issues in `src/main/index.ts`:
+
+1. **Hardcoded `minWidth: 1100, minHeight: 720`** — these were the original v1.0 defaults and were never revisited. They prevent the OS from sizing the window smaller than 1100×720, which means on any display narrower than that (e.g. a 1024×768 portable, a 1280×800 MacBook Air in vertical orientation, a notebook docked sideways) parts of the window are off-screen and can't be revealed by dragging.
+
+2. **Default size 1440×900 with no fit-to-screen guard** — even when the screen could in principle hold the window, opening at 1440×900 on a display whose work area is, say, 1280×800 puts content beyond the right/bottom edges immediately.
+
+3. **No Application menu defined** — Electron's default menu provides Cmd+Plus / Cmd+Minus / Cmd+0 zoom shortcuts on macOS, but in some packaged production builds the default menu is suppressed and those shortcuts silently don't fire. The user had no way to zoom out to see more content per row.
+
+**Three fixes, all in `src/main/index.ts`:**
+
+1. **Minimum sizes dropped**: `minWidth: 1100 → 700`, `minHeight: 720 → 480`. The new floors are tight but every page still renders usefully at 700×480; users on truly small screens (~1024×600 netbooks, sideways tablets) can resize down to fit. Sidebar stays 240px wide which leaves 460px for the main pane — enough to read with horizontal scroll on cards that need it.
+
+2. **Fit-to-screen on startup**: `computeFittedSize()` reads `screen.getPrimaryDisplay().workAreaSize` and caps the preferred 1440×900 to `(workArea - 40px margin)`. This means the window NEVER opens larger than the available screen, even on the smallest portable display. Falls back to the preferred size if `screen` isn't ready (defensive, shouldn't happen post-`whenReady`).
+
+3. **Explicit Application Menu** with four submenus:
+   - **App** (macOS): standard about/services/hide/quit
+   - **Edit**: cut / copy / paste / select-all — fixes a separate bug where these shortcuts didn't work reliably on text inputs (API key fields, etc.) in production builds
+   - **View**: Actual Size (Cmd+0), Zoom In (Cmd+Plus), Zoom Out (Cmd+Minus), Toggle Full Screen, plus dev tools / reload for diagnostics
+   - **Window**: standard minimize / zoom / close
+
+   The View menu is the one that matters for this fix — Cmd+Minus is now reliably wired to `zoomOut` so users on small screens can shrink content to see more.
+
+`buildAppMenu()` is called from `app.whenReady()` before the first window opens, so the menu is available immediately on launch.
+
+**What this doesn't include** (deferred to v1.17.x or later if user reports continued friction):
+
+- **Persistent zoom factor across sessions** — would require an electron-store key + `webContents.setZoomFactor()` restore on each window load. Tractable but adds complexity; skipped because the current fix is the critical path.
+- **Collapsible sidebar** — would let narrow-window users reclaim 240px when needed. Real feature, separate UX decision (icon-only mode, toggle UX, persisted preference).
+- **Responsive table column hiding** — Dashboard and LiveMonitor tables still have `minWidth: 1280` / `1080` causing intra-card horizontal scroll. The card itself scrolls cleanly so this is annoying but not blocking. A proper fix needs per-column priority metadata.
+
+No new pure-function logic — this is a structural fix to window/menu configuration. 194 smoke tests still pass.
+
 **v1.17.2 (2026-05-30):** Stale label fix + Stage 2 maxTokens bump + inline error preview.
 
 Triggered by user observation after installing v1.17.1: re-research on Design and Build now correctly shows the Stage chip (amber "Stage 2 ✗ · Stage 3 – · Stage 4 –" with the failure reason in the expanded view), but the dossier header label STILL reads "Opus verified + fact-checked". User correctly asked: "How could it be fact-checked if Stage 3 and 4 failed?"
