@@ -122,7 +122,30 @@ export type PplxOpportunity = {
   signal_summary: string;
   matched_signal: string;
   confidence: number;
+  // v1.18.0: classifier-tagged stage of the buying motion. Optional —
+  // Stage 1 monolithic / older callers may omit it; null is treated the
+  // same as "unknown" by routeCandidate (drops sub-threshold rather than
+  // shadowing).
+  buying_stage?: 'early' | 'mid' | 'late' | null;
 };
+
+// v1.18.0 — pure routing decision for sub-threshold candidates.
+//   ≥ minConfidence                          → 'open'    (Dashboard-visible)
+//   < minConfidence AND stage === 'early'    → 'shadow'  (preserved, hidden)
+//   < minConfidence AND any other stage      → 'drop'    (discarded as before)
+// The shadow bucket is the false-negative cohort we'll need 6+ months from
+// now to validate (or refute) the "too late" critique with data, instead
+// of guessing. See CLAUDE.md §0 v1.18.0.
+export type CandidateRoute = 'open' | 'shadow' | 'drop';
+export function routeCandidate(
+  confidence: number,
+  stage: 'early' | 'mid' | 'late' | null | undefined,
+  minConfidence: number
+): CandidateRoute {
+  if ((confidence ?? 0) >= minConfidence) return 'open';
+  if (stage === 'early') return 'shadow';
+  return 'drop';
+}
 
 export const OPPS_SCHEMA = {
   type: 'object',
@@ -150,7 +173,11 @@ export const OPPS_SCHEMA = {
           angle: { type: 'string' },
           signal_summary: { type: 'string' },
           matched_signal: { type: 'string', description: 'Which of the product\'s signals this opportunity matches' },
-          confidence: { type: 'number' }
+          confidence: { type: 'number' },
+          // v1.18.0: classifier-tagged stage of the buying motion. Used by
+          // routeCandidate to decide whether sub-threshold candidates are
+          // dropped (mid/late/unknown) or preserved as 'shadow' (early).
+          buying_stage: { type: ['string', 'null'], enum: ['early', 'mid', 'late', null], description: 'Stage of the buying motion this signal sits at: early (faint, pre-RFP, exploratory), mid (active evaluation, vendor shortlisting), or late (vendor selected, contract imminent). Null if you cannot judge.' }
         }
       }
     }
@@ -219,9 +246,9 @@ export async function runScan(
     const insertOpp = db.prepare(`
       INSERT INTO opportunities(
         brand_id, product_id, company, industry, country, headline, source_url, source_title,
-        source_published_at, confidence, status, background, use_case, angle,
+        source_published_at, confidence, status, buying_stage, background, use_case, angle,
         signal_summary, raw_signal
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const perProduct = scanQuotaPerProduct();
@@ -590,14 +617,18 @@ export async function crossMatchRecent(
   const existsStmt = db.prepare(
     'SELECT 1 FROM opportunities WHERE product_id = ? AND source_url = ? LIMIT 1'
   );
+  // v1.18.0: propagate buying_stage from the origin opportunity so the
+  // cross-matched copy carries the same stage label. Status stays 'open'
+  // because the cross-match similarity is already gated above the
+  // configured threshold (embedSimilarityThreshold + 0.10).
   const xmInsert = db.prepare(`
     INSERT INTO opportunities(
       brand_id, product_id, company, industry, country, headline, source_url, source_title,
-      source_published_at, confidence, status, background, use_case, angle,
+      source_published_at, confidence, status, buying_stage, background, use_case, angle,
       signal_summary, raw_signal
     )
     SELECT ?, ?, company, industry, country, headline, source_url, source_title,
-           source_published_at, ?, 'open', background, use_case, angle,
+           source_published_at, ?, 'open', buying_stage, background, use_case, angle,
            signal_summary, ?
     FROM opportunities WHERE id = ?
   `);
@@ -722,9 +753,9 @@ export async function runDeepScanTwoStage(): Promise<{ runId: number; created: n
     const insertOpp = db.prepare(`
       INSERT INTO opportunities(
         brand_id, product_id, company, industry, country, headline, source_url, source_title,
-        source_published_at, confidence, status, background, use_case, angle,
+        source_published_at, confidence, status, buying_stage, background, use_case, angle,
         signal_summary, raw_signal
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const product of scanProducts) {
@@ -915,8 +946,17 @@ export function insertCandidates(
     }
     const url = picked.url;
     if (ctx.seenStmt.get(url)) { ctx.log(`  - skip (seen): ${company}`); continue; }
-    if ((cand.confidence ?? 0) < ctx.settings.minConfidence) {
-      ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}): ${company}`);
+    // v1.18.0: route sub-threshold candidates by classifier-tagged stage.
+    // Early-stage faint signals are preserved as 'shadow' (hidden from
+    // Dashboard, available for v1.19+ Watchlist + false-negative analysis);
+    // mid/late/unknown low-conf candidates are dropped as before.
+    const route = routeCandidate(
+      cand.confidence ?? 0,
+      cand.buying_stage ?? null,
+      ctx.settings.minConfidence
+    );
+    if (route === 'drop') {
+      ctx.log(`  - skip (low conf ${(cand.confidence ?? 0).toFixed(2)}, stage=${cand.buying_stage ?? 'unknown'}): ${company}`);
       continue;
     }
     if (isOwnBrandCompany(company, attrib.brands)) {
@@ -956,6 +996,8 @@ export function insertCandidates(
         sourceTitle,
         cand.source_published_at || null,
         cand.confidence ?? 0,
+        route, // v1.18.0: 'open' or 'shadow' — see routeCandidate above.
+        cand.buying_stage ?? null,
         cand.background || null,
         cand.use_case || null,
         cand.angle || null,
@@ -973,6 +1015,8 @@ export function insertCandidates(
       // opportunity shows up in pipeline summaries from the moment it
       // lands. Sync — embedding is skipped for 'created' (only outcome
       // events get embedded). Non-fatal if it errors out.
+      // v1.18.0: emit for both 'open' and 'shadow' so the lifecycle log
+      // captures the full candidate population, not just surfaced leads.
       try {
         const oppId = Number(insertResult.lastInsertRowid);
         if (oppId) recordCreatedEventForOpportunity(oppId, `scanner:${attrib.sourceLabel}`);
@@ -980,8 +1024,10 @@ export function insertCandidates(
         ctx.log(`  ~ created-event emission failed for ${company}: ${String(e?.message || e).slice(0, 200)}`);
       }
       inserted++;
+      const stageHint = cand.buying_stage ? ` stage=${cand.buying_stage}` : '';
+      const routeHint = route === 'shadow' ? ' [shadow]' : '';
       ctx.log(
-        `  ✓ ${company} (${(cand.confidence ?? 0).toFixed(2)}) → ${attrib.brand?.name || '?'} / ${attrib.product?.name || '?'}`
+        `  ✓ ${company} (${(cand.confidence ?? 0).toFixed(2)}${stageHint})${routeHint} → ${attrib.brand?.name || '?'} / ${attrib.product?.name || '?'}`
       );
     } catch (e: any) {
       // v1.8.4: don't let one bad insert crash the whole scan run.

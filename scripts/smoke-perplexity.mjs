@@ -2217,5 +2217,76 @@ test('dossierLabelState — empty-object status_detail still falls back to times
   eq(r.factChecked, true);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.18.0 — routeCandidate (src/main/scanner.ts).
+//
+// Pure routing decision for sub-threshold candidates from Stage 2 qualify
+// and live-monitor qualify. The function settles the deep question:
+// "what do we do with a faint but possibly early-stage opportunity?"
+//
+//   high-conf  (≥ minConfidence)                 → 'open'    (Dashboard)
+//   low-conf   (< minConfidence) + 'early' stage → 'shadow'  (preserved, hidden)
+//   low-conf   + 'mid' / 'late' / null stage      → 'drop'    (discarded)
+//
+// MUST stay byte-identical with production. The shadow bucket is the
+// false-negative cohort we'll need 6+ months from now to validate (or
+// refute) the "too late" critique with data, not guesses.
+// ════════════════════════════════════════════════════════════════════════
+
+function routeCandidate(confidence, stage, minConfidence) {
+  if ((confidence ?? 0) >= minConfidence) return 'open';
+  if (stage === 'early') return 'shadow';
+  return 'drop';
+}
+
+test('routeCandidate — high-conf + early → open', () => {
+  eq(routeCandidate(0.80, 'early', 0.55), 'open');
+});
+test('routeCandidate — high-conf + mid → open', () => {
+  eq(routeCandidate(0.80, 'mid', 0.55), 'open');
+});
+test('routeCandidate — high-conf + late → open', () => {
+  eq(routeCandidate(0.80, 'late', 0.55), 'open');
+});
+test('routeCandidate — high-conf + null stage → open', () => {
+  // Classifier not tagging stage must NOT demote an otherwise-qualifying
+  // lead; the threshold gate is independent of the stage axis.
+  eq(routeCandidate(0.80, null, 0.55), 'open');
+});
+test('routeCandidate — low-conf + early → shadow (the whole point of v1.18.0)', () => {
+  eq(routeCandidate(0.45, 'early', 0.55), 'shadow');
+});
+test('routeCandidate — low-conf + mid → drop', () => {
+  // Mid-stage low-conf means we're catching it too late AND with weak
+  // evidence. Not worth holding aside — most likely a fit miss.
+  eq(routeCandidate(0.45, 'mid', 0.55), 'drop');
+});
+test('routeCandidate — low-conf + late → drop', () => {
+  eq(routeCandidate(0.45, 'late', 0.55), 'drop');
+});
+test('routeCandidate — low-conf + null stage → drop (safe default)', () => {
+  // When the classifier doesn't tag a stage we conservatively drop.
+  // Shadowing requires explicit 'early' tagging — guesswork doesn't earn
+  // a slot in the false-negative cohort.
+  eq(routeCandidate(0.45, null, 0.55), 'drop');
+});
+test('routeCandidate — exactly-at-threshold counts as open (≥, not >)', () => {
+  // Boundary check. The existing scanner used `< minConfidence` to drop,
+  // so `>= minConfidence` is the open route. Preserves prior behaviour
+  // at the boundary.
+  eq(routeCandidate(0.55, 'early', 0.55), 'open');
+  eq(routeCandidate(0.55, 'late', 0.55), 'open');
+  eq(routeCandidate(0.55, null, 0.55), 'open');
+});
+test('routeCandidate — undefined confidence treated as 0 (defensive)', () => {
+  // Matches the scanner's `cand.confidence ?? 0` coercion. A missing
+  // confidence field shouldn't slip past the gate via NaN comparison.
+  eq(routeCandidate(undefined, 'early', 0.55), 'shadow');
+  eq(routeCandidate(undefined, 'late', 0.55), 'drop');
+});
+test('routeCandidate — undefined stage treated as null (drops sub-threshold)', () => {
+  eq(routeCandidate(0.40, undefined, 0.55), 'drop');
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

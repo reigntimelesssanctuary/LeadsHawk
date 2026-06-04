@@ -4,6 +4,7 @@ import { getSettings } from '../settings.js';
 import { buildDisqualificationsBlock } from '../learning.js';
 import { isOwnBrandCompany, buildOwnBrandsBlock } from '../lead-hygiene.js';
 import { recordCreatedEventForOpportunity } from '../events.js';
+import { routeCandidate } from '../scanner.js';
 import type { Brand, Product, SignalItem, ScanRule } from '@shared/types';
 
 const SYSTEM = `You are a senior B2B sales intelligence analyst. You will be
@@ -28,13 +29,16 @@ type QualifyResult = {
   angle: string;
   signal_summary: string;
   headline: string;
+  // v1.18.0: classifier-tagged buying stage. See SCHEMA description below.
+  buying_stage: 'early' | 'mid' | 'late' | null;
 };
 
 const SCHEMA = {
   type: 'object',
   required: [
     'is_opportunity', 'confidence', 'company', 'industry', 'country',
-    'background', 'use_case', 'angle', 'signal_summary', 'headline'
+    'background', 'use_case', 'angle', 'signal_summary', 'headline',
+    'buying_stage'
   ],
   properties: {
     is_opportunity: { type: 'boolean' },
@@ -46,7 +50,15 @@ const SCHEMA = {
     use_case: { type: 'string' },
     angle: { type: 'string' },
     signal_summary: { type: 'string' },
-    headline: { type: 'string' }
+    headline: { type: 'string' },
+    // v1.18.0: where this signal sits in the buying motion. Drives
+    // routeCandidate in scanner.ts — sub-threshold early signals are
+    // preserved as 'shadow' instead of dropped. Null when not judgeable.
+    buying_stage: {
+      type: ['string', 'null'],
+      enum: ['early', 'mid', 'late', null],
+      description: 'Buying-motion stage: "early" (faint, pre-RFP, exploratory — hiring, leadership change, strategic announcement); "mid" (active evaluation — RFP issued, shortlist, POC); "late" (decision imminent — vendor selected, contract awarded). Null only if you genuinely cannot judge.'
+    }
   }
 };
 
@@ -156,8 +168,14 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
   if (!r.json) return { kind: 'rejected', reason: 'unparseable response' };
   const j = r.json;
   if (!j.is_opportunity) return { kind: 'rejected', reason: 'model judged not an opportunity' };
-  if ((j.confidence ?? 0) < settings.minConfidence) {
-    return { kind: 'rejected', reason: `low confidence ${j.confidence}` };
+  // v1.18.0: route sub-threshold candidates by classifier-tagged stage.
+  // Early-stage faint signals are preserved as 'shadow' (Watchlist-bound
+  // in v1.19+) instead of being silently dropped; mid/late/unknown
+  // low-conf candidates still drop. This is the live-monitor mirror of
+  // the same routing in scanner.insertCandidates.
+  const route = routeCandidate(j.confidence ?? 0, j.buying_stage ?? null, settings.minConfidence);
+  if (route === 'drop') {
+    return { kind: 'rejected', reason: `low confidence ${j.confidence} (stage=${j.buying_stage ?? 'unknown'})` };
   }
   if (isOwnBrandCompany(j.company, allBrands)) {
     return { kind: 'rejected', reason: `our own brand as customer (${j.company})` };
@@ -166,9 +184,9 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
   const insert = db.prepare(`
     INSERT INTO opportunities(
       brand_id, product_id, company, industry, country, headline, source_url, source_title,
-      source_published_at, confidence, status, background, use_case, angle,
+      source_published_at, confidence, status, buying_stage, background, use_case, angle,
       signal_summary, raw_signal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = insert.run(
     brand.id,
@@ -181,6 +199,8 @@ set is_opportunity = false. Otherwise return the structured opportunity.`;
     'live monitor',
     item.published_at,
     j.confidence,
+    route,                       // v1.18.0: 'open' or 'shadow'
+    j.buying_stage ?? null,
     j.background,
     j.use_case,
     j.angle,

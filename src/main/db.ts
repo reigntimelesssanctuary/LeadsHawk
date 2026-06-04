@@ -426,6 +426,18 @@ function migrate(db: Database.Database) {
       ON learning_signals(tenant_id, dimension, meets_threshold);
   `);
 
+  // v1.18.0 — qualification axes split.
+  // buying_stage: 'early' | 'mid' | 'late' | NULL, classified by the
+  // Stage 2 qualifier (or live-monitor qualify) at insert time. NULL on
+  // legacy rows + when the classifier didn't or couldn't tag the stage.
+  // status now has a fifth value 'shadow' (in addition to open / qualified
+  // / disqualified / archived): sub-threshold candidates that were tagged
+  // early-stage by the classifier — preserved for false-negative analysis
+  // and the v1.19 Watchlist UI, but NOT surfaced on the Dashboard (which
+  // explicitly queries status='open').
+  addColumnIfMissing(db, 'opportunities', 'buying_stage', 'TEXT');
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_opps_buying_stage ON opportunities(buying_stage);`);
+
   // v1.17.0 — external_priors schema, populated in v1.18+ by the central
   // service. Each row is an anonymized aggregated stat from ≥k tenants
   // (k_anonymity threshold = 5). v1.17 doesn't read or write to this

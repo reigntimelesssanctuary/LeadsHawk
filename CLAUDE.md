@@ -613,6 +613,44 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.18.0 (2026-06-04):** Qualification axes split — `buying_stage` + `status='shadow'` for the false-negative cohort.
+
+Triggered by beta-client feedback that LeadsHawk arrives "too late" in the buying cycle because public signals are inherently lagging. Diagnosis (in conversation, not in code yet): the single `confidence` score conflates two distinct dimensions — *strength of evidence* and *stage in the buying motion*. The 55% gate implicitly optimises for late-stage certainty, which exactly produces the symptom the client described. With ~3 weeks of operation there is **no outcome data** to retune the gate against — anything else would be guessing. So v1.18.0 ships the **minimum instrumentation** required to evaluate the diagnosis later, without changing the user-visible behaviour today.
+
+**Two structural additions, no UI surface yet (Watchlist UI lands in v1.19+):**
+
+1. **`opportunities.buying_stage TEXT NULL`** — classified at insert time by Stage 2 qualify (Claude Sonnet) and live-monitor qualify (Perplexity sonar-pro). Enum: `'early' | 'mid' | 'late' | NULL`. Stage definitions injected verbatim into both prompts so the classifier has a controlled vocabulary:
+   - **early** — faint, pre-RFP, exploratory: hiring for a relevant role, leadership change in the buying function, strategic announcement, early funding, M&A integration begins.
+   - **mid** — active evaluation: RFP issued, vendor shortlist named, public POC, RFI responses due.
+   - **late** — decision imminent or made: vendor selected, contract awarded, implementation underway, go-live announced.
+   - **null** — classifier genuinely cannot judge.
+
+2. **`status='shadow'`** added to the existing `status` enum (open / qualified / disqualified / archived / **shadow**). Routing decision lives in a new pure helper `routeCandidate(confidence, stage, minConfidence)` in `src/main/scanner.ts`:
+   - `confidence ≥ minConfidence` → **`open`** (Dashboard-visible, unchanged behaviour).
+   - `confidence < minConfidence` AND `stage === 'early'` → **`shadow`** (preserved, hidden — the false-negative cohort).
+   - `confidence < minConfidence` AND `stage` is mid/late/null → **`drop`** (discarded as before).
+
+   The Dashboard explicitly queries `status='open'`, so shadow rows are automatically invisible — no UI change needed. Archive (`disqualified` + `archived`) and BrandDispatch (`qualified`) are also unaffected. The shadow rows accumulate quietly into the same `opportunities` table, share all existing infrastructure (`opportunity_events`, learning loop, embeddings, lifecycle), and can be analysed in 8 weeks by SQL alone — `SELECT … FROM opportunities WHERE status='shadow' AND buying_stage='early'`.
+
+**Why a new shadow status rather than a new table:** considered and rejected. A separate table would fork the data model, orphan shadows from `learning_signals` and `opportunity_events`, and require duplicate logic everywhere shadows are touched. Reusing `opportunities` with a new status value cost ~30 lines of routing + schema migration and preserves architectural coherence.
+
+**Schema-coupled changes:**
+- `db.ts` — idempotent `addColumnIfMissing(db, 'opportunities', 'buying_stage', 'TEXT')` + index. Legacy rows have `NULL` for `buying_stage`; routing treats NULL the same as mid/late (drops sub-threshold), so legacy behaviour is preserved on re-evaluation.
+- `scanner.ts` — `PplxOpportunity` gains optional `buying_stage`; `OPPS_SCHEMA` adds the field with controlled-vocab description; both call-site prepared statements (`runScan` and `runDeepScanTwoStage`) parameterise `status` and add a column for `buying_stage`; `crossMatchRecent` propagates the origin opportunity's stage to the cross-matched copy.
+- `scanner/stage2-qualify.ts` — prompt instruction added (Sonnet writes the stage as part of its standard opportunity record; schema inherits from `OPPS_SCHEMA.properties.opportunities`).
+- `monitor/qualify.ts` — `QualifyResult` + Perplexity `SCHEMA` add the field; INSERT statement parameterises `status` and adds `buying_stage`; routing applied between confidence/own-brand checks via `routeCandidate` import.
+- `shared/types.ts` — `Opportunity.status` widened with `'shadow'`; `Opportunity.buying_stage` added as `'early' | 'mid' | 'late' | null`.
+
+**Smoke tests: 194 → 205 (+11).** Covers the full routing matrix — high-conf × {early, mid, late, null} all open; low-conf × early shadows (the whole point); low-conf × {mid, late, null} all drop; exactly-at-threshold counts as open (≥, not >); `undefined` confidence coerces to 0; `undefined` stage coerces to null.
+
+**What this DOES NOT do** (deliberately deferred):
+- **No threshold change.** `minConfidence` remains 0.55. Lowering it would let cold-start raw scores through *before* v1.17's learning loop has anything to say (the magnitude cap is ±0.15 — a raw 0.45 can already be lifted to 0.60 by a strong prior, but only once `learning_signals` has populated).
+- **No Watchlist UI.** Shadows accumulate silently in v1.18.0. UI lands in v1.19+ once we have data to justify the design (and the cost of re-scanning the cohort).
+- **No re-scan loop for shadows.** Watchlist re-evaluation has real spend implications (100 shadows × sonar-pro × monthly = ~$60/client). Scoped out until volume + budget cap design lands.
+- **No "stage" learning dimension.** `learning_signals` still aggregates on the v1.17.0 dimensions (product, industry, matched_signal, confidence_bucket). Adding `buying_stage` as a fifth dimension is straightforward but waits for the data to justify it.
+
+**Beta-client conversation, not in code:** reframe the value claim around the briefing + lifecycle capture, not raw lead discovery. Lifecycle buttons on Opportunity Detail (Accept / Reject / Closed-won / Closed-lost) ARE the outcome feedback channel — the operator should be encouraging the client to use them weekly so v1.17's learning loop has signal to chew on. Re-evaluate the gate in 4-8 weeks once ≥30 closes have landed.
+
 **v1.17.3 (2026-06-03):** Small-screen support — drop window minimums, fit-to-screen, zoom menu.
 
 Critical usability fix. User reported: on a portable screen the app was truncated, couldn't zoom out, couldn't scroll horizontally or vertically to reveal hidden parts of the UI. Root cause traced to three issues in `src/main/index.ts`:

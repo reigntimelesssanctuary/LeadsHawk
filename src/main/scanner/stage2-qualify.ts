@@ -251,6 +251,16 @@ For each survivor, produce a full opportunity record:
 - matched_signal: which of the product's signals this candidate fits
   (or a short descriptor if it's a knowledge-grounded match)
 - confidence: 0..1
+- buying_stage: where this candidate sits in the buying motion:
+  • "early"  = exploratory / faint signal / pre-RFP. Examples: hiring
+    for a relevant role, leadership change in the buying function,
+    company announces a strategic initiative, early funding round,
+    M&A integration begins.
+  • "mid"    = active evaluation in progress. Examples: RFP issued,
+    vendor shortlist named, public POC announced, RFI responses due.
+  • "late"   = decision imminent or made. Examples: vendor selected,
+    contract awarded, implementation underway, go-live announced.
+  Use null only when you genuinely cannot judge from the candidate.
 
 For each rejected candidate, briefly note its company name and the reason
 (e.g. "not in ICP", "no concrete event", "matches exclude rule", "own

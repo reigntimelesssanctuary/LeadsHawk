@@ -183,7 +183,13 @@ export type Opportunity = {
   source_title: string;
   source_published_at: string | null;
   confidence: number;
-  status: 'open' | 'qualified' | 'disqualified' | 'archived';
+  // v1.18.0: 'shadow' = sub-threshold + early-stage; preserved but hidden
+  // from the Dashboard (which queries status='open'). Watchlist UI lands
+  // in v1.19+.
+  status: 'open' | 'qualified' | 'disqualified' | 'archived' | 'shadow';
+  // v1.18.0: classified by Stage 2 (or live-monitor qualify) at insert
+  // time. NULL on legacy rows + when the classifier didn't tag a stage.
+  buying_stage: 'early' | 'mid' | 'late' | null;
   background: string | null;
   use_case: string | null;
   angle: string | null;
