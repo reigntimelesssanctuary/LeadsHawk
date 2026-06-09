@@ -30,7 +30,10 @@ const defaults: Settings = {
   embedSimilarityThreshold: 0.40,
   notifyOnNewOpportunity: true,
   openAtLogin: false,
-  crossMatchEnabled: true
+  crossMatchEnabled: true,
+  // v1.19.0 — Apollo contact-search API key. Empty by default; user pastes
+  // their key in Settings → Contact API card.
+  apolloApiKey: ''
 };
 
 const store = new Store<Settings>({ name: 'settings', defaults });
@@ -54,7 +57,8 @@ export function getSettings(): Settings {
     embedSimilarityThreshold: (store as any).get('embedSimilarityThreshold') as number,
     notifyOnNewOpportunity: (store as any).get('notifyOnNewOpportunity') as boolean,
     openAtLogin: (store as any).get('openAtLogin') as boolean,
-    crossMatchEnabled: (store as any).get('crossMatchEnabled') as boolean
+    crossMatchEnabled: (store as any).get('crossMatchEnabled') as boolean,
+    apolloApiKey: ((store as any).get('apolloApiKey') as string) ?? ''
   };
 }
 

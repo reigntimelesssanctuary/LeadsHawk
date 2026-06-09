@@ -210,6 +210,10 @@ function operationForStage(stage) {
       return 'live_monitor';
     case 'brief':
       return 'sales_brief';
+    case 'contact_archetype':
+    case 'contact_draft':
+    case 'contact_lookup':
+      return 'contact_outreach';
     default:
       return 'other';
   }
@@ -726,6 +730,11 @@ test('unknown / unmapped stage → other', () => {
   eq(operationForStage('unknown'), 'other');
   eq(operationForStage('made_up_stage'), 'other');
   eq(operationForStage(''), 'other');
+});
+test('contact_* stages → contact_outreach (v1.19.0)', () => {
+  eq(operationForStage('contact_archetype'), 'contact_outreach');
+  eq(operationForStage('contact_draft'), 'contact_outreach');
+  eq(operationForStage('contact_lookup'), 'contact_outreach');
 });
 test('brand_source_research → source_research (v1.13.0)', () => {
   eq(operationForStage('brand_source_research'), 'source_research');
@@ -2286,6 +2295,406 @@ test('routeCandidate — undefined confidence treated as 0 (defensive)', () => {
 });
 test('routeCandidate — undefined stage treated as null (drops sub-threshold)', () => {
   eq(routeCandidate(0.40, undefined, 0.55), 'drop');
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// v1.19.0 — Hunt-list ranking helpers (src/shared/hunt.ts).
+//
+// Pure deterministic scoring of Apollo-returned contacts against a Sonnet-
+// derived archetype + opportunity signal context. MUST stay byte-identical
+// with production. Manual sync flagged in the file header convention.
+// ════════════════════════════════════════════════════════════════════════
+
+const HUNT_WEIGHT_ARCHETYPE_TITLE = 0.40;
+const HUNT_WEIGHT_SENIORITY       = 0.25;
+const HUNT_WEIGHT_DEPARTMENT      = 0.15;
+const HUNT_WEIGHT_ANTI_PATTERN    = 0.10;
+const HUNT_WEIGHT_VERIFIED_EMAIL  = 0.05;
+const HUNT_WEIGHT_SIGNAL_KEYWORD  = 0.05;
+const HUNT_MAX_CONTACTS = 5;
+
+const TITLE_NOISE = new Set([
+  'vp', 'vice', 'president', 'svp', 'evp', 'avp',
+  'chief', 'head', 'director', 'senior', 'sr', 'junior', 'jr',
+  'manager', 'mgr', 'lead', 'principal', 'staff',
+  'of', 'the', 'and', 'for', 'a', 'an', 'to',
+  'global', 'regional', 'group', 'team'
+]);
+
+function tokenizeTitle(s) {
+  if (!s) return [];
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !TITLE_NOISE.has(t));
+}
+
+function archetypeTitleMatch(title, targetTitles) {
+  const contactTokens = new Set(tokenizeTitle(title));
+  if (contactTokens.size === 0 || targetTitles.length === 0) return 0;
+  const targetTokens = new Set();
+  for (const t of targetTitles) {
+    for (const tok of tokenizeTitle(t)) targetTokens.add(tok);
+  }
+  if (targetTokens.size === 0) return 0;
+  let intersection = 0;
+  for (const t of contactTokens) if (targetTokens.has(t)) intersection++;
+  return Math.min(1, intersection / targetTokens.size);
+}
+
+function seniorityMatch(contactSeniority, targetSeniorities) {
+  if (!contactSeniority || targetSeniorities.length === 0) return 0;
+  return targetSeniorities.includes(contactSeniority) ? 1 : 0;
+}
+
+function normaliseDept(s) {
+  return s.toLowerCase().replace(/[_\-\s]+/g, ' ').trim();
+}
+function departmentMatch(contactDept, targetDepts) {
+  if (!contactDept || targetDepts.length === 0) return 0;
+  const c = normaliseDept(contactDept);
+  for (const t of targetDepts) {
+    if (!t) continue;
+    const lower = normaliseDept(t);
+    if (!lower) continue;
+    if (c.includes(lower) || lower.includes(c)) return 1;
+  }
+  return 0;
+}
+
+function antiPatternPenalty(title, antiPatterns) {
+  if (!title || antiPatterns.length === 0) return 0;
+  const t = title.toLowerCase();
+  for (const ap of antiPatterns) {
+    if (!ap) continue;
+    if (t.includes(ap.toLowerCase())) return HUNT_WEIGHT_ANTI_PATTERN;
+  }
+  return 0;
+}
+
+function verifiedEmailBonus(emailStatus) {
+  return emailStatus === 'verified' ? HUNT_WEIGHT_VERIFIED_EMAIL : 0;
+}
+
+function signalKeywordMatch(title, signalText) {
+  if (!title || !signalText) return 0;
+  const titleTokens = new Set(tokenizeTitle(title));
+  if (titleTokens.size === 0) return 0;
+  const signalTokens = tokenizeTitle(signalText);
+  let hits = 0;
+  for (const t of signalTokens) if (titleTokens.has(t)) hits++;
+  return hits >= 2 ? HUNT_WEIGHT_SIGNAL_KEYWORD : 0;
+}
+
+function huntScore(contact, archetype, signalText) {
+  const archetype_title = archetypeTitleMatch(contact.title, archetype.target_titles);
+  const seniority      = seniorityMatch(contact.seniority, archetype.target_seniorities);
+  const department     = departmentMatch(contact.department, archetype.target_departments);
+  const anti_pattern_penalty = antiPatternPenalty(contact.title, archetype.anti_patterns);
+  const verified_bonus = verifiedEmailBonus(contact.email_status);
+  const signal_keyword = signalKeywordMatch(contact.title, signalText);
+  const raw =
+      HUNT_WEIGHT_ARCHETYPE_TITLE * archetype_title
+    + HUNT_WEIGHT_SENIORITY       * seniority
+    + HUNT_WEIGHT_DEPARTMENT      * department
+    - anti_pattern_penalty
+    + verified_bonus
+    + signal_keyword;
+  return {
+    score: Math.max(0, Math.min(1, raw)),
+    components: { archetype_title, seniority, department, anti_pattern_penalty, verified_bonus, signal_keyword }
+  };
+}
+
+function rankContacts(contacts, archetype, signalText) {
+  const scored = contacts.map((c, idx) => {
+    const { score, components } = huntScore(c, archetype, signalText);
+    return { contact: c, idx, score, components };
+  });
+  scored.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+  const top = scored.slice(0, HUNT_MAX_CONTACTS);
+  return top.map((s, rank) => ({
+    ...s.contact,
+    hunt_rank: rank + 1,
+    hunt_score: Number(s.score.toFixed(4)),
+    rank_components: s.components
+  }));
+}
+
+// ─── Tests ────────────────────────────────────────────────────────
+const ARCH_IT_INFRA = {
+  target_seniorities: ['c_suite', 'vp', 'director'],
+  target_titles: ['Head of Infrastructure', 'VP Engineering', 'Director of Network Operations'],
+  target_departments: ['engineering', 'it_operations'],
+  anti_patterns: ['sales', 'marketing', 'hr', 'legal'],
+  reasoning: 'test'
+};
+
+test('archetypeTitleMatch — strong overlap → high score', () => {
+  // "VP Infrastructure" tokenizes to ['infrastructure']. Target tokens after
+  // noise-strip: 'infrastructure', 'engineering', 'network', 'operations'.
+  // Coverage = 1 / 4 = 0.25. Real-world contacts rarely overlap densely
+  // because titles are short; this is the expected magnitude.
+  const s = archetypeTitleMatch('VP Infrastructure', ARCH_IT_INFRA.target_titles);
+  truthy(s > 0.2, `got ${s}`);
+});
+test('archetypeTitleMatch — multi-word overlap scales up', () => {
+  // "Director of Network Operations" gives us network + operations both — 2/4.
+  const s = archetypeTitleMatch('Director of Network Operations', ARCH_IT_INFRA.target_titles);
+  truthy(s >= 0.5, `got ${s}`);
+});
+test('archetypeTitleMatch — disjoint title → 0', () => {
+  eq(archetypeTitleMatch('Chief Marketing Officer', ARCH_IT_INFRA.target_titles), 0);
+});
+test('archetypeTitleMatch — empty title returns 0', () => {
+  eq(archetypeTitleMatch('', ARCH_IT_INFRA.target_titles), 0);
+  eq(archetypeTitleMatch(null, ARCH_IT_INFRA.target_titles), 0);
+});
+test('archetypeTitleMatch — empty targets returns 0', () => {
+  eq(archetypeTitleMatch('VP Engineering', []), 0);
+});
+
+test('seniorityMatch — in target → 1', () => {
+  eq(seniorityMatch('vp', ARCH_IT_INFRA.target_seniorities), 1);
+  eq(seniorityMatch('c_suite', ARCH_IT_INFRA.target_seniorities), 1);
+});
+test('seniorityMatch — not in target → 0', () => {
+  eq(seniorityMatch('manager', ARCH_IT_INFRA.target_seniorities), 0);
+  eq(seniorityMatch('entry', ARCH_IT_INFRA.target_seniorities), 0);
+});
+test('seniorityMatch — null seniority → 0 safely', () => {
+  eq(seniorityMatch(null, ARCH_IT_INFRA.target_seniorities), 0);
+});
+
+test('departmentMatch — substring match → 1', () => {
+  eq(departmentMatch('engineering', ARCH_IT_INFRA.target_departments), 1);
+  eq(departmentMatch('IT Operations', ARCH_IT_INFRA.target_departments), 1);
+});
+test('departmentMatch — missing department → 0 (no penalty)', () => {
+  eq(departmentMatch(null, ARCH_IT_INFRA.target_departments), 0);
+  eq(departmentMatch('', ARCH_IT_INFRA.target_departments), 0);
+});
+
+test('antiPatternPenalty — matches → returns full penalty', () => {
+  eq(antiPatternPenalty('VP Marketing', ARCH_IT_INFRA.anti_patterns), 0.10);
+  eq(antiPatternPenalty('Head of Sales', ARCH_IT_INFRA.anti_patterns), 0.10);
+});
+test('antiPatternPenalty — clean title → 0', () => {
+  eq(antiPatternPenalty('VP Infrastructure', ARCH_IT_INFRA.anti_patterns), 0);
+});
+
+test('verifiedEmailBonus — verified → 0.05', () => {
+  eq(verifiedEmailBonus('verified'), 0.05);
+});
+test('verifiedEmailBonus — anything else → 0', () => {
+  eq(verifiedEmailBonus('guessed'), 0);
+  eq(verifiedEmailBonus('unverified'), 0);
+  eq(verifiedEmailBonus(null), 0);
+});
+
+test('signalKeywordMatch — ≥2 token overlap → bonus', () => {
+  // "VP Cloud Architecture" + "cloud migration architecture rollout" → cloud,
+  // architecture both in title → ≥2 hits → 0.05 bonus.
+  eq(signalKeywordMatch('VP Cloud Architecture', 'cloud migration architecture rollout'), 0.05);
+});
+test('signalKeywordMatch — 1 token overlap → 0', () => {
+  eq(signalKeywordMatch('VP Sales', 'cloud migration architecture rollout'), 0);
+});
+test('signalKeywordMatch — disjoint → 0', () => {
+  eq(signalKeywordMatch('VP Sales', 'cloud migration rollout'), 0);
+});
+
+test('huntScore — high archetype + matching seniority + verified email → near 1', () => {
+  const r = huntScore(
+    { title: 'Director of Network Operations', seniority: 'director', department: 'engineering', email_status: 'verified' },
+    ARCH_IT_INFRA,
+    'network operations modernization'
+  );
+  truthy(r.score >= 0.55, `expected near 1, got ${r.score}`);
+  truthy(r.score <= 1, `must clamp to 1, got ${r.score}`);
+});
+test('huntScore — anti-pattern + low fit → near 0', () => {
+  const r = huntScore(
+    { title: 'VP Sales', seniority: 'vp', department: 'sales', email_status: null },
+    ARCH_IT_INFRA,
+    'network operations'
+  );
+  // Seniority matches (+0.25), anti-pattern penalty (-0.10), no other contribution.
+  // Net: 0.15.
+  truthy(r.score < 0.25, `got ${r.score}`);
+});
+test('huntScore — clamps to [0, 1]', () => {
+  // Force a hypothetical above-1 input shape by having every component max.
+  // With current weights the max raw is 0.40 + 0.25 + 0.15 + 0.05 + 0.05 = 0.90,
+  // so we can't naturally exceed 1 — but the clamp is the safety net for
+  // future weight changes. Cover the lower clamp instead.
+  const r = huntScore(
+    { title: 'VP Sales', seniority: null, department: 'sales', email_status: null },
+    ARCH_IT_INFRA,
+    null
+  );
+  truthy(r.score >= 0, `got ${r.score}`);
+});
+
+test('rankContacts — sorts score-descending, stable on ties', () => {
+  const contacts = [
+    { id: 'a', title: 'VP Sales',                          seniority: 'vp',       department: null,            email_status: null }, // low
+    { id: 'b', title: 'Director of Network Operations',    seniority: 'director', department: 'engineering',   email_status: 'verified' }, // high
+    { id: 'c', title: 'VP Infrastructure',                 seniority: 'vp',       department: 'it_operations', email_status: 'guessed' }, // mid
+    { id: 'd', title: 'Chief Marketing Officer',           seniority: 'c_suite',  department: 'marketing',     email_status: null } // marketing anti-pattern bites
+  ];
+  const ranked = rankContacts(contacts, ARCH_IT_INFRA, 'network operations');
+  eq(ranked[0].id, 'b', `top should be b, got ${ranked[0].id}`);
+  truthy(ranked.length === 4, `got ${ranked.length}`);
+  truthy(ranked[0].hunt_rank === 1);
+});
+test('rankContacts — caps at HUNT_MAX_CONTACTS (5)', () => {
+  const contacts = Array.from({ length: 12 }, (_, i) => ({
+    id: `c${i}`,
+    title: 'Director of Network Operations',
+    seniority: 'director',
+    department: 'engineering',
+    email_status: 'verified'
+  }));
+  const ranked = rankContacts(contacts, ARCH_IT_INFRA, null);
+  eq(ranked.length, 5);
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// v1.19.0 — Smart-replace contacts (src/shared/contacts-merge.ts).
+//
+// Pure function: given existing contacts + fresh Apollo results, plan
+// which to keep / insert / delete. MUST stay byte-identical with
+// production.
+// ════════════════════════════════════════════════════════════════════════
+
+function planSmartReplace(existing, fresh) {
+  const plan = [];
+  let preserved = 0, insertedNew = 0, removedPending = 0, dedupedByApollo = 0;
+  const existingByApollo = new Map();
+  for (const row of existing) {
+    if (row.apollo_id) existingByApollo.set(row.apollo_id, row);
+  }
+  let maxRankPreserved = 0;
+  for (const row of existing) {
+    if (row.contact_status !== 'pending') {
+      maxRankPreserved = Math.max(maxRankPreserved, row.hunt_rank);
+    }
+  }
+  for (const row of existing) {
+    if (row.contact_status !== 'pending') {
+      plan.push({ kind: 'keep', row });
+      preserved++;
+    }
+  }
+  const freshApolloIds = new Set(fresh.map((f) => f.apollo_id).filter(Boolean));
+  for (const row of existing) {
+    if (row.contact_status === 'pending') {
+      if (row.apollo_id && freshApolloIds.has(row.apollo_id)) {
+        plan.push({ kind: 'keep', row });
+        dedupedByApollo++;
+      } else {
+        plan.push({ kind: 'delete', id: row.id });
+        removedPending++;
+      }
+    }
+  }
+  let nextRank = maxRankPreserved + 1;
+  for (const row of fresh) {
+    if (row.apollo_id && existingByApollo.has(row.apollo_id)) continue;
+    plan.push({ kind: 'insert', row: { ...row, hunt_rank: nextRank } });
+    insertedNew++;
+    nextRank++;
+  }
+  return { plan, stats: { preserved, insertedNew, removedPending, dedupedByApollo } };
+}
+
+test('planSmartReplace — preserves drafted/sent/skipped rows', () => {
+  const existing = [
+    { id: 1, apollo_id: 'a1', contact_status: 'drafted', hunt_rank: 1 },
+    { id: 2, apollo_id: 'a2', contact_status: 'sent',    hunt_rank: 2 },
+    { id: 3, apollo_id: 'a3', contact_status: 'skipped', hunt_rank: 3 }
+  ];
+  const fresh = []; // no fresh — pure preservation test
+  const { plan, stats } = planSmartReplace(existing, fresh);
+  eq(stats.preserved, 3);
+  eq(stats.removedPending, 0);
+  eq(stats.insertedNew, 0);
+  truthy(plan.every((p) => p.kind === 'keep'));
+});
+
+test('planSmartReplace — removes pending rows not in fresh results', () => {
+  const existing = [
+    { id: 1, apollo_id: 'a1', contact_status: 'pending', hunt_rank: 1 },
+    { id: 2, apollo_id: 'a2', contact_status: 'pending', hunt_rank: 2 }
+  ];
+  const fresh = []; // Apollo returned nothing this time
+  const { stats } = planSmartReplace(existing, fresh);
+  eq(stats.removedPending, 2);
+  eq(stats.preserved, 0);
+  eq(stats.insertedNew, 0);
+});
+
+test('planSmartReplace — apollo_id dedup keeps existing pending row', () => {
+  const existing = [
+    { id: 1, apollo_id: 'a1', contact_status: 'pending', hunt_rank: 1 }
+  ];
+  const fresh = [
+    { id: null, apollo_id: 'a1', contact_status: 'pending', hunt_rank: 1 }
+  ];
+  const { plan, stats } = planSmartReplace(existing, fresh);
+  eq(stats.dedupedByApollo, 1);
+  eq(stats.insertedNew, 0);
+  eq(stats.removedPending, 0);
+  truthy(plan.length === 1 && plan[0].kind === 'keep');
+});
+
+test('planSmartReplace — inserts new contacts with rank continuing from max preserved', () => {
+  const existing = [
+    { id: 1, apollo_id: 'a1', contact_status: 'sent',    hunt_rank: 1 },
+    { id: 2, apollo_id: 'a2', contact_status: 'drafted', hunt_rank: 2 }
+  ];
+  const fresh = [
+    { id: null, apollo_id: 'a3', contact_status: 'pending', hunt_rank: 1 },
+    { id: null, apollo_id: 'a4', contact_status: 'pending', hunt_rank: 2 }
+  ];
+  const { plan, stats } = planSmartReplace(existing, fresh);
+  eq(stats.insertedNew, 2);
+  const inserts = plan.filter((p) => p.kind === 'insert');
+  // New rank starts at max preserved (2) + 1 = 3, 4
+  eq(inserts[0].row.hunt_rank, 3);
+  eq(inserts[1].row.hunt_rank, 4);
+});
+
+test('planSmartReplace — combined: preserves, removes stale, inserts new, dedups', () => {
+  const existing = [
+    { id: 1, apollo_id: 'a1', contact_status: 'sent',    hunt_rank: 1 }, // preserved
+    { id: 2, apollo_id: 'a2', contact_status: 'pending', hunt_rank: 2 }, // stale → delete
+    { id: 3, apollo_id: 'a3', contact_status: 'pending', hunt_rank: 3 }  // present in fresh → keep
+  ];
+  const fresh = [
+    { id: null, apollo_id: 'a3', contact_status: 'pending', hunt_rank: 1 }, // dedup
+    { id: null, apollo_id: 'a4', contact_status: 'pending', hunt_rank: 2 }, // new
+    { id: null, apollo_id: 'a5', contact_status: 'pending', hunt_rank: 3 }  // new
+  ];
+  const { stats } = planSmartReplace(existing, fresh);
+  eq(stats.preserved, 1);          // a1
+  eq(stats.removedPending, 1);     // a2 was pending and not in fresh
+  eq(stats.dedupedByApollo, 1);    // a3 was pending and IS in fresh
+  eq(stats.insertedNew, 2);        // a4, a5
+});
+
+test('planSmartReplace — handles rows without apollo_id gracefully', () => {
+  const existing = [
+    { id: 1, apollo_id: null, contact_status: 'sent', hunt_rank: 1 } // manually added, no Apollo id
+  ];
+  const fresh = [
+    { id: null, apollo_id: 'a2', contact_status: 'pending', hunt_rank: 1 }
+  ];
+  const { stats } = planSmartReplace(existing, fresh);
+  eq(stats.preserved, 1);
+  eq(stats.insertedNew, 1);
 });
 
 console.log(`\nResult: ${passed} passed, ${failed} failed`);

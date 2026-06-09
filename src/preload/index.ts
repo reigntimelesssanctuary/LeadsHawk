@@ -3,7 +3,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 const api = {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
-    update: (patch: any) => ipcRenderer.invoke('settings:update', patch)
+    update: (patch: any) => ipcRenderer.invoke('settings:update', patch),
+    // v1.19.0 — Apollo API key validation (Settings → Contact API "Test" button).
+    validateApolloKey: (key?: string) => ipcRenderer.invoke('settings:validateApolloKey', key)
   },
   dashboard: {
     stats: () => ipcRenderer.invoke('dashboard:stats')
@@ -129,6 +131,23 @@ const api = {
   },
   cost: {
     summary: () => ipcRenderer.invoke('cost:summary')
+  },
+  // v1.19.0 — Contact search + drafts (Phase 1 of outbound).
+  contacts: {
+    search: (oppId: number) => ipcRenderer.invoke('contacts:search', oppId),
+    searchBatch: (oppIds: number[]) => ipcRenderer.invoke('contacts:searchBatch', oppIds),
+    listForOpp: (oppId: number) => ipcRenderer.invoke('contacts:listForOpp', oppId),
+    listDrafts: (contactId: number) => ipcRenderer.invoke('contacts:listDrafts', contactId),
+    draftEmail: (contactId: number, opts?: { feedback?: string | null }) =>
+      ipcRenderer.invoke('contacts:draftEmail', contactId, opts),
+    setActiveDraft: (contactId: number, draftId: number) =>
+      ipcRenderer.invoke('contacts:setActiveDraft', contactId, draftId),
+    updateDraft: (draftId: number, subject: string, body: string) =>
+      ipcRenderer.invoke('contacts:updateDraft', draftId, subject, body),
+    markSent: (contactId: number) => ipcRenderer.invoke('contacts:markSent', contactId),
+    skip: (contactId: number) => ipcRenderer.invoke('contacts:skip', contactId),
+    unskip: (contactId: number) => ipcRenderer.invoke('contacts:unskip', contactId),
+    delete: (contactId: number) => ipcRenderer.invoke('contacts:delete', contactId)
   },
   openExternal: (url: string) => ipcRenderer.invoke('openExternal', url),
   monitor: {

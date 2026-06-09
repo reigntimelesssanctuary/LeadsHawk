@@ -35,6 +35,9 @@ export type LlmStage =
   | 'triage'             // Anthropic Sonnet, live-monitor stage 3
   | 'qualify'            // Perplexity sonar-pro, live-monitor stage 4
   | 'brief'              // Anthropic Opus, sales-brief generation
+  | 'contact_archetype'  // v1.19: Anthropic Sonnet, who-to-reach reasoning
+  | 'contact_draft'      // v1.19: Anthropic Opus + extended thinking, cold-email draft
+  | 'contact_lookup'     // v1.19: Apollo (not an LLM), people search by company + filters
   | 'unknown';
 
 type Rate = {

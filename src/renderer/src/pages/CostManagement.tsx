@@ -32,6 +32,10 @@ const STAGE_LABELS: Record<string, string> = {
   triage: 'Live Monitor — triage',
   qualify: 'Live Monitor — qualify',
   brief: 'Sales brief',
+  // v1.19.0 — contact outreach stages.
+  contact_archetype: 'Contact outreach — archetype (Sonnet)',
+  contact_draft: 'Contact outreach — draft (Opus + extended thinking)',
+  contact_lookup: 'Contact outreach — Apollo lookup',
   unknown: 'Other / untagged'
 };
 

@@ -103,7 +103,7 @@ export function Settings() {
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Anthropic API</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-          Used by the <i>Generate brief</i> button on each opportunity, Live Monitor's triage stage, and the deep scan's Claude qualification step. Models are fixed (Opus 4.7 for brief writing, Sonnet 4.6 for triage and qualify).
+          Used by the <i>Generate brief</i> button on each opportunity, Live Monitor's triage stage, the deep scan's Claude qualification step, and (v1.19+) the contact-archetype + draft-writing stages. Models are fixed (Opus 4.7 for brief + draft writing, Sonnet 4.6 for triage, qualify, and archetype).
         </div>
         <label className="label">API key</label>
         <input
@@ -114,6 +114,12 @@ export function Settings() {
           placeholder="sk-ant-…"
         />
       </div>
+
+      {/* v1.19.0 — Apollo API key for contact search (Phase 1 of outbound). */}
+      <ApolloCard
+        apiKey={s.apolloApiKey}
+        onChange={(v) => setS({ ...s, apolloApiKey: v })}
+      />
 
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Live Monitor</div>
@@ -361,6 +367,89 @@ export function Settings() {
 
       <button className="btn-primary" onClick={save}>Save settings</button>
       {saved && <span style={{ marginLeft: 12, color: '#065f46', fontSize: 13 }}>Saved.</span>}
+    </div>
+  );
+}
+
+// v1.19.0 — Apollo API key card for contact search. Self-contained so the
+// "Test connection" round-trip + credit-display state stays local.
+function ApolloCard({
+  apiKey, onChange
+}: {
+  apiKey: string;
+  onChange: (v: string) => void;
+}) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<
+    | { ok: true; remainingCredits: number | null }
+    | { ok: false; error: string }
+    | null
+  >(null);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await window.lh.settings.validateApolloKey(apiKey);
+      if (r.ok) {
+        setResult({ ok: true, remainingCredits: r.remainingCredits ?? null });
+      } else {
+        setResult({ ok: false, error: r.error || 'Unknown error.' });
+      }
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="h-card" style={{ marginBottom: 6 }}>Contact API (Apollo)</div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+        Used by the v1.19 Hunt list — given an opportunity, LeadsHawk asks Apollo
+        for 3-5 likely-fit contacts at the target company so the operator can
+        review + draft a personalised first-touch email per contact. Sign up at{' '}
+        <a onClick={() => window.lh.openExternal('https://apollo.io')} style={{ cursor: 'pointer' }}>
+          apollo.io
+        </a>
+        {' '}— free tier = 60 lookups/mo; Starter = $49/mo for 1,000.
+      </div>
+      <label className="label">API key</label>
+      <input
+        className="input"
+        type="password"
+        value={apiKey}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="paste your Apollo API key"
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+        <button
+          className="btn-ghost"
+          onClick={test}
+          disabled={testing || !apiKey.trim()}
+        >
+          {testing ? 'Testing…' : 'Test connection'}
+        </button>
+        {result?.ok === true && (
+          <span style={{ fontSize: 13, color: '#065f46' }}>
+            ✓ Key works
+            {result.remainingCredits !== null
+              ? ` · ${result.remainingCredits} credits remaining`
+              : ''}
+          </span>
+        )}
+        {result?.ok === false && (
+          <span style={{ fontSize: 13, color: '#991b1b' }}>
+            ✗ {result.error}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+        Save the key (button at the bottom) after pasting. The key is stored
+        locally in <code>settings.json</code> under your user-data folder; it
+        never leaves your machine except in API calls to Apollo.
+      </div>
     </div>
   );
 }

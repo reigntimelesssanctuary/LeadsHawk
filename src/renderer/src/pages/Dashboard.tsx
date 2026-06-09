@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { StatCard } from '../components/StatCard';
 import type { DashboardStats, Opportunity, Brand, Product } from '../../../shared/types';
 import { fmtDate, fmtDateShort, openExternal } from '../lib/api';
-import { Trash2, Download, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronRight, Brain } from 'lucide-react';
+import { Trash2, Download, ArrowUp, ArrowDown, AlertTriangle, ChevronDown, ChevronRight, Brain, Users } from 'lucide-react';
 
 // v1.16.0 — pipeline summary from the state cache (events.ts/getPipelineSummary).
 type PipelineSummary = {
@@ -96,6 +96,11 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [exporting, setExporting] = useState(false);
   const [exportToast, setExportToast] = useState<string | null>(null);
+  // v1.19.0 — per-row + bulk Hunt-state UI. searchingIds tracks which opps
+  // currently have an in-flight Apollo call so we can show 'searching…'
+  // without blocking the whole UI. huntToast surfaces bulk-search results.
+  const [searchingIds, setSearchingIds] = useState<Set<number>>(new Set());
+  const [huntToast, setHuntToast] = useState<string | null>(null);
   // v1.16.0 — pipeline summary + stale-id set for the lifecycle widgets.
   const [pipeline, setPipeline] = useState<PipelineSummary | null>(null);
   const [staleIds, setStaleIds] = useState<Set<number>>(new Set());
@@ -244,6 +249,62 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
     await refresh();
   };
 
+  // v1.19.0 — single-opp contact search. Optimistic 'searching…' chip
+  // while in flight; reload opps after to pick up the new hunt_status.
+  const searchOne = async (oppId: number) => {
+    setSearchingIds((prev) => new Set([...prev, oppId]));
+    try {
+      const r = await window.lh.contacts.search(oppId);
+      if (r.status === 'hunted') {
+        setHuntToast(`Found ${r.contactsFound} contact(s) (${r.apolloCredits} credit(s) used)`);
+      } else if (r.status === 'no_contacts') {
+        setHuntToast(`No usable contacts surfaced (${r.apolloCredits} credit(s) used). Try again later or refine the dossier.`);
+      } else {
+        setHuntToast(`Search failed: ${r.error || 'unknown error'}`);
+      }
+    } catch (e: any) {
+      setHuntToast(`Search failed: ${e?.message || e}`);
+    } finally {
+      setSearchingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(oppId);
+        return next;
+      });
+      setTimeout(() => setHuntToast(null), 5000);
+      await refresh();
+    }
+  };
+
+  // v1.19.0 — bulk contact search across selected opps. Cost preview +
+  // confirm dialog before commit (per spec Open Decision #3).
+  const searchSelected = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const creditsLow = ids.length * 3;
+    const creditsHigh = ids.length * 5;
+    const ok = confirm(
+      `Search contacts for ${ids.length} opportunity${ids.length === 1 ? '' : 'ies'}?\n\n` +
+      `Estimated cost:\n` +
+      `  • ${creditsLow}-${creditsHigh} Apollo credits (~$${(creditsLow * 0.049).toFixed(2)}-$${(creditsHigh * 0.049).toFixed(2)} on Starter)\n` +
+      `  • ~$${(ids.length * 0.01).toFixed(2)} Sonnet archetype reasoning`
+    );
+    if (!ok) return;
+    setSearchingIds(new Set(ids));
+    try {
+      const results = await window.lh.contacts.searchBatch(ids);
+      const hunted = results.filter((r: any) => r.status === 'hunted').length;
+      const none = results.filter((r: any) => r.status === 'no_contacts').length;
+      const failed = results.filter((r: any) => r.status === 'search_failed').length;
+      setHuntToast(`Batch done: ${hunted} hunted · ${none} no-contacts · ${failed} failed`);
+    } catch (e: any) {
+      setHuntToast(`Batch failed: ${e?.message || e}`);
+    } finally {
+      setSearchingIds(new Set());
+      setTimeout(() => setHuntToast(null), 8000);
+      await refresh();
+    }
+  };
+
   const exportSelected = async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
@@ -365,6 +426,17 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
               <>
                 <span style={{ fontSize: 13, color: '#6b7280' }}>{selected.size} selected</span>
                 <button className="btn-ghost" onClick={() => setSelected(new Set())}>Clear</button>
+                <button
+                  className="btn-ghost"
+                  onClick={searchSelected}
+                  disabled={searchingIds.size > 0}
+                  title="Run Apollo contact search across all selected opportunities"
+                >
+                  <Users size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+                  {searchingIds.size > 0
+                    ? `Searching ${searchingIds.size}…`
+                    : `Search contacts (${selected.size})`}
+                </button>
                 <button className="btn-ghost" onClick={exportSelected} disabled={exporting}>
                   <Download size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
                   {exporting ? 'Exporting…' : `Export ${selected.size} as Excel`}
@@ -378,6 +450,11 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
             {exportToast && (
               <span style={{ fontSize: 13, color: '#065f46' }}>{exportToast}</span>
             )}
+            {huntToast && (
+              <span style={{ fontSize: 13, color: huntToast.startsWith('Search failed') || huntToast.startsWith('Batch failed') ? '#991b1b' : '#5b21b6' }}>
+                {huntToast}
+              </span>
+            )}
           </div>
         </div>
         <div
@@ -388,7 +465,7 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
             minHeight: 280
           }}
         >
-          <table className="lh" style={{ minWidth: 1280 }}>
+          <table className="lh" style={{ minWidth: 1440 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
               <tr>
                 <th style={{ width: 36 }}>
@@ -409,6 +486,8 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                 <SortableTh label="Scan Type"   k="scanType"   sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Confidence"  k="confidence" sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
                 <SortableTh label="Signal Summary" k="signal"  sortKey={sortKey} sortDir={sortDir} onSort={sortBy} />
+                {/* v1.19.0: Hunt column. Per-row action button + state chip. */}
+                <th>Hunt</th>
                 <th>Actions</th>
               </tr>
               <tr style={{ background: '#fafafa' }}>
@@ -443,12 +522,13 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                 </th>
                 <th><FilterInput value={filters.signal} onChange={(v) => setFilters({ ...filters, signal: v })} placeholder="filter…" /></th>
                 <th />
+                <th />
               </tr>
             </thead>
             <tbody>
               {sortedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
+                  <td colSpan={12} style={{ textAlign: 'center', color: '#6b7280', padding: 28 }}>
                     {allRows.length === 0
                       ? 'No open opportunities. Run a scan to find new leads.'
                       : 'No opportunities match the current filters.'}
@@ -464,6 +544,8 @@ export function Dashboard({ onOpenOpp }: { onOpenOpp: (id: number) => void }) {
                     productName={productName}
                     selected={selected.has(opp.id)}
                     isStale={staleIds.has(opp.id)}
+                    isSearchingContacts={searchingIds.has(opp.id)}
+                    onSearchContacts={() => searchOne(opp.id)}
                     onToggleSelect={() => toggleOne(opp.id)}
                     onOpen={() => onOpenOpp(opp.id)}
                     onDelete={async () => {
@@ -555,7 +637,8 @@ function FilterSelect({ value, onChange, options }: { value: string; onChange: (
 }
 
 function OppRow({
-  opp, scanType, brandName, productName, selected, isStale, onToggleSelect, onOpen, onDelete
+  opp, scanType, brandName, productName, selected, isStale,
+  isSearchingContacts, onSearchContacts, onToggleSelect, onOpen, onDelete
 }: {
   opp: Opportunity;
   scanType: ScanType;
@@ -563,6 +646,8 @@ function OppRow({
   productName: string;
   selected: boolean;
   isStale: boolean;
+  isSearchingContacts: boolean;
+  onSearchContacts: () => void;
   onToggleSelect: () => void;
   onOpen: () => void;
   onDelete: () => void;
@@ -606,6 +691,9 @@ function OppRow({
         <span className="chip chip-muted">{Math.round((opp.confidence || 0) * 100)}%</span>
       </td>
       <td style={{ maxWidth: 320 }}>{opp.signal_summary}</td>
+      <td style={{ whiteSpace: 'nowrap', minWidth: 160 }}>
+        <HuntCell opp={opp} isSearching={isSearchingContacts} onSearch={onSearchContacts} onOpen={onOpen} />
+      </td>
       <td style={{ whiteSpace: 'nowrap' }}>
         <button className="btn-ghost" onClick={onOpen}>View</button>{' '}
         <button className="btn-ghost" onClick={() => openExternal(opp.source_url)}>Source</button>{' '}
@@ -613,6 +701,87 @@ function OppRow({
       </td>
     </tr>
   );
+}
+
+// v1.19.0 — Per-row Hunt cell. Renders the right button + chip combination
+// based on the opp's hunt_status. Clicking the chip opens the opp detail
+// scrolled to the Hunt list section.
+function HuntCell({
+  opp, isSearching, onSearch, onOpen
+}: {
+  opp: Opportunity;
+  isSearching: boolean;
+  onSearch: () => void;
+  onOpen: () => void;
+}) {
+  if (isSearching) {
+    return <span className="chip chip-muted" style={{ fontSize: 11 }}>searching…</span>;
+  }
+  const status = opp.hunt_status;
+  if (status == null) {
+    return (
+      <button
+        className="btn-ghost"
+        onClick={onSearch}
+        title="Apollo search for ranked contacts at this company"
+        style={{ fontSize: 12, padding: '4px 10px' }}
+      >
+        <Users size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+        Search contacts
+      </button>
+    );
+  }
+  if (status === 'searching') {
+    return <span className="chip chip-muted" style={{ fontSize: 11 }}>searching…</span>;
+  }
+  if (status === 'hunted') {
+    return (
+      <>
+        <span
+          className="chip chip-brand"
+          style={{ fontSize: 11, cursor: 'pointer' }}
+          onClick={onOpen}
+          title="Open the Hunt list on Opportunity Detail"
+        >
+          hunted
+        </span>{' '}
+        <button
+          className="btn-ghost"
+          onClick={onSearch}
+          style={{ fontSize: 12, padding: '4px 8px' }}
+          title="Re-run Apollo search (preserves drafted/sent/skipped contacts)"
+        >
+          Re-search
+        </button>
+      </>
+    );
+  }
+  if (status === 'no_contacts') {
+    return (
+      <>
+        <span className="chip" style={{ background: '#fef3c7', color: '#92400e', fontSize: 11 }}>
+          no contacts
+        </span>{' '}
+        <button className="btn-ghost" onClick={onSearch} style={{ fontSize: 12, padding: '4px 8px' }}>
+          Try again
+        </button>
+      </>
+    );
+  }
+  if (status === 'search_failed') {
+    return (
+      <>
+        <span className="chip chip-disqualified" style={{ fontSize: 11 }} title="Last search errored. Retry below.">
+          failed
+        </span>{' '}
+        <button className="btn-ghost" onClick={onSearch} style={{ fontSize: 12, padding: '4px 8px' }}>
+          Retry
+        </button>
+      </>
+    );
+  }
+  // Phase 2 extension states fall through to a generic chip.
+  return <span className="chip chip-muted" style={{ fontSize: 11 }}>{String(status)}</span>;
 }
 
 // v1.16.0 — pipeline-aware stat card variant. Same shape as StatCard but

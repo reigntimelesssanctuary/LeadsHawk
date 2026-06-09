@@ -426,6 +426,87 @@ function migrate(db: Database.Database) {
       ON learning_signals(tenant_id, dimension, meets_threshold);
   `);
 
+  // v1.19.0 — contact search + drafts (Phase 1 of outbound).
+  //
+  // Three new tables + one column on opportunities:
+  //
+  //   contact_searches   — append-only audit log of every archetype-reasoning
+  //                        invocation. Each row captures the Sonnet output,
+  //                        the Apollo credit spend, and the outcome.
+  //   contacts           — Apollo-sourced contacts attached to an opportunity.
+  //                        Ranked + state-machine'd (pending → drafted → sent /
+  //                        skipped, with Phase 2 states added later additively).
+  //                        Unique (opportunity_id, apollo_id) so re-search
+  //                        dedups cleanly.
+  //   contact_drafts     — per-contact draft history. Multiple versions per
+  //                        contact supported; is_active=1 marks the
+  //                        currently-selected draft for any send action.
+  //                        Enforced by partial unique index.
+  //   opportunities.hunt_status — Dashboard chip state. NULL until first
+  //                        search; then 'searching' | 'hunted' | 'no_contacts'
+  //                        | 'search_failed'. Phase 2 extends additively.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_searches (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      opportunity_id  INTEGER NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+      archetype_json  TEXT NOT NULL,
+      reasoning       TEXT,
+      contacts_found  INTEGER NOT NULL DEFAULT 0,
+      apollo_credits  INTEGER NOT NULL DEFAULT 0,
+      llm_cost        REAL NOT NULL DEFAULT 0,
+      run_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      run_status      TEXT NOT NULL DEFAULT 'pending'
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_searches_opp ON contact_searches(opportunity_id);
+
+    CREATE TABLE IF NOT EXISTS contacts (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      opportunity_id  INTEGER NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+      search_id       INTEGER REFERENCES contact_searches(id) ON DELETE SET NULL,
+      apollo_id       TEXT,
+      full_name       TEXT NOT NULL,
+      first_name      TEXT,
+      last_name       TEXT,
+      title           TEXT,
+      seniority       TEXT,
+      department      TEXT,
+      email           TEXT,
+      email_status    TEXT,
+      linkedin_url    TEXT,
+      hunt_rank       INTEGER NOT NULL,
+      hunt_score      REAL NOT NULL,
+      rank_components TEXT,
+      contact_status  TEXT NOT NULL DEFAULT 'pending',
+      marked_sent_at  TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_opp ON contacts(opportunity_id);
+    CREATE INDEX IF NOT EXISTS idx_contacts_rank ON contacts(opportunity_id, hunt_rank);
+    CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(contact_status);
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_contacts_apollo_per_opp
+      ON contacts(opportunity_id, apollo_id) WHERE apollo_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS contact_drafts (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      contact_id      INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+      draft_version   INTEGER NOT NULL,
+      subject         TEXT NOT NULL,
+      body            TEXT NOT NULL,
+      reasoning_trace TEXT,
+      one_line_why    TEXT,
+      human_edited    INTEGER NOT NULL DEFAULT 0,
+      is_active       INTEGER NOT NULL DEFAULT 1,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_drafts_contact ON contact_drafts(contact_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_draft_per_contact
+      ON contact_drafts(contact_id) WHERE is_active = 1;
+  `);
+  addColumnIfMissing(db, 'opportunities', 'hunt_status', 'TEXT');
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_opps_hunt_status ON opportunities(hunt_status);`);
+
   // v1.18.0 — qualification axes split.
   // buying_stage: 'early' | 'mid' | 'late' | NULL, classified by the
   // Stage 2 qualifier (or live-monitor qualify) at insert time. NULL on

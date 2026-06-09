@@ -87,6 +87,7 @@ export type OperationType =
   | 'deep_scan'
   | 'live_monitor'
   | 'sales_brief'
+  | 'contact_outreach'   // v1.19.0 — Apollo lookup + Sonnet archetype + Opus draft
   | 'other';
 
 export function operationForStage(stage: string): OperationType {
@@ -119,6 +120,10 @@ export function operationForStage(stage: string): OperationType {
       return 'live_monitor';
     case 'brief':
       return 'sales_brief';
+    case 'contact_archetype':
+    case 'contact_draft':
+    case 'contact_lookup':           // v1.19.0
+      return 'contact_outreach';
     default:
       return 'other';
   }
@@ -133,6 +138,7 @@ export const OPERATION_LABEL: Record<OperationType, string> = {
   deep_scan: 'Deep scan (Stage 1 + Stage 2)',
   live_monitor: 'Live Monitor (triage + qualify)',
   sales_brief: 'Sales brief generation',
+  contact_outreach: 'Contact outreach (Apollo + archetype + draft)',
   other: 'Other / untagged'
 };
 
@@ -145,6 +151,7 @@ const OPERATION_ORDER: OperationType[] = [
   'deep_scan',
   'live_monitor',
   'sales_brief',
+  'contact_outreach',
   'other'
 ];
 

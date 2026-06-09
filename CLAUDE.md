@@ -613,6 +613,55 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.0 (2026-06-09):** Hunt list + signal-grounded drafts — Phase 1 of the outbound transformation.
+
+LeadsHawk through v1.18 stopped at "we surfaced this opportunity; here's the brief." Acting on that required the operator to hunt contacts at the target company, decide who to email first, and write a personalised first-touch — all happening outside the app. v1.19.0 brings those steps inside.
+
+**What's new (manual everywhere — no auto-firing):**
+
+1. **Dashboard "Hunt" column** — per-row "Search contacts" button + bulk-select action. State chip shows hunt status (none / searching / hunted / no contacts / failed).
+2. **Three-stage contact search pipeline** (triggered manually per opp or batch):
+   - *Stage 1 — Archetype reasoning.* Claude Sonnet 4.6 reads the brand + product + event and outputs a structured query plan (target seniorities + titles + departments + anti-patterns) for the people search. ~$0.01 per search. The intuition: different events at different companies call for different contact archetypes; a "Singapore HQ expansion" event for networking gear wants Facilities + IT-Infra leads (not generic CIO).
+   - *Stage 2 — Apollo search.* `POST /v1/mixed_people/search` with the Stage 1 filters. 3-5 credits per opp. Free tier (60 credits/mo) covers ~12 opps; Starter ($49/mo for 1,000) covers ~200.
+   - *Stage 3 — Deterministic ranking* via `src/shared/hunt.ts` weighted score (archetype-title 0.40 + seniority 0.25 + department 0.15 + verified-email 0.05 + signal-keyword 0.05 − anti-pattern 0.10). Top 3-5 persisted as `contacts` rows.
+3. **Opportunity Detail → Hunt list panel** — per-contact card with email, score, why-matched. Each contact has a **lazy** [Draft email] button (drafts NOT generated automatically — operator clicks per contact).
+4. **Opus + extended thinking draft generator** — Claude Opus 4.7 with `thinking: { type: 'enabled', budget_tokens: 4000 }` writes the cold first-touch, grounded in the qualifying event + contact's role + brand dossier. Marketing best-practices encoded in the system prompt (subject ≤ 60 chars, body ≤ 120 words, no clickbait, no forbidden phrases like "circling back" or "hope this finds you well", single specific CTA, no product-name pitch in first email). Extended-thinking trace persisted + surfaced in the UI as **"Why this angle"** so the operator can inspect the model's reasoning before sending. ~$0.05–0.08 per draft.
+5. **Draft versioning** — each draft generation creates a new `contact_drafts` row with auto-incremented `draft_version`; previous versions preserved via `is_active=1` partial unique index. Operator can switch active version via dropdown, regenerate with optional feedback, or edit-in-place (sets `human_edited=1`).
+6. **Smart-replace on re-search** — `planSmartReplace` (in `src/shared/contacts-merge.ts`) preserves non-pending contacts (drafted / sent / skipped) on re-search; replaces only pending contacts; dedups by `apollo_id`. New contacts continue rank numbering from max preserved + 1.
+
+**Schema:**
+
+- `contact_searches` — append-only audit row per search invocation. Captures the Sonnet archetype, Apollo credits, contacts found, run status.
+- `contacts` — per-opp Apollo-sourced contacts with rank + score + components + state machine (`pending` / `drafted` / `sent` / `skipped` / `failed`). Unique `(opportunity_id, apollo_id)` so re-search dedups cleanly. v1.20+ Phase 2 states (`sequencing_active`, `sequence_paused_awaiting_decision`, `replied`, `bounced_hard`, etc.) added additively — no schema change.
+- `contact_drafts` — per-contact draft history. `is_active=1` enforced as a partial unique index; `human_edited` flag preserved across regenerations.
+- `opportunities.hunt_status` — Dashboard chip state (null / `searching` / `hunted` / `no_contacts` / `search_failed`).
+
+**New IPCs (preloaded under `window.lh.contacts.*`):**
+- `search`, `searchBatch` — orchestrator entry points
+- `listForOpp`, `listDrafts` — read paths for the UI
+- `draftEmail` — Opus generation with optional `opts.feedback`
+- `setActiveDraft`, `updateDraft` — version switching + inline edit
+- `markSent`, `skip`, `unskip`, `delete` — state transitions
+
+Plus `settings.validateApolloKey` for the Settings card test button.
+
+**Cost tracking** — new `LlmStage` values (`contact_archetype`, `contact_draft`, `contact_lookup`) all bucket into a new `OperationType: 'contact_outreach'`. Apollo spend logged into `api_calls` with `provider='apollo'` at $0.049/credit (Starter rate). Cost Management tab renders new operation row + new provider entry.
+
+**What this DOES NOT do (deliberately deferred to Phase 2 / v1.20+):**
+- No sending. Operator copies drafts to their own email tool.
+- No sequencing. No "if no reply in X days, escalate to next contact."
+- No reply tracking. LeadsHawk doesn't watch any inbox.
+- No Smartlead integration. v1.20 wires the API push + sequencing engine.
+- No CRM push. LeadsHawk stays the operator's internal cockpit; clients receive booked meetings via email.
+
+**Smoke tests: 205 → 234 (+29).** Coverage:
+- `routeCandidate` (v1.18.0 unchanged): 11 tests
+- Hunt ranking (`src/shared/hunt.ts`): 18 tests covering tokenizer, all 6 components (archetypeTitleMatch, seniorityMatch, departmentMatch, antiPatternPenalty, verifiedEmailBonus, signalKeywordMatch), composite huntScore clamping, and rankContacts ordering + capping
+- Smart-replace (`src/shared/contacts-merge.ts`): 6 tests covering pure preservation, pure removal, apollo_id dedup, rank continuation, mixed combinations, null-apollo_id handling
+- `operationForStage` extended for `contact_*` stages
+
+**Settings UI:** new "Contact API (Apollo)" card with masked input + Test connection button. Helper text links to apollo.io and mentions free-tier limits.
+
 **v1.18.0 (2026-06-04):** Qualification axes split — `buying_stage` + `status='shadow'` for the false-negative cohort.
 
 Triggered by beta-client feedback that LeadsHawk arrives "too late" in the buying cycle because public signals are inherently lagging. Diagnosis (in conversation, not in code yet): the single `confidence` score conflates two distinct dimensions — *strength of evidence* and *stage in the buying motion*. The 55% gate implicitly optimises for late-stage certainty, which exactly produces the symptom the client described. With ~3 weeks of operation there is **no outcome data** to retune the gate against — anything else would be guessing. So v1.18.0 ships the **minimum instrumentation** required to evaluate the diagnosis later, without changing the user-visible behaviour today.

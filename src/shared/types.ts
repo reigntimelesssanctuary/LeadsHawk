@@ -190,6 +190,12 @@ export type Opportunity = {
   // v1.18.0: classified by Stage 2 (or live-monitor qualify) at insert
   // time. NULL on legacy rows + when the classifier didn't tag a stage.
   buying_stage: 'early' | 'mid' | 'late' | null;
+  // v1.19.0: per-opp Dashboard chip state for the contact-search flow.
+  // NULL = never searched. 'searching' = Apollo call in flight.
+  // 'hunted' = ≥3 contacts found + ranked. 'no_contacts' = Apollo
+  // returned <3 usable. 'search_failed' = Sonnet or Apollo errored.
+  // v1.20+ extends additively (sequencing | meeting_booked | etc).
+  hunt_status: 'searching' | 'hunted' | 'no_contacts' | 'search_failed' | null;
   background: string | null;
   use_case: string | null;
   angle: string | null;
@@ -348,6 +354,93 @@ export type Settings = {
   productResearchFactCheck: boolean;
   /** Cap on the number of citation URLs fetched and verified per call. */
   factCheckMaxSources: number;
+  // v1.19.0 — Apollo API key for contact search (Phase 1 of outbound).
+  apolloApiKey: string;
+};
+
+// ─────────────────────────────────────────────────────────────────────
+// v1.19.0 — Contact search + drafts (Phase 1 of outbound)
+// ─────────────────────────────────────────────────────────────────────
+
+/** Apollo seniority enum — mirrors their API. */
+export type ApolloSeniority =
+  | 'c_suite' | 'vp' | 'director' | 'head' | 'manager'
+  | 'senior' | 'entry' | 'owner' | 'partner' | 'founder';
+
+/**
+ * Output of the Sonnet archetype-reasoning step.
+ * Drives Apollo's search filters AND the ranking score.
+ */
+export type ContactArchetype = {
+  target_seniorities: ApolloSeniority[];
+  target_titles: string[];
+  target_departments: string[];
+  anti_patterns: string[];
+  reasoning: string;
+};
+
+/** Append-only audit row for each archetype invocation. */
+export type ContactSearch = {
+  id: number;
+  opportunity_id: number;
+  archetype_json: string;     // serialized ContactArchetype
+  reasoning: string | null;
+  contacts_found: number;
+  apollo_credits: number;
+  llm_cost: number;
+  run_at: string;
+  run_status: 'pending' | 'completed' | 'no_contacts' | 'search_failed';
+};
+
+/** A single contact attached to an opportunity. */
+export type Contact = {
+  id: number;
+  opportunity_id: number;
+  search_id: number | null;
+  apollo_id: string | null;
+  full_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  seniority: ApolloSeniority | null;
+  department: string | null;
+  email: string | null;
+  email_status: 'verified' | 'guessed' | 'unavailable' | 'unverified' | null;
+  linkedin_url: string | null;
+  hunt_rank: number;
+  hunt_score: number;
+  rank_components: string | null;   // JSON breakdown
+  /**
+   * v1.19 states: pending | drafted | sent | skipped | failed
+   * v1.20+ adds:  sequencing_active | sequence_paused_awaiting_decision |
+   *               replied | bounced_hard | bounced_soft | unsubscribed |
+   *               sequence_complete_no_response
+   */
+  contact_status: string;
+  marked_sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** A single draft for a contact. Multiple versions per contact supported. */
+export type ContactDraft = {
+  id: number;
+  contact_id: number;
+  draft_version: number;
+  subject: string;
+  body: string;
+  reasoning_trace: string | null;
+  one_line_why: string | null;
+  human_edited: number;            // 0 | 1
+  is_active: number;               // 0 | 1
+  created_at: string;
+  updated_at: string;
+};
+
+/** Joined shape returned by contacts:listForOpp — contact + its active draft. */
+export type ContactWithDraft = Contact & {
+  active_draft: ContactDraft | null;
+  draft_count: number;             // total drafts (versions) for this contact
 };
 
 export type MonitorSource = {

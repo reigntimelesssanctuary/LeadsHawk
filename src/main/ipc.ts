@@ -12,6 +12,10 @@ import { chunkAndEmbedKnowledgeItem } from './knowledge-index.js';
 import { buildBrief, recordDispatch } from './dispatch.js';
 import { restartScheduler } from './scheduler.js';
 import { getSpendSummary, getCostSummary } from './spend.js';
+import { searchContactsForOpportunity, searchContactsBatch } from './contact-search.js';
+import { draftEmailForContact, setActiveDraftVersion } from './contact-draft.js';
+import { validateApolloKey } from './apollo.js';
+import type { Contact, ContactDraft, ContactWithDraft } from '@shared/types';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning,
   processSingleItem
@@ -745,6 +749,121 @@ export function registerIpc() {
   // future runs will stop seeing it.
   ipcMain.handle('feedback:delete', (_e, id: number) => {
     db.prepare('DELETE FROM dossier_feedback WHERE id = ?').run(id);
+    return true;
+  });
+
+  // -------- Contact search + drafts (v1.19.0) --------
+  // Apollo API key validation (used by Settings → Contact API "Test connection").
+  ipcMain.handle('settings:validateApolloKey', async (_e, key?: string) => {
+    return await validateApolloKey(key);
+  });
+
+  // Single-opp contact search. Orchestrator handles archetype → Apollo →
+  // rank → smart-replace persist. Always returns a structured outcome
+  // (even on failure) so the UI can render a chip + toast.
+  ipcMain.handle('contacts:search', async (_e, oppId: number) => {
+    return await searchContactsForOpportunity(oppId);
+  });
+
+  // Bulk contact search — sequential over the array. Used by Dashboard
+  // multi-select bulk action.
+  ipcMain.handle('contacts:searchBatch', async (_e, oppIds: number[]) => {
+    return await searchContactsBatch(oppIds);
+  });
+
+  // Return contacts + their active drafts for an opp's Hunt list panel.
+  // Joined shape: Contact + active_draft (or null) + draft_count.
+  ipcMain.handle('contacts:listForOpp', (_e, oppId: number): ContactWithDraft[] => {
+    const contacts = db.prepare(
+      'SELECT * FROM contacts WHERE opportunity_id = ? ORDER BY hunt_rank ASC, id ASC'
+    ).all(oppId) as Contact[];
+    return contacts.map((c) => {
+      const activeDraft = db.prepare(
+        'SELECT * FROM contact_drafts WHERE contact_id = ? AND is_active = 1'
+      ).get(c.id) as ContactDraft | undefined;
+      const draftCountRow = db.prepare(
+        'SELECT COUNT(*) AS n FROM contact_drafts WHERE contact_id = ?'
+      ).get(c.id) as { n: number };
+      return {
+        ...c,
+        active_draft: activeDraft ?? null,
+        draft_count: draftCountRow.n
+      };
+    });
+  });
+
+  // Return all draft versions for a contact (used by the version dropdown).
+  ipcMain.handle('contacts:listDrafts', (_e, contactId: number): ContactDraft[] => {
+    return db.prepare(
+      'SELECT * FROM contact_drafts WHERE contact_id = ? ORDER BY draft_version DESC'
+    ).all(contactId) as ContactDraft[];
+  });
+
+  // Draft email for a single contact. opts.feedback (optional) feeds into
+  // a regenerate-with-feedback flow — a new draft version is created
+  // either way; existing versions are preserved.
+  ipcMain.handle('contacts:draftEmail', async (_e, contactId: number, opts?: { feedback?: string | null }) => {
+    return await draftEmailForContact(contactId, opts ?? {});
+  });
+
+  // Switch the active draft version (operator picks a non-latest draft).
+  ipcMain.handle('contacts:setActiveDraft', (_e, contactId: number, draftId: number) => {
+    return setActiveDraftVersion(contactId, draftId);
+  });
+
+  // Inline edit — operator typed in the subject/body fields. Updates the
+  // currently-active draft for this contact in place, sets human_edited=1.
+  // We don't version on edit (that would explode the draft count); the
+  // regenerate path is the explicit "give me a fresh version" mechanism.
+  ipcMain.handle('contacts:updateDraft', (_e, draftId: number, subject: string, body: string) => {
+    db.prepare(`
+      UPDATE contact_drafts
+         SET subject = ?, body = ?, human_edited = 1, updated_at = datetime('now')
+       WHERE id = ?
+    `).run(subject, body, draftId);
+    return db.prepare('SELECT * FROM contact_drafts WHERE id = ?').get(draftId);
+  });
+
+  // Phase 1 manual gate: operator clicked "Mark sent". No actual send —
+  // they copied the draft to their own email tool. Phase 2 (v1.20+) will
+  // add contacts:approveAndSend which pushes to Smartlead.
+  ipcMain.handle('contacts:markSent', (_e, contactId: number) => {
+    db.prepare(`
+      UPDATE contacts
+         SET contact_status = 'sent', marked_sent_at = datetime('now'),
+             updated_at = datetime('now')
+       WHERE id = ?
+    `).run(contactId);
+    return db.prepare('SELECT * FROM contacts WHERE id = ?').get(contactId);
+  });
+
+  // Skip this contact (operator decided not to reach out). Status preserved
+  // across re-searches by smart-replace logic.
+  ipcMain.handle('contacts:skip', (_e, contactId: number) => {
+    db.prepare(`
+      UPDATE contacts
+         SET contact_status = 'skipped', updated_at = datetime('now')
+       WHERE id = ?
+    `).run(contactId);
+    return db.prepare('SELECT * FROM contacts WHERE id = ?').get(contactId);
+  });
+
+  // Undo a skip — flip back to 'drafted' if any drafts exist, else 'pending'.
+  ipcMain.handle('contacts:unskip', (_e, contactId: number) => {
+    const row = db.prepare('SELECT COUNT(*) AS n FROM contact_drafts WHERE contact_id = ?').get(contactId) as { n: number };
+    const newStatus = row.n > 0 ? 'drafted' : 'pending';
+    db.prepare(`
+      UPDATE contacts
+         SET contact_status = ?, updated_at = datetime('now')
+       WHERE id = ?
+    `).run(newStatus, contactId);
+    return db.prepare('SELECT * FROM contacts WHERE id = ?').get(contactId);
+  });
+
+  // Hard delete — used rarely, when Apollo returned an obviously-wrong contact.
+  // Cascades drafts via the FK.
+  ipcMain.handle('contacts:delete', (_e, contactId: number) => {
+    db.prepare('DELETE FROM contacts WHERE id = ?').run(contactId);
     return true;
   });
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { Opportunity, Brand, Product } from '../../../shared/types';
+import type {
+  Opportunity, Brand, Product, ContactWithDraft, ContactDraft
+} from '../../../shared/types';
 import {
   REJECTION_REASONS,
   CLOSE_LOST_REASONS,
@@ -13,7 +15,8 @@ import {
 import { fmtDate, openExternal } from '../lib/api';
 import {
   ArrowLeft, Sparkles, CheckCircle2, XCircle, Archive as ArchiveIcon, ExternalLink,
-  Send, MessageCircle, FileText, Trophy, TrendingDown, RotateCcw, ChevronDown, Clock
+  Send, MessageCircle, FileText, Trophy, TrendingDown, RotateCcw, ChevronDown, Clock,
+  Users, Copy, Edit2, RefreshCw, Brain, SkipForward, Check
 } from 'lucide-react';
 
 type StateRow = {
@@ -260,6 +263,9 @@ export function OpportunityDetail({ id, onClose }: { id: number; onClose: () => 
           </div>
         </Section>
       </div>
+
+      {/* v1.19.0: Hunt list — Apollo contacts + per-contact drafts. */}
+      <HuntListSection oppId={id} opp={opp} />
 
       {/* v1.16.0: lifecycle event timeline */}
       <div className="card" style={{ padding: 20, marginTop: 16 }}>
@@ -683,6 +689,468 @@ function LifecycleModal({
       </div>
     </div>
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// v1.19.0 — Hunt list section. Apollo contact discovery + per-contact
+// Opus drafts. Manual trigger; the operator drives every step.
+// ────────────────────────────────────────────────────────────────────────
+
+function HuntListSection({ oppId, opp }: { oppId: number; opp: Opportunity }) {
+  const [contacts, setContacts] = useState<ContactWithDraft[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const list = await window.lh.contacts.listForOpp(oppId);
+      setContacts(list);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  };
+  useEffect(() => { load(); }, [oppId]);
+
+  const doSearch = async (isRehunt: boolean) => {
+    if (isRehunt && contacts && contacts.length > 0) {
+      const pending = contacts.filter((c) => c.contact_status === 'pending').length;
+      const preserved = contacts.length - pending;
+      const ok = confirm(
+        `Re-searching will:\n` +
+        `  • Keep ${preserved} contact(s) in non-pending state (drafted/sent/skipped)\n` +
+        `  • Replace ${pending} pending contact(s) with up to 5 fresh ones\n\n` +
+        `Continue?`
+      );
+      if (!ok) return;
+    }
+    setSearching(true);
+    setError(null);
+    try {
+      const r = await window.lh.contacts.search(oppId);
+      if (r.status === 'search_failed') {
+        setError(r.error || 'Search failed.');
+      } else if (r.status === 'no_contacts') {
+        setError('Apollo did not surface ≥3 usable contacts. Try refining the dossier or retrying later.');
+      }
+      await load();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 20, marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div className="h-section">
+          <Users size={16} style={{ display: 'inline', marginRight: 8, verticalAlign: '-2px', color: '#6b7280' }} />
+          Hunt list
+          {contacts && contacts.length > 0 && (
+            <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 500, color: '#6b7280' }}>
+              {contacts.length} contact{contacts.length === 1 ? '' : 's'} ranked
+            </span>
+          )}
+        </div>
+        {contacts && contacts.length > 0 && (
+          <button className="btn-ghost" onClick={() => doSearch(true)} disabled={searching}>
+            <RefreshCw size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+            {searching ? 'Searching…' : 'Re-search'}
+          </button>
+        )}
+      </div>
+
+      {/* Pre-search empty state */}
+      {contacts !== null && contacts.length === 0 && (
+        <div style={{ padding: '24px 8px', textAlign: 'center' }}>
+          <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>
+            No contacts searched yet. Click below to look up 3-5 contacts at{' '}
+            <b>{opp.company}</b> via Apollo and rank them by fit.
+          </div>
+          <button className="btn-primary" onClick={() => doSearch(false)} disabled={searching}>
+            <Users size={14} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+            {searching ? 'Searching…' : 'Search contacts'}
+          </button>
+          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 10 }}>
+            Estimated cost: ~3-5 Apollo credits + ~$0.01 Claude (archetype reasoning).
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{
+          padding: '10px 14px',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 6,
+          fontSize: 13,
+          color: '#991b1b',
+          marginBottom: 12
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Post-search contact list */}
+      {contacts && contacts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {contacts.map((c) => (
+            <ContactCard
+              key={c.id}
+              contact={c}
+              onChanged={load}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContactCard({
+  contact, onChanged
+}: {
+  contact: ContactWithDraft;
+  onChanged: () => Promise<void>;
+}) {
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [showWhy, setShowWhy] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editSubject, setEditSubject] = useState('');
+  const [editBody, setEditBody] = useState('');
+  const [versions, setVersions] = useState<ContactDraft[] | null>(null);
+  const [copyHint, setCopyHint] = useState(false);
+
+  const isSkipped = contact.contact_status === 'skipped';
+  const isSent = contact.contact_status === 'sent';
+  const active = contact.active_draft;
+
+  const generateDraft = async (withFeedback: boolean) => {
+    setDrafting(true);
+    setDraftError(null);
+    try {
+      await window.lh.contacts.draftEmail(contact.id, withFeedback ? { feedback } : undefined);
+      setFeedback('');
+      await onChanged();
+      setVersions(null);
+    } catch (e: any) {
+      setDraftError(e?.message || String(e));
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  const loadVersions = async () => {
+    const v = await window.lh.contacts.listDrafts(contact.id);
+    setVersions(v);
+  };
+
+  const switchVersion = async (draftId: number) => {
+    await window.lh.contacts.setActiveDraft(contact.id, draftId);
+    await onChanged();
+    await loadVersions();
+  };
+
+  const saveEdit = async () => {
+    if (!active) return;
+    await window.lh.contacts.updateDraft(active.id, editSubject, editBody);
+    setEditing(false);
+    await onChanged();
+  };
+
+  const startEdit = () => {
+    if (!active) return;
+    setEditSubject(active.subject);
+    setEditBody(active.body);
+    setEditing(true);
+  };
+
+  const copyDraft = async () => {
+    if (!active) return;
+    const text = `Subject: ${active.subject}\n\n${active.body}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyHint(true);
+      setTimeout(() => setCopyHint(false), 1800);
+    } catch {
+      alert('Clipboard copy failed. Select-and-copy manually.');
+    }
+  };
+
+  const markSent = async () => {
+    await window.lh.contacts.markSent(contact.id);
+    await onChanged();
+  };
+
+  const skip = async () => {
+    await window.lh.contacts.skip(contact.id);
+    await onChanged();
+  };
+
+  const unskip = async () => {
+    await window.lh.contacts.unskip(contact.id);
+    await onChanged();
+  };
+
+  const rankComponents = (() => {
+    if (!contact.rank_components) return null;
+    try { return JSON.parse(contact.rank_components); } catch { return null; }
+  })();
+
+  return (
+    <div
+      style={{
+        border: '1px solid #e5e7eb',
+        borderRadius: 10,
+        padding: 14,
+        opacity: isSkipped ? 0.55 : 1
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600 }}>#{contact.hunt_rank}</span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{contact.full_name}</span>
+            {contact.title && <span style={{ color: '#6b7280', fontSize: 13 }}>— {contact.title}</span>}
+            <span className="chip chip-muted" style={{ fontSize: 10 }}>
+              score {contact.hunt_score.toFixed(2)}
+            </span>
+            <ContactStatusChip status={contact.contact_status} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, fontSize: 12, color: '#6b7280' }}>
+            {contact.email ? (
+              <span>
+                {contact.email_status === 'verified' && (
+                  <Check size={11} style={{ display: 'inline', marginRight: 3, color: '#065f46', verticalAlign: '-1px' }} />
+                )}
+                {contact.email}{' '}
+                <span style={{ color: '#9ca3af' }}>({contact.email_status || 'no status'})</span>
+              </span>
+            ) : (
+              <span style={{ color: '#9ca3af' }}>no email returned</span>
+            )}
+            {contact.linkedin_url && (
+              <a onClick={() => openExternal(contact.linkedin_url!)} style={{ cursor: 'pointer' }}>
+                LinkedIn ↗
+              </a>
+            )}
+          </div>
+          {rankComponents && (
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+              why: archetype {(rankComponents.archetype_title ?? 0).toFixed(2)} · sen {(rankComponents.seniority ?? 0).toFixed(2)} · dept {(rankComponents.department ?? 0).toFixed(2)}
+              {rankComponents.anti_pattern_penalty > 0 ? ` · anti-pattern -${rankComponents.anti_pattern_penalty.toFixed(2)}` : ''}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Draft area */}
+      <div style={{ marginTop: 14 }}>
+        {!active && !isSkipped && (
+          <button
+            className="btn-primary"
+            onClick={() => generateDraft(false)}
+            disabled={drafting}
+          >
+            <Sparkles size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+            {drafting ? 'Drafting…' : 'Draft email'}
+          </button>
+        )}
+        {active && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: '#6b7280' }}>
+                Draft v{active.draft_version}{active.human_edited ? ' (edited)' : ''}
+                {contact.draft_count > 1 && (
+                  <>
+                    {' · '}
+                    <a
+                      onClick={async () => {
+                        if (!versions) await loadVersions();
+                        else setVersions(null);
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {versions ? 'hide versions' : `${contact.draft_count} versions`}
+                    </a>
+                  </>
+                )}
+              </span>
+              {active.reasoning_trace && (
+                <button
+                  className="btn-ghost"
+                  onClick={() => setShowWhy(!showWhy)}
+                  style={{ fontSize: 12, padding: '2px 8px' }}
+                  title="Show extended-thinking trace"
+                >
+                  <Brain size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  Why this angle
+                </button>
+              )}
+            </div>
+
+            {/* Version dropdown when expanded */}
+            {versions && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10, padding: 8, background: '#f9fafb', borderRadius: 6 }}>
+                {versions.map((v) => (
+                  <button
+                    key={v.id}
+                    onClick={() => switchVersion(v.id)}
+                    style={{
+                      background: v.is_active ? '#ede9fe' : 'transparent',
+                      border: '1px solid ' + (v.is_active ? '#c4b5fd' : '#e5e7eb'),
+                      borderRadius: 4,
+                      padding: '6px 10px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: 12
+                    }}
+                  >
+                    <b>v{v.draft_version}</b> {v.is_active && '(active)'} {v.human_edited && '· edited'}
+                    {' — '}<span style={{ color: '#6b7280' }}>{v.subject}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Extended-thinking trace */}
+            {showWhy && active.reasoning_trace && (
+              <div
+                style={{
+                  background: '#f5f3ff',
+                  border: '1px solid #e0e7ff',
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 12,
+                  color: '#3730a3',
+                  marginBottom: 10,
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                  maxHeight: 220,
+                  overflowY: 'auto'
+                }}
+              >
+                {active.one_line_why && <div style={{ fontWeight: 600, marginBottom: 8 }}>{active.one_line_why}</div>}
+                {active.reasoning_trace}
+              </div>
+            )}
+
+            {/* Draft body — edit-in-place when editing */}
+            {editing ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  className="input"
+                  value={editSubject}
+                  onChange={(e) => setEditSubject(e.target.value)}
+                  placeholder="Subject"
+                />
+                <textarea
+                  className="input"
+                  value={editBody}
+                  onChange={(e) => setEditBody(e.target.value)}
+                  style={{ minHeight: 140, fontFamily: 'inherit' }}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn-primary" onClick={saveEdit}>Save edits</button>
+                  <button className="btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                background: '#ffffff',
+                border: '1px solid #e5e7eb',
+                borderRadius: 6,
+                padding: 12,
+                fontSize: 13,
+                lineHeight: 1.55
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Subject: {active.subject}</div>
+                <div style={{ whiteSpace: 'pre-wrap', color: '#1f2937' }}>{active.body}</div>
+              </div>
+            )}
+
+            {/* Action row */}
+            {!editing && !isSkipped && !isSent && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                <button className="btn-ghost" onClick={copyDraft} title="Copy subject + body to clipboard">
+                  <Copy size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  Copy {copyHint && <span style={{ color: '#065f46' }}>✓</span>}
+                </button>
+                <button className="btn-ghost" onClick={startEdit}>
+                  <Edit2 size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  Edit
+                </button>
+                <button className="btn-ghost" onClick={() => generateDraft(false)} disabled={drafting}>
+                  <RefreshCw size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  {drafting ? 'Drafting…' : 'New version'}
+                </button>
+                <button className="btn-primary" onClick={markSent}>
+                  <Send size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  Mark sent
+                </button>
+                <button className="btn-ghost" onClick={skip} title="Skip this contact (preserved across re-searches)">
+                  <SkipForward size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: '-1px' }} />
+                  Skip
+                </button>
+              </div>
+            )}
+            {/* Regenerate-with-feedback row */}
+            {!editing && !isSkipped && !isSent && (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ fontSize: 12, color: '#6b7280', cursor: 'pointer' }}>
+                  Regenerate with feedback
+                </summary>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                  <textarea
+                    className="input"
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    placeholder="e.g. 'less corporate, more direct' or 'lead with the funding angle instead'"
+                    style={{ minHeight: 60, fontFamily: 'inherit' }}
+                  />
+                  <button
+                    className="btn-primary"
+                    onClick={() => generateDraft(true)}
+                    disabled={drafting || !feedback.trim()}
+                    style={{ alignSelf: 'flex-start' }}
+                  >
+                    {drafting ? 'Regenerating…' : 'Regenerate'}
+                  </button>
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+        {isSkipped && (
+          <button className="btn-ghost" onClick={unskip}>
+            Restore
+          </button>
+        )}
+        {isSent && (
+          <div style={{ fontSize: 13, color: '#065f46' }}>
+            ✓ Marked sent{contact.marked_sent_at ? ` on ${fmtDate(contact.marked_sent_at)}` : ''}
+          </div>
+        )}
+
+        {draftError && (
+          <div style={{ marginTop: 10, fontSize: 12, color: '#991b1b' }}>
+            {draftError}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ContactStatusChip({ status }: { status: string }) {
+  if (status === 'pending')  return <span className="chip chip-muted" style={{ fontSize: 10 }}>pending</span>;
+  if (status === 'drafted')  return <span className="chip chip-brand" style={{ fontSize: 10 }}>drafted</span>;
+  if (status === 'sent')     return <span className="chip chip-qualified" style={{ fontSize: 10 }}>sent</span>;
+  if (status === 'skipped')  return <span className="chip chip-muted" style={{ fontSize: 10 }}>skipped</span>;
+  if (status === 'failed')   return <span className="chip chip-disqualified" style={{ fontSize: 10 }}>failed</span>;
+  return <span className="chip chip-muted" style={{ fontSize: 10 }}>{status}</span>;
 }
 
 /**
