@@ -613,6 +613,26 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.1 (2026-06-09):** Apollo auth fix — key rejected on search even when Test passed.
+
+User reported: clicking **Search contacts** failed with "Apollo rejected the API key" even though **Test connection** in Settings succeeded with the same key.
+
+**Root cause:** Apollo's authentication convention is inconsistent across endpoints. `GET /v1/auth/health` accepts the key via the `X-Api-Key` header alone. `POST /v1/mixed_people/search` (and most of their POST search endpoints) historically requires the key as `api_key` in the **request body** in addition to (or instead of) the header. Sending it only in the header passes auth-health but fails search. Result: the "Test connection" button was misleadingly green.
+
+**Fix in `src/main/apollo.ts`:**
+
+1. `searchPeople` — send the API key in BOTH:
+   - `X-Api-Key` header (Apollo's documented modern convention)
+   - `api_key` field in the JSON body (Apollo's POST search convention; what `/mixed_people/search` actually checks)
+2. `validateApolloKey` — match the same dual-auth shape (header + query-string `api_key=...`) so the Test button passes/fails for the SAME reason a real search would.
+3. **Surfacing of Apollo's actual error body** in the message. Previously a 401/403 said "rejected the API key" with no clue why. Now we include up to 300 chars of Apollo's response so the operator can diagnose:
+   - Master-key-required → hint to generate one at apollo.io → Settings → Integrations → API
+   - Plan-tier mismatch → hint that people-search may require a paid tier
+   - Anything else → raw response visible for follow-up
+4. New 422 handler — surfaces Apollo's response when the query itself is malformed (vs auth failure).
+
+No schema change, no new IPC, no smoke-test logic change (the patch is in I/O glue). 234 smoke tests still pass.
+
 **v1.19.0 (2026-06-09):** Hunt list + signal-grounded drafts — Phase 1 of the outbound transformation.
 
 LeadsHawk through v1.18 stopped at "we surfaced this opportunity; here's the brief." Acting on that required the operator to hunt contacts at the target company, decide who to email first, and write a personalised first-touch — all happening outside the app. v1.19.0 brings those steps inside.

@@ -61,19 +61,27 @@ export async function validateApolloKey(
   const apiKey = (key ?? getSettings().apolloApiKey ?? '').trim();
   if (!apiKey) return { ok: false, error: 'No API key configured.' };
   try {
-    const r = await undiciFetch(`${APOLLO_BASE}/auth/health`, {
+    // v1.19.1: same dual-auth pattern as searchPeople — header + query
+    // string. /auth/health works with either, but matching searchPeople's
+    // auth shape means "Test connection" pass-fail status matches what
+    // happens during real calls.
+    const url = new URL(`${APOLLO_BASE}/auth/health`);
+    url.searchParams.set('api_key', apiKey);
+    const r = await undiciFetch(url.toString(), {
       method: 'GET',
       headers: {
         'Cache-Control': 'no-cache',
         'Content-Type': 'application/json',
-        'x-api-key': apiKey
+        'X-Api-Key': apiKey
       }
     });
     if (r.status === 401 || r.status === 403) {
-      return { ok: false, error: 'Apollo rejected the key. Check it on apollo.io → Settings → API.' };
+      const text = await r.text().catch(() => '');
+      return { ok: false, error: `Apollo rejected the key (HTTP ${r.status}). Response: ${text.slice(0, 200)}` };
     }
     if (!r.ok) {
-      return { ok: false, error: `Apollo returned HTTP ${r.status}.` };
+      const text = await r.text().catch(() => '');
+      return { ok: false, error: `Apollo returned HTTP ${r.status}. Response: ${text.slice(0, 200)}` };
     }
     const body: any = await r.json().catch(() => null);
     // Apollo's auth health response doesn't always include credit data;
@@ -105,7 +113,14 @@ export async function searchPeople(
   const cleanOrg = (organizationName || '').trim();
   if (!cleanOrg) throw new Error('Apollo search requires a company name.');
 
+  // v1.19.1: Apollo's POST search endpoints are inconsistent about WHERE
+  // the API key is expected. /auth/health works with the X-Api-Key header
+  // alone, but /mixed_people/search has historically required the key as
+  // `api_key` in the request body (their older convention) AND/OR in the
+  // header. Sending both is defensive — Apollo accepts either, and we
+  // avoid the "works in Test connection but fails on real call" trap.
   const body: Record<string, any> = {
+    api_key: apolloApiKey,        // body-level auth (legacy POST convention)
     organization_names: [cleanOrg],
     page: 1,
     per_page: APOLLO_SEARCH_PAGE_SIZE
@@ -127,7 +142,8 @@ export async function searchPeople(
       headers: {
         'Cache-Control': 'no-cache',
         'Content-Type': 'application/json',
-        'x-api-key': apolloApiKey
+        // Apollo accepts both casings; send the documented header form.
+        'X-Api-Key': apolloApiKey
       },
       body: JSON.stringify(body)
     });
@@ -135,14 +151,29 @@ export async function searchPeople(
     throw new Error(`Apollo network error: ${String(e?.message || e).slice(0, 200)}`);
   }
   if (r.status === 401 || r.status === 403) {
-    throw new Error('Apollo rejected the API key. Check it in Settings → Contact API.');
+    // v1.19.1: surface Apollo's actual response body so we can see WHY the
+    // key was rejected (insufficient plan, wrong scope, master-key needed,
+    // etc.) instead of the previous opaque "rejected the key" message.
+    const text = await r.text().catch(() => '');
+    let hint = '';
+    if (/master/i.test(text)) {
+      hint = ' (Apollo says you need a master API key — generate one at apollo.io → Settings → Integrations → API.)';
+    } else if (/plan|subscription|upgrade/i.test(text)) {
+      hint = ' (Apollo says your plan does not include this endpoint — the people-search API may require a paid tier.)';
+    }
+    throw new Error(`Apollo rejected the API key for people search (HTTP ${r.status}).${hint} Response: ${text.slice(0, 300)}`);
+  }
+  if (r.status === 422) {
+    // Unprocessable entity — usually a malformed query. Surface the body.
+    const text = await r.text().catch(() => '');
+    throw new Error(`Apollo rejected the search query (HTTP 422). Response: ${text.slice(0, 300)}`);
   }
   if (r.status === 429) {
     throw new Error('Apollo rate-limited the request. Please try again in a moment.');
   }
   if (!r.ok) {
     const text = await r.text().catch(() => '');
-    throw new Error(`Apollo HTTP ${r.status}: ${text.slice(0, 200)}`);
+    throw new Error(`Apollo HTTP ${r.status}: ${text.slice(0, 300)}`);
   }
   const raw: any = await r.json().catch(() => null);
   if (!raw) throw new Error('Apollo returned an unparseable response.');
