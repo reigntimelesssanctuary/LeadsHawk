@@ -613,6 +613,17 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.2 (2026-06-09):** Apollo endpoint rename — `mixed_people/search` deprecated for API callers.
+
+Caught immediately by v1.19.1's improved error surfacing. The new error message included Apollo's response: *"This endpoint is deprecated for API callers. Please use the new mixed_people/api_search endpoint."*
+
+Pure one-line endpoint rename in `src/main/apollo.ts`:
+- `POST /v1/mixed_people/search` → `POST /v1/mixed_people/api_search`
+
+Request shape, auth pattern, and response shape are unchanged per Apollo's docs. Validates the v1.19.1 design decision to surface Apollo's response bodies in error messages — without it, this would have surfaced as another opaque "rejected the API key" message and required a debugging round-trip.
+
+234 smoke tests still pass.
+
 **v1.19.1 (2026-06-09):** Apollo auth fix — key rejected on search even when Test passed.
 
 User reported: clicking **Search contacts** failed with "Apollo rejected the API key" even though **Test connection** in Settings succeeded with the same key.

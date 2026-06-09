@@ -137,7 +137,11 @@ export async function searchPeople(
 
   let r;
   try {
-    r = await undiciFetch(`${APOLLO_BASE}/mixed_people/search`, {
+    // v1.19.2: Apollo deprecated /mixed_people/search for API callers.
+    // The new endpoint is /mixed_people/api_search (per their 422 response
+    // pointing at https://docs.apollo.io/reference/people-api-search). Same
+    // request shape, same auth pattern — purely an endpoint rename.
+    r = await undiciFetch(`${APOLLO_BASE}/mixed_people/api_search`, {
       method: 'POST',
       headers: {
         'Cache-Control': 'no-cache',
