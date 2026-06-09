@@ -20,8 +20,8 @@
 
 import { getDb } from './db.js';
 import { deriveArchetype } from './contact-archetype.js';
-import { searchPeople, normaliseSeniority, type ApolloPerson } from './apollo.js';
-import { rankContacts, HUNT_MIN_CONTACTS } from '@shared/hunt.js';
+import { searchPeople, enrichPersonByApolloId, normaliseSeniority, type ApolloPerson } from './apollo.js';
+import { rankContacts, HUNT_MIN_CONTACTS, HUNT_MAX_CONTACTS } from '@shared/hunt.js';
 import { planSmartReplace, type MergeContactRow } from '@shared/contacts-merge.js';
 import type {
   Brand, Product, Opportunity, Contact, ContactArchetype, ApolloSeniority
@@ -94,10 +94,61 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
     return zero(oppId, 'search_failed', 0, err);
   }
 
-  // ─── Stage 3 — Rank + persist ───────────────────────────────────
+  // ─── Stage 3 — Pass-1 rank (title-only) → Enrich top N → Re-rank ───
+  // Apollo's /mixed_people/api_search returns LIGHT records (name, title,
+  // sometimes LinkedIn) — no email, often no seniority/department. The
+  // enrichment endpoint (/people/match) is a separate billed call. So we:
+  //   a. Score the api_search results by title alone (archetype_title is
+  //      the only component that works on light data — seniority/dept
+  //      will be 0 since Apollo didn't return them).
+  //   b. Pick top HUNT_MAX_CONTACTS by that pass-1 score.
+  //   c. Enrich each in parallel — fills in email + seniority + dept.
+  //   d. Re-rank those enriched contacts so the persisted order reflects
+  //      the full data the operator will actually see.
   const signalText = [opp.signal_summary, opp.headline].filter(Boolean).join(' — ');
-  const rankable = apolloPeople.map(toRankable);
-  const ranked = rankContacts(rankable, arch.archetype, signalText);
+  const allRankable = apolloPeople.map(toRankable);
+  const pass1Ranked = rankContacts(allRankable, arch.archetype, signalText);
+
+  // Enrich the top N in parallel — 1 Apollo credit each. The
+  // recordApolloSpend call inside enrichPersonByApolloId logs each into
+  // api_calls so Cost Management surfaces the total.
+  const enrichTargets = pass1Ranked.slice(0, HUNT_MAX_CONTACTS);
+  const enrichResults = await Promise.all(
+    enrichTargets.map((c) =>
+      c.apollo_id
+        ? enrichPersonByApolloId(c.apollo_id, null)
+        : Promise.resolve({ person: null, error: 'no apollo_id' })
+    )
+  );
+  apolloCredits += enrichResults.filter((r) => r.person).length;
+
+  // Merge enriched fields onto the rankable rows, preserving the row's
+  // identity. Anything enrich didn't fill stays at its pass-1 value.
+  const enrichedRankable = enrichTargets.map((c, i) => {
+    const enriched = enrichResults[i].person;
+    if (!enriched) {
+      // Log the per-contact enrich failure into the search log; the row
+      // still gets persisted with whatever pass-1 had.
+      return c;
+    }
+    return {
+      ...c,
+      // Override only fields enrichment actually filled.
+      title: enriched.title ?? c.title,
+      seniority: (normaliseSeniority(enriched.seniority) ?? c.seniority) as any,
+      department:
+        (Array.isArray((enriched as any).departments) && (enriched as any).departments.length > 0
+          ? (enriched as any).departments[0]
+          : null) ?? enriched.department ?? c.department,
+      email: enriched.email ?? c.email,
+      email_status: enriched.email_status ?? c.email_status,
+      linkedin_url: enriched.linkedin_url ?? c.linkedin_url
+    };
+  });
+
+  // Pass-2 rank on enriched data so the persisted order reflects what
+  // the operator will see.
+  const ranked = rankContacts(enrichedRankable, arch.archetype, signalText);
 
   // Fewer than HUNT_MIN_CONTACTS after ranking = no_contacts. Apollo may
   // have returned junk; not enough quality to declare success.

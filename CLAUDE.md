@@ -613,6 +613,35 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.3 (2026-06-09):** Apollo enrichment — emails + seniority + department populated via `/people/match`.
+
+User reported: search returned 5 well-titled contacts but every card said "no email returned" and components showed `sen 0.00 dept 0.00` despite obvious seniority signals in the titles.
+
+**Root cause:** Apollo's `mixed_people/api_search` returns LIGHT records on purpose — name, title, sometimes LinkedIn URL. Emails (and reliable seniority/department fields) are a separately-billed reveal via `POST /v1/people/match`. This is a deliberate Apollo billing-segregation design across their pricing tiers — the search bills 1 credit per result for discovery, the match bills 1 credit per person for the reveal.
+
+**Fix in `src/main/apollo.ts` + `src/main/contact-search.ts`:**
+
+1. **New `enrichPersonByApolloId(apolloId, relatedContactId)`** — wraps `POST /v1/people/match` with the body+header dual-auth pattern from v1.19.1. Returns `{ person, error }`; logs spend via `recordApolloSpend('contact_lookup', 1, ...)` so Cost Management reflects the additional credits.
+
+2. **Two-pass ranking in `searchContactsForOpportunity`:**
+   - **Pass 1** — rank api_search results by title alone (the only signal Apollo gave us at this stage). Take top `HUNT_MAX_CONTACTS` (5).
+   - **Enrich top 5 in parallel** via `Promise.all(enrichPersonByApolloId(...))`. Each adds 1 Apollo credit.
+   - **Pass 2** — re-rank the enriched contacts so the persisted order uses the full data (seniority + department + verified-email signals now contribute).
+   - Per-contact enrich failure is non-fatal: the row stays with whatever pass-1 had.
+
+3. Field merge in `enrichedRankable` is **defensive** — enrichment only overrides values it actually filled (`enriched.title ?? c.title` pattern). Apollo's `/people/match` returns `departments` as an ARRAY (vs `department` singular from search); the merge handles both shapes.
+
+**Cost impact per search:**
+- Before: N credits (api_search only, where N = matches returned)
+- After: N + min(5, N) credits (api_search + enrich top 5)
+- Typical opp: ~8-10 credits instead of ~3-5. On Starter ($49/1000): ~$0.39-0.49 per opp instead of ~$0.15-0.25. On free tier: burns through the 60/mo allowance ~2× faster.
+
+**Trade-off acknowledged:** doubles the per-opp Apollo cost but is the only way to actually see emails. Without emails the Hunt list is useless for outbound — the operator would have to manually look up each address. The credit cost is the correct trade.
+
+**What this doesn't fix:** if the user's Apollo plan doesn't include email reveals at all (some restrictive free-tier configurations), `enriched.email` will still be null and the chip will keep saying "no email returned". The error from `/people/match` will surface in console logs for diagnosis. Workaround: upgrade Apollo plan, OR operator looks up the email manually on LinkedIn (we still show the LinkedIn URL).
+
+234 smoke tests still pass — pure I/O glue change, no new pure-function logic.
+
 **v1.19.2 (2026-06-09):** Apollo endpoint rename — `mixed_people/search` deprecated for API callers.
 
 Caught immediately by v1.19.1's improved error surfacing. The new error message included Apollo's response: *"This endpoint is deprecated for API callers. Please use the new mixed_people/api_search endpoint."*

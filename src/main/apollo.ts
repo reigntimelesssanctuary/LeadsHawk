@@ -194,6 +194,76 @@ export async function searchPeople(
   return { people, creditsUsed, raw };
 }
 
+/**
+ * v1.19.3 — Enrich a person by Apollo ID.
+ *
+ * `mixed_people/api_search` returns LIGHT records (name, title, sometimes
+ * LinkedIn) — no email, often no seniority/department either. Apollo
+ * charges separately for the "reveal" via `/v1/people/match`. We call it
+ * for each top-ranked contact so the UI shows real emails + the ranker
+ * gets seniority/department signals.
+ *
+ * Costs 1 credit per match on Apollo's billing.
+ */
+export async function enrichPersonByApolloId(
+  apolloId: string,
+  relatedContactId: number | null = null
+): Promise<{ person: ApolloPerson | null; error: string | null }> {
+  const { apolloApiKey } = getSettings();
+  if (!apolloApiKey) {
+    return { person: null, error: 'Apollo API key not configured' };
+  }
+  const body = {
+    api_key: apolloApiKey,
+    id: apolloId,
+    // Apollo's documented reveal flags. Both default false; set explicitly
+    // so the response includes the email + seniority + department fields
+    // we actually want to surface.
+    reveal_personal_emails: false,
+    reveal_phone_number: false
+  };
+  let r;
+  try {
+    r = await undiciFetch(`${APOLLO_BASE}/people/match`, {
+      method: 'POST',
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Content-Type': 'application/json',
+        'X-Api-Key': apolloApiKey
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (e: any) {
+    return { person: null, error: `Apollo network error: ${String(e?.message || e).slice(0, 200)}` };
+  }
+  if (r.status === 401 || r.status === 403) {
+    const text = await r.text().catch(() => '');
+    return { person: null, error: `Apollo rejected enrich call (HTTP ${r.status}). Response: ${text.slice(0, 200)}` };
+  }
+  if (r.status === 429) {
+    return { person: null, error: 'Apollo rate-limited the enrich call.' };
+  }
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    return { person: null, error: `Apollo HTTP ${r.status}: ${text.slice(0, 300)}` };
+  }
+  const raw: any = await r.json().catch(() => null);
+  if (!raw) {
+    return { person: null, error: 'Apollo returned an unparseable enrich response.' };
+  }
+  // Per Apollo docs, /people/match returns { person: { ... } } on hit.
+  // On a miss (Apollo can't resolve the id), it may return person: null
+  // or omit the field — handle both.
+  const person: ApolloPerson | null = raw.person ?? null;
+  // Record the credit spend whether or not we got a useful payload —
+  // Apollo bills on accepted calls regardless of result quality.
+  recordApolloSpend('contact_lookup', 1, relatedContactId);
+  if (!person) {
+    return { person: null, error: 'Apollo could not match this contact (no person returned).' };
+  }
+  return { person, error: null };
+}
+
 /** Coerce Apollo's seniority string into our typed enum (or null). */
 export function normaliseSeniority(s: string | null | undefined): ApolloSeniority | null {
   if (!s) return null;
