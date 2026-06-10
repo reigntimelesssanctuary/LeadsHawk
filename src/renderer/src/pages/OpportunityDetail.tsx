@@ -698,25 +698,39 @@ function LifecycleModal({
 
 function HuntListSection({ oppId, opp }: { oppId: number; opp: Opportunity }) {
   const [contacts, setContacts] = useState<ContactWithDraft[] | null>(null);
+  const [archetype, setArchetype] = useState<{
+    id: number;
+    archetype: any;
+    reasoning: string | null;
+    run_status: string;
+    run_at: string;
+  } | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.19.7: hint UI state — operator-supplied one-liner to correct Sonnet's archetype.
+  const [showHint, setShowHint] = useState(false);
+  const [hint, setHint] = useState('');
 
   const load = async () => {
     try {
-      const list = await window.lh.contacts.listForOpp(oppId);
+      const [list, arch] = await Promise.all([
+        window.lh.contacts.listForOpp(oppId),
+        window.lh.contacts.latestArchetype(oppId).catch(() => null)
+      ]);
       setContacts(list);
+      setArchetype(arch);
     } catch (e: any) {
       setError(e?.message || String(e));
     }
   };
   useEffect(() => { load(); }, [oppId]);
 
-  const doSearch = async (isRehunt: boolean) => {
+  const doSearch = async (isRehunt: boolean, hintText?: string | null) => {
     if (isRehunt && contacts && contacts.length > 0) {
       const pending = contacts.filter((c) => c.contact_status === 'pending').length;
       const preserved = contacts.length - pending;
       const ok = confirm(
-        `Re-searching will:\n` +
+        `Re-searching${hintText ? ' with hint' : ''} will:\n` +
         `  • Keep ${preserved} contact(s) in non-pending state (drafted/sent/skipped)\n` +
         `  • Replace ${pending} pending contact(s) with up to 5 fresh ones\n\n` +
         `Continue?`
@@ -726,11 +740,16 @@ function HuntListSection({ oppId, opp }: { oppId: number; opp: Opportunity }) {
     setSearching(true);
     setError(null);
     try {
-      const r = await window.lh.contacts.search(oppId);
+      const r = await window.lh.contacts.search(oppId, hintText ? { hint: hintText } : undefined);
       if (r.status === 'search_failed') {
         setError(r.error || 'Search failed.');
       } else if (r.status === 'no_contacts') {
-        setError('Apollo did not surface ≥3 usable contacts. Try refining the dossier or retrying later.');
+        setError('Apollo did not surface ≥3 usable contacts. Try refining the dossier, adding a hint, or retrying later.');
+      }
+      // Reset hint UI on success
+      if (hintText) {
+        setHint('');
+        setShowHint(false);
       }
       await load();
     } catch (e: any) {
@@ -753,12 +772,100 @@ function HuntListSection({ oppId, opp }: { oppId: number; opp: Opportunity }) {
           )}
         </div>
         {contacts && contacts.length > 0 && (
-          <button className="btn-ghost" onClick={() => doSearch(true)} disabled={searching}>
-            <RefreshCw size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
-            {searching ? 'Searching…' : 'Re-search'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn-ghost"
+              onClick={() => setShowHint(!showHint)}
+              disabled={searching}
+              title="Re-run the search with a one-line correction (when Sonnet picked the wrong archetype)"
+            >
+              <Brain size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+              {showHint ? 'Cancel hint' : 'Try with hint'}
+            </button>
+            <button className="btn-ghost" onClick={() => doSearch(true)} disabled={searching}>
+              <RefreshCw size={13} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+              {searching ? 'Searching…' : 'Re-search'}
+            </button>
+          </div>
         )}
       </div>
+
+      {/* v1.19.7: archetype panel — surface what Sonnet picked so mismatches
+          are visible immediately, not invisible. */}
+      {archetype && archetype.archetype && contacts && contacts.length > 0 && (
+        <div
+          style={{
+            background: '#f5f3ff',
+            border: '1px solid #e0e7ff',
+            borderRadius: 6,
+            padding: '10px 12px',
+            marginBottom: 12,
+            fontSize: 12,
+            color: '#3730a3'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600 }}>Archetype:</span>
+            <span>
+              {(archetype.archetype.target_seniorities || []).join(' / ') || '(no seniorities)'}
+              {' · '}
+              {(archetype.archetype.target_departments || []).join(' / ') || '(no depts)'}
+            </span>
+          </div>
+          {(archetype.archetype.target_titles || []).length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <span style={{ fontWeight: 600 }}>Looking for: </span>
+              {(archetype.archetype.target_titles as string[]).slice(0, 6).join(', ')}
+            </div>
+          )}
+          {archetype.reasoning && (
+            <div style={{ marginTop: 4, fontStyle: 'italic' }}>
+              {archetype.reasoning}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* v1.19.7: hint input — operator-supplied correction. */}
+      {showHint && (
+        <div
+          style={{
+            background: '#fffbeb',
+            border: '1px solid #fde68a',
+            borderRadius: 6,
+            padding: 12,
+            marginBottom: 12
+          }}
+        >
+          <div style={{ fontSize: 12, color: '#92400e', marginBottom: 8 }}>
+            Tell Sonnet what to look for instead. Examples:
+            <div style={{ marginLeft: 12, marginTop: 4, fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 11 }}>
+              "look for Real Estate and Facilities people, not engineering"<br />
+              "the target is Datacenter Operations, not Product"<br />
+              "we sell to procurement; ignore the product side of the company"
+            </div>
+          </div>
+          <textarea
+            className="input"
+            value={hint}
+            onChange={(e) => setHint(e.target.value)}
+            placeholder="One line of correction…"
+            style={{ minHeight: 60, fontFamily: 'inherit', fontSize: 13 }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button
+              className="btn-primary"
+              onClick={() => doSearch(true, hint.trim())}
+              disabled={searching || !hint.trim()}
+            >
+              {searching ? 'Re-searching…' : 'Re-search with this hint'}
+            </button>
+            <button className="btn-ghost" onClick={() => { setShowHint(false); setHint(''); }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Pre-search empty state */}
       {contacts !== null && contacts.length === 0 && (

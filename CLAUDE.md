@@ -613,6 +613,69 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.20.1 (2026-06-11):** Archetype reasoning fix — buyer-vs-builder framing + visible archetype + operator hint override.
+
+(Versioned as 1.20.1 not 1.19.7 because 1.20 is now the trunk.)
+
+User hit a classic mismatch: searched contacts for Nvidia Graphics Pvt Ltd
+on a **Zyeta Design and Build** opportunity (workspace design/construction
+services), expected Facilities/Real-Estate contacts at Nvidia, got the
+Graphics product engineering team instead (Director of Graphics Shader
+Compilers, VP Professional Graphics, etc.). Root cause was upstream in the
+Sonnet archetype reasoner — when the target company is itself a tech
+company, Sonnet was confused by the product-domain words in the company
+name and picked the wrong functional area.
+
+**Three fixes shipped together:**
+
+1. **Sharpened Sonnet's system prompt** in `src/main/contact-archetype.ts`
+   with explicit BUYER vs BUILDER framing + four worked examples spanning
+   the most common confusion modes:
+   - Workspace design sold to Nvidia → Real Estate / Facilities, NOT
+     Graphics product team
+   - Networking gear sold to Salesforce → Corporate IT-Infra, NOT product
+     networking team
+   - IT security sold to JPMorgan → CISO, NOT product-security
+   - Datacenter cooling sold to AWS → Datacenter Operations, NOT EC2
+     Engineering
+   Plus expanded anti-pattern guidance: when selling non-product items
+   to a tech company, the target's PRODUCT DOMAIN WORDS should be
+   anti-patterns ("graphics", "shader", "compiler" when selling real
+   estate to Nvidia).
+
+2. **Archetype now visible on the Hunt list panel.** Reads from the new
+   `contacts:latestArchetype` IPC which returns the most recent
+   `contact_searches` row's archetype_json + reasoning. Renders as a
+   purple info box above the contact list showing seniorities,
+   departments, target titles, and Sonnet's one-line reasoning. Operator
+   sees WHO Sonnet was looking for — mismatches become visible
+   immediately instead of buried in `score = 0` cards.
+
+3. **"Try with hint" button** on the Hunt list panel. Operator clicks,
+   types a one-line correction (e.g. "look for Real Estate and
+   Facilities people, not engineering"), re-search runs with the hint
+   injected as authoritative guidance at the top of Sonnet's prompt.
+   `deriveArchetype(brand, product, opp, hint?)` signature extended;
+   IPC `contacts:search(oppId, opts?)` accepts `opts.hint`. Hint resets
+   on successful re-search.
+
+**Why this happened (process note):** v1.19.5/6 fixed the Apollo-side
+targeting bugs but left the Sonnet-side reasoning bug invisible. The
+ranker's `archetype 0.00 · sen 1.00 · dept 0.00` score components were
+the diagnostic clue — score zero across the board meant the contacts
+didn't match Sonnet's archetype, but the v1.19.6 loose-mode retry let
+them through on seniority alone. Fixing this required tightening the
+upstream reasoning AND exposing the archetype so the operator can spot
+upstream mistakes.
+
+**What this DOES NOT do:** Sonnet may still occasionally pick wrong on
+genuinely novel cases. The hint button is the safety net — 10-second
+operator correction beats trying to engineer the perfect prompt for
+every possible edge case.
+
+Smoke tests unchanged at 262 — pure prompt + UI patch with no new
+testable helpers.
+
 **v1.20.0 (2026-06-11):** Hunter.io as secondary email finder when Apollo returns null email.
 
 User feedback: Apollo enrichment sometimes returns a contact (name + title + LinkedIn) but no email — typically because Apollo's database doesn't have that specific person's email even on paid tiers, OR because the contact is in a low-coverage segment. Without an email the contact is unactionable for outbound.

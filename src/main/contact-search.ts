@@ -44,8 +44,16 @@ export type SearchOutcome = {
  * Run the full contact-search pipeline for one opportunity. Always
  * writes a contact_searches audit row and updates opportunities.hunt_status.
  * Returns a structured outcome for the UI to render.
+ *
+ * v1.19.7: optional `hint` parameter — operator-supplied one-liner that
+ * corrects the archetype reasoning (e.g. "look for Real Estate and
+ * Facilities people, not engineering"). Used by the "Try with hint"
+ * button on the Hunt list panel.
  */
-export async function searchContactsForOpportunity(oppId: number): Promise<SearchOutcome> {
+export async function searchContactsForOpportunity(
+  oppId: number,
+  opts: { hint?: string | null } = {}
+): Promise<SearchOutcome> {
   const db = getDb();
   const opp = db.prepare('SELECT * FROM opportunities WHERE id = ?').get(oppId) as Opportunity | undefined;
   if (!opp) {
@@ -65,8 +73,8 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
   // Mark in-flight so the Dashboard chip can render 'searching…'
   setHuntStatus(oppId, 'searching');
 
-  // ─── Stage 1 — Archetype reasoning ──────────────────────────────
-  const arch = await deriveArchetype(brand, product, opp);
+  // ─── Stage 1 — Archetype reasoning (with optional operator hint) ─
+  const arch = await deriveArchetype(brand, product, opp, opts.hint ?? null);
   // Open the audit row immediately so failures still leave a record.
   const insAudit = db.prepare(`
     INSERT INTO contact_searches (opportunity_id, archetype_json, reasoning, run_status)

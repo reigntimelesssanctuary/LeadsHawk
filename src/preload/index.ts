@@ -136,9 +136,11 @@ const api = {
   },
   // v1.19.0 — Contact search + drafts (Phase 1 of outbound).
   contacts: {
-    search: (oppId: number) => ipcRenderer.invoke('contacts:search', oppId),
+    search: (oppId: number, opts?: { hint?: string | null }) =>
+      ipcRenderer.invoke('contacts:search', oppId, opts),
     searchBatch: (oppIds: number[]) => ipcRenderer.invoke('contacts:searchBatch', oppIds),
     listForOpp: (oppId: number) => ipcRenderer.invoke('contacts:listForOpp', oppId),
+    latestArchetype: (oppId: number) => ipcRenderer.invoke('contacts:latestArchetype', oppId),
     listDrafts: (contactId: number) => ipcRenderer.invoke('contacts:listDrafts', contactId),
     draftEmail: (contactId: number, opts?: { feedback?: string | null }) =>
       ipcRenderer.invoke('contacts:draftEmail', contactId, opts),

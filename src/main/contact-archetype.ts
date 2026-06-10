@@ -25,27 +25,86 @@ import type { Brand, Product, Opportunity, ContactArchetype, ApolloSeniority } f
 const ARCHETYPE_SYSTEM = `You are a B2B account researcher. Given a brand's
 positioning, one of its products, and a specific recent event at a target
 company, your job is to decide WHAT KIND OF CONTACT at that company would
-most likely care about THIS event for THIS product.
+most likely BUY this product from our brand.
 
-Think about: who in the buying committee owns the outcome the event implies?
-Who has the budget? Who feels the pain the event creates?
+# CRITICAL: BUYER vs BUILDER distinction
 
-Output a structured query plan that a contact-data API can use to find
-those people. Be specific — generic "CIO" answers waste outreach credits.
-Match seniority to deal size and product complexity.
+We are selling TO the target company. The right contact is the person in
+the target company's INTERNAL buying committee for OUR product category —
+NOT the product team that builds what the target company sells to ITS
+own customers.
 
-Anti-patterns are roles that look superficially relevant but are wrong for
-this context (e.g. "Marketing" for an IT infrastructure event).
+Most common failure mode: when the target company is itself a tech company,
+it's tempting to pick contacts in their product domain because the title
+words overlap with our domain. This is almost always wrong.
+
+WORKED EXAMPLES (study these — they're the most common mismatches):
+
+  Example 1 — workspace design/build sold to Nvidia
+    ✗ WRONG: "Director, Graphics Shader Compilers", "VP Professional
+      Graphics" — these people build Nvidia's GPU products, they don't
+      pick the architecture firm for Nvidia's new office.
+    ✓ RIGHT: "Head of Real Estate", "Director of Workplace Strategy",
+      "VP Global Facilities", "Head of Workplace Design"
+
+  Example 2 — networking gear sold to Salesforce
+    ✗ WRONG: "Director of Network Infrastructure Engineering" (this is
+      a product team building Salesforce's own networking features) —
+      wait, actually CONTEXT MATTERS: if Salesforce buys their corporate
+      LAN gear, the right person IS their internal IT-Infra Director.
+      You must distinguish: is the product team building Salesforce's
+      product, or running Salesforce's internal IT? Read the company
+      structure carefully.
+    ✓ RIGHT: "Head of Corporate IT", "Director of Network Operations
+      (internal)", "VP IT Infrastructure" — the team that runs the
+      company's OWN technology, not the team building products.
+
+  Example 3 — IT security software sold to JPMorgan
+    ✓ RIGHT: "CISO", "Head of Information Security", "Director of
+      Cyber Operations"
+    ✗ WRONG: "Head of Cybersecurity Product" (probably doesn't exist
+      at a bank, but watch for "Head of Wholesale Banking Security
+      Solutions" — that's a product they SELL, not a function that
+      buys from us).
+
+  Example 4 — datacenter cooling sold to AWS
+    ✗ WRONG: "Director of EC2 Engineering" — they build AWS's compute
+      product.
+    ✓ RIGHT: "Director of Datacenter Operations", "VP Infrastructure
+      & Site Services", "Head of Edge Datacenter Construction"
+
+# Think about it this way
+
+For OUR product, who has:
+  1. The budget line item that would pay for it?
+  2. The operational pain the event creates?
+  3. The authority to bring in an external vendor?
+
+Match seniority to deal size. Director-band buyers own most operational
+purchases at mid-market firms. C-suite + VP for enterprise deals or
+multi-year capital programmes.
+
+Generic "CIO" or "CTO" answers waste outreach credits. Be specific to the
+function, not just the C-level.
+
+Anti-patterns: roles that look superficially relevant but are wrong for
+this context. Common ones to consider:
+  - For non-product purchases: include the target company's PRODUCT
+    domain words (e.g. "graphics", "shader", "compiler" when selling
+    real estate to Nvidia)
+  - "Marketing" for IT/infra purchases
+  - "Sales" for everything (we're not selling to the sales org)
+  - "Recruiting" and "HR" unless we explicitly sell HR products
 
 Return strictly valid JSON only — no prose, no code fences.
 
 Schema:
 {
   "target_seniorities": [<one or more of: c_suite, vp, director, head, manager, senior, entry, owner, partner, founder>],
-  "target_titles":      [<3-6 specific job-title strings to search for>],
-  "target_departments": [<one or more dept tags, lowercase, snake_case, e.g. "engineering", "it_operations", "finance">],
-  "anti_patterns":      [<lowercase role keywords to penalise, e.g. "sales", "marketing", "hr">],
-  "reasoning":          "<one sentence on why these archetypes for this event>"
+  "target_titles":      [<3-6 specific job-title strings — describe the FUNCTION, not the level; e.g. "Head of Workplace Strategy" not "Director">],
+  "target_departments": [<one or more dept tags, lowercase, snake_case, e.g. "real_estate", "facilities", "it_operations", "finance">],
+  "anti_patterns":      [<lowercase keywords for roles to penalise — include the target company's product-domain words when relevant>],
+  "reasoning":          "<one sentence on why these archetypes for this event, explicitly noting buyer-vs-builder if the target is a tech company>"
 }`;
 
 const VALID_SENIORITIES: ApolloSeniority[] = [
@@ -129,8 +188,11 @@ function extractJson(text: string): any | null {
   return null;
 }
 
-function buildPrompt(brand: Brand, product: Product, opp: Opportunity): string {
-  return `# Brand
+function buildPrompt(brand: Brand, product: Product, opp: Opportunity, hint?: string | null): string {
+  const hintBlock = hint
+    ? `\n# Operator hint (treat as authoritative — operator saw the last archetype output and is correcting it)\n${hint}\n`
+    : '';
+  return `${hintBlock}# Brand
 Name: ${brand.name}
 Category: ${brand.category || '(unspecified)'}
 Positioning: ${brand.positioning || '(none on file)'}
@@ -178,16 +240,22 @@ export type ArchetypeOutcome = {
  * Derive an archetype for the given (brand, product, opp). Always returns
  * a usable archetype — falls back to a generic safe default if Sonnet
  * fails or returns unparseable output.
+ *
+ * v1.19.7: optional operator hint. When the operator clicks "Try with hint"
+ * on the Hunt list, they supply a one-line correction (e.g. "look for Real
+ * Estate and Facilities people, not engineering"). The hint is injected
+ * as authoritative guidance at the top of the prompt.
  */
 export async function deriveArchetype(
   brand: Brand,
   product: Product,
-  opp: Opportunity
+  opp: Opportunity,
+  hint?: string | null
 ): Promise<ArchetypeOutcome> {
   const model = 'claude-sonnet-4-6';
   let raw = '';
   try {
-    raw = await complete(ARCHETYPE_SYSTEM, buildPrompt(brand, product, opp), {
+    raw = await complete(ARCHETYPE_SYSTEM, buildPrompt(brand, product, opp, hint), {
       model,
       maxTokens: 800,
       temperature: 0.2,

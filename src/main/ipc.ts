@@ -767,14 +767,41 @@ export function registerIpc() {
   // Single-opp contact search. Orchestrator handles archetype → Apollo →
   // rank → smart-replace persist. Always returns a structured outcome
   // (even on failure) so the UI can render a chip + toast.
-  ipcMain.handle('contacts:search', async (_e, oppId: number) => {
-    return await searchContactsForOpportunity(oppId);
+  // v1.19.7: opts.hint flows through to deriveArchetype as an operator
+  // correction (used by "Try with hint" button when first attempt picked
+  // the wrong archetype).
+  ipcMain.handle('contacts:search', async (_e, oppId: number, opts?: { hint?: string | null }) => {
+    return await searchContactsForOpportunity(oppId, opts ?? {});
   });
 
   // Bulk contact search — sequential over the array. Used by Dashboard
   // multi-select bulk action.
   ipcMain.handle('contacts:searchBatch', async (_e, oppIds: number[]) => {
     return await searchContactsBatch(oppIds);
+  });
+
+  // v1.19.7: return the latest archetype the orchestrator used for this opp.
+  // Hunt list panel surfaces it so the operator can see WHO Sonnet was
+  // looking for — and recognise when it picked the wrong archetype before
+  // hitting "Try with hint".
+  ipcMain.handle('contacts:latestArchetype', (_e, oppId: number) => {
+    const row = db.prepare(
+      `SELECT id, archetype_json, reasoning, run_status, run_at
+         FROM contact_searches
+        WHERE opportunity_id = ?
+        ORDER BY id DESC
+        LIMIT 1`
+    ).get(oppId) as { id: number; archetype_json: string; reasoning: string | null; run_status: string; run_at: string } | undefined;
+    if (!row) return null;
+    let archetype: any = null;
+    try { archetype = JSON.parse(row.archetype_json); } catch { /* malformed; return raw */ }
+    return {
+      id: row.id,
+      archetype,
+      reasoning: row.reasoning,
+      run_status: row.run_status,
+      run_at: row.run_at
+    };
   });
 
   // Return contacts + their active drafts for an opp's Hunt list panel.
