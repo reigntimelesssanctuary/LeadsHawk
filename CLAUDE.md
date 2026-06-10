@@ -613,6 +613,26 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.20.2 (2026-06-11):** Relevance floor — loose-mode noise no longer surfaces with zero function fit.
+
+User ran v1.20.1's re-search on Zyeta × Nvidia Graphics. Sonnet correctly identified the Real Estate / Facilities archetype (visible in the new purple panel). Apollo's strict pass for those titles at Nvidia India returned <3. v1.19.6's loose-mode retry fired, dropped the person_titles filter, returned the same Graphics directors from before (they're prominent in Apollo's Nvidia index). Smart-replace kept them by apollo_id dedup. End state: correct archetype, wrong contacts. The score components told the story — `archetype 0.00 · sen 1.00 · dept 0.00` across the board, meaning they only made the cut on seniority.
+
+**Fix in `src/main/contact-search.ts`:** new relevance-floor filter applied AFTER Pass-2 ranking but BEFORE smart-replace:
+
+- Drop any contact where `archetype_title === 0` AND `department === 0` — no positive function-fit signal means loose-mode noise.
+- Hard-reject any contact whose `anti_pattern_penalty > 0` — Sonnet explicitly said this kind of role is wrong here.
+- Filter is applied to the FRESH ranked list, so smart-replace's `freshApolloIds` set is built from filtered survivors only. Old pending contacts whose apollo_ids aren't in the filtered set get deleted as usual.
+- When the floor strips everyone (count < `HUNT_MIN_CONTACTS`), the orchestrator now ALSO explicitly deletes any existing pending contacts on this opp before returning `no_contacts`. Otherwise the operator re-searches, the new search rejects all candidates, and the OLD wrong contacts visibly persist in the Hunt list panel.
+- `SearchOutcome.error` carries a specific message in this case: *"Apollo returned N candidate(s) but none matched the target function. Try the 'Try with hint' button to narrow."* — points the operator at the recovery path.
+
+**What this means for the operator workflow:** v1.20.1 fixed Sonnet's archetype reasoning; v1.20.2 ensures that when Sonnet's archetype is correct but Apollo can't fill it, the operator gets a clear *"no relevant contacts found, try the hint button"* signal instead of silently-padded wrong contacts. Re-search becomes idempotent on wrong-contact removal.
+
+**Edge case the floor doesn't catch:** if Apollo returns a contact whose Apollo-stored department is empty string (sparse Apollo data) but whose title actually IS relevant, our `departmentMatch = 0` AND `archetypeTitleMatch > 0` — survives the floor correctly. Good. The floor only fires when BOTH signals are zero, which only happens for genuinely-wrong-function contacts.
+
+**What this doesn't do:** if Apollo genuinely has no relevant contacts for the resolved company + archetype, no fix on our side helps. The Try-with-hint button + (eventually) an option to search the parent company are the remaining levers.
+
+Smoke tests still 262 — pure orchestration patch, no new pure-function logic.
+
 **v1.20.1 (2026-06-11):** Archetype reasoning fix — buyer-vs-builder framing + visible archetype + operator hint override.
 
 (Versioned as 1.20.1 not 1.19.7 because 1.20 is now the trunk.)

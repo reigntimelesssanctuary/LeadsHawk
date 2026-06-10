@@ -235,10 +235,32 @@ export async function searchContactsForOpportunity(
 
   // Pass-2 rank on enriched data so the persisted order reflects what
   // the operator will see.
-  const ranked = rankContacts(enrichedRankable, arch.archetype, signalText);
+  const rankedAll = rankContacts(enrichedRankable, arch.archetype, signalText);
+
+  // v1.20.2 — relevance floor. When loose-mode retry fires because Apollo's
+  // strict pass returned thin, the broader q_keywords search can surface
+  // contacts that have ZERO function-fit signal (e.g. Graphics engineers
+  // for a Real Estate archetype). They only made the cut on seniority.
+  // Drop those: a contact with archetype_title=0 AND department=0 has no
+  // positive signal toward the right function and shouldn't be surfaced.
+  // Also hard-reject contacts that triggered an anti-pattern — Sonnet
+  // explicitly said "this kind of role is wrong here."
+  const ranked = rankedAll.filter((c) => {
+    const comp: any = c.rank_components;
+    if (!comp) return true; // missing components = safe-default keep
+    if ((comp.anti_pattern_penalty ?? 0) > 0) return false; // Sonnet flagged
+    const archMatch = comp.archetype_title ?? 0;
+    const deptMatch = comp.department ?? 0;
+    return archMatch > 0 || deptMatch > 0;
+  });
+  const droppedByRelevance = rankedAll.length - ranked.length;
+  if (droppedByRelevance > 0) {
+    console.warn(`[contact-search] relevance floor dropped ${droppedByRelevance}/${rankedAll.length} contact(s) with no function-fit signal`);
+  }
 
   // Fewer than HUNT_MIN_CONTACTS after ranking = no_contacts. Apollo may
   // have returned junk; not enough quality to declare success.
+  // v1.20.2: also fires when the relevance floor strips everyone.
   if (ranked.length < HUNT_MIN_CONTACTS) {
     db.prepare(`
       UPDATE contact_searches
@@ -246,15 +268,34 @@ export async function searchContactsForOpportunity(
        WHERE id = ?
     `).run(ranked.length, apolloCredits, searchId);
     setHuntStatus(oppId, 'no_contacts');
+
+    // v1.20.2: when the floor stripped everyone, also clean out any
+    // existing pending rows from prior (pre-floor) searches. Otherwise the
+    // operator re-searches, the new search rejects all candidates, and
+    // the OLD wrong contacts visibly persist in the Hunt list.
+    let removedCount = 0;
+    if (droppedByRelevance > 0) {
+      const cleared = db.prepare(
+        "DELETE FROM contacts WHERE opportunity_id = ? AND contact_status = 'pending'"
+      ).run(oppId);
+      removedCount = cleared.changes;
+      if (removedCount > 0) {
+        console.warn(`[contact-search] cleared ${removedCount} stale pending contact(s) from prior search`);
+      }
+    }
+
+    const errMsg = droppedByRelevance > 0
+      ? `Apollo returned ${rankedAll.length} candidate(s) but none matched the target function. Try the "Try with hint" button to narrow.`
+      : null;
     return {
       oppId,
       status: 'no_contacts',
       contactsFound: ranked.length,
       preservedCount: 0,
       insertedCount: 0,
-      removedCount: 0,
+      removedCount,
       apolloCredits,
-      error: null
+      error: errMsg
     };
   }
 
