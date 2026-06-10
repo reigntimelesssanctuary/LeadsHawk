@@ -613,6 +613,28 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.4 (2026-06-09):** Enrichment refresh on re-search — kept rows now receive updated email/seniority/department data.
+
+User upgraded Apollo from Free → Basic ($59/mo) expecting emails to populate on re-search. They didn't. Bug isolated to the smart-replace path.
+
+**Root cause:** In v1.19.0's smart-replace logic, contacts whose `apollo_id` reappears in a fresh search are KEPT (not deleted-then-re-inserted) to preserve drafts + status. The v1.19.3 enrichment ran fine and the credits got billed — but the persisted writes only landed on NEW (insert) rows. Kept rows continued displaying their original, pre-upgrade null-email values. From the operator's perspective: paid Apollo, ran re-search, still saw "no email returned" everywhere.
+
+**Fix in `src/main/contact-search.ts`:**
+
+Inside the smart-replace transaction, the `'keep'` branch (previously a pure no-op) now runs an UPDATE against the existing row when its `apollo_id` matches an enriched result, refreshing exactly the pure-data fields enrichment fills:
+
+- `email`, `email_status`
+- `seniority`, `department`, `title`
+- `linkedin_url`
+
+Identity, status (pending/drafted/sent/skipped), `hunt_rank`, drafts, and `marked_sent_at` stay untouched. The COALESCE pattern (`COALESCE(?, column)`) ensures non-null enrichment results overwrite, but a still-null result preserves any prior value rather than blanking it.
+
+**What this fixes immediately:** any opportunity already searched on the Free tier — operator hits Re-search after upgrading and the enriched emails actually land in the rows they see.
+
+**One related caveat (not in code):** Apollo plan changes can take 5-30 minutes to propagate to the API. If a fresh upgrade + immediate re-search still shows null emails, wait ~30 min and re-search again. After v1.19.4 the row update is correct; Apollo's permission lag is separate.
+
+No schema change. 234 smoke tests still pass — pure SQL-glue patch.
+
 **v1.19.3 (2026-06-09):** Apollo enrichment — emails + seniority + department populated via `/people/match`.
 
 User reported: search returned 5 well-titled contacts but every card said "no email returned" and components showed `sen 0.00 dept 0.00` despite obvious seniority signals in the titles.

@@ -193,6 +193,17 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
 
   const { plan, stats } = planSmartReplace(existingForMerge, freshAsMergeRows);
 
+  // v1.19.4: build an apollo_id → enriched-payload lookup so kept rows
+  // also receive the refreshed email / seniority / department / status /
+  // linkedin_url. The previous behaviour only wrote enrichment onto NEW
+  // (insert) rows, so re-search on the same contacts kept stale data.
+  // Smart-replace preserves drafts + status + rank by NOT touching those
+  // columns; we only refresh the pure-data fields enrichment fills.
+  const enrichedById = new Map<string, any>();
+  for (const r of ranked) {
+    if (r.apollo_id) enrichedById.set(r.apollo_id, r);
+  }
+
   // Apply the plan in one transaction.
   const tx = db.transaction(() => {
     for (const item of plan) {
@@ -224,7 +235,40 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
           JSON.stringify(p.rank_components)
         );
       }
-      // 'keep' is a no-op; existing rows already in DB.
+      // 'keep' was previously a pure no-op. v1.19.4: still leave the
+      // row's identity / status / hunt_rank / drafts untouched, but
+      // REFRESH the pure-data fields enrichment fills (email,
+      // email_status, seniority, department, title, linkedin_url).
+      // Otherwise re-search burns credits without updating what the
+      // operator sees, which is exactly the "still no email" symptom
+      // after upgrading the Apollo plan.
+      else if (item.kind === 'keep') {
+        const row = (item.row as any).row as Contact;
+        if (row && row.apollo_id) {
+          const enriched = enrichedById.get(row.apollo_id);
+          if (enriched) {
+            db.prepare(`
+              UPDATE contacts
+                 SET title         = COALESCE(?, title),
+                     seniority     = COALESCE(?, seniority),
+                     department    = COALESCE(?, department),
+                     email         = COALESCE(?, email),
+                     email_status  = COALESCE(?, email_status),
+                     linkedin_url  = COALESCE(?, linkedin_url),
+                     updated_at    = datetime('now')
+               WHERE id = ?
+            `).run(
+              enriched.title ?? null,
+              enriched.seniority ?? null,
+              enriched.department ?? null,
+              enriched.email ?? null,
+              enriched.email_status ?? null,
+              enriched.linkedin_url ?? null,
+              row.id
+            );
+          }
+        }
+      }
     }
   });
   try {
