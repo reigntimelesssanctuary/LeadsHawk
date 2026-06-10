@@ -613,6 +613,31 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.6 (2026-06-11):** Apollo loose-mode retry when strict org search returns thin.
+
+After v1.19.5's strict org_id-scoped search shipped, the user hit Nvidia Graphics Pvt Ltd (Indian subsidiary) where Apollo's coverage of the specific legal entity is thin — strict pass returned <3 qualifying people, the Hunt list panel showed the legacy 5-contact data with a confusing "Apollo did not surface ≥3 usable contacts" banner. Architecturally that was working-as-designed, but the operator workflow needs a recovery path before declaring failure.
+
+**Fix in `src/main/apollo.ts` + `src/main/contact-search.ts`:**
+
+`searchPeople` gains a `mode: 'strict' | 'loose'` parameter:
+- **strict** (default): unchanged from v1.19.5 — `organization_ids` for tight scoping, `person_titles` included.
+- **loose**: drops the strict org filter (uses `q_keywords` with the company stem), drops `person_titles` (Sonnet's archetype titles can be too narrow), keeps `person_seniorities`. Skips the org-resolve call since the strict pass that triggered the retry already paid for it.
+
+`searchContactsForOpportunity` orchestrator:
+- After the strict search returns < `HUNT_MIN_CONTACTS` people, automatically runs a loose retry.
+- Merges new candidates into the existing pool (dedup by `apollo_id`).
+- Re-ranks + enriches the combined pool as usual.
+- Post-filter (`orgNamesMatch`, from v1.19.5) catches any cross-org noise the loose pass might surface.
+- Non-fatal — loose-retry failure logs but falls through with strict-only results.
+
+**Cost impact:** when the retry fires, +1 search call (1 credit per result returned, up to 25). Typical hit: ~5-15 extra credits per affected opp. Doesn't fire when strict succeeded (most well-known companies). On Basic plan (~2,500 credits/mo): negligible.
+
+**Why drop `person_titles` rather than relax seniorities?** Sonnet generates very specific title strings ("Director of Network Operations") that match exact-phrase searches but miss the same person tagged as "Director - Network Ops". Seniorities (c_suite/vp/director/head) are robust controlled-vocab; titles are noisy. Dropping titles widens the pool more usefully.
+
+**What this DOES NOT do:** if a company has genuinely zero indexed people at Apollo, no amount of broadening will help. v1.19.7+ can add a diagnostic UI showing "Apollo resolved to X — 0 indexed people" so the operator knows it's a data ceiling, not a filter problem.
+
+234 → 252 smoke tests unchanged — pure I/O glue + orchestration logic, no new pure helpers needing tests.
+
 **v1.19.5 (2026-06-09):** Apollo org targeting — irrelevant companies (Pfizer/Yum) leaking into Nvidia search.
 
 User searched contacts for "Nvidia Graphics Private Limited" and got results from Pfizer, Yum, and other unrelated companies. Investigation revealed the contact search wasn't actually scoped to the target company at all.

@@ -214,10 +214,19 @@ export function orgNamesMatch(a: string | null | undefined, b: string | null | u
  * endpoint does NOT support organization_names as a strict filter; passing
  * it silently returned a globally-mixed result set — see release notes).
  * Falls back to a name-keyword search if org resolution fails.
+ *
+ * v1.19.6 — accepts a mode parameter. 'strict' (default) uses org_id
+ * for tight scoping. 'loose' drops the strict org filter and uses
+ * q_keywords with the cleaned company name stem, AND drops the
+ * person_titles filter (keeps person_seniorities). Used by the orchestrator
+ * as a retry when 'strict' returns < HUNT_MIN_CONTACTS after post-filter.
+ * Post-filter (orgNamesMatch) catches cross-org noise on both modes.
  */
+export type SearchPeopleMode = 'strict' | 'loose';
 export async function searchPeople(
   organizationName: string,
-  archetype: ContactArchetype
+  archetype: ContactArchetype,
+  mode: SearchPeopleMode = 'strict'
 ): Promise<ApolloSearchResult> {
   const { apolloApiKey } = getSettings();
   if (!apolloApiKey) throw new Error('Apollo API key not configured. Add it in Settings → Contact API.');
@@ -228,9 +237,12 @@ export async function searchPeople(
   if (!cleanOrg) throw new Error('Apollo search requires a company name.');
 
   // v1.19.5: STEP 1 — resolve the company name to an Apollo org_id.
-  // Without this, mixed_people/api_search returns a global mix because
-  // it doesn't honour organization_names as a strict filter (silent ignore).
-  const resolved = await resolveOrganization(cleanOrg);
+  // v1.19.6: only run org-resolve in 'strict' mode. 'loose' mode skips
+  // it (the strict pass that triggered the retry already paid that cost,
+  // and loose intentionally doesn't use the org_id anyway).
+  const resolved = mode === 'strict'
+    ? await resolveOrganization(cleanOrg)
+    : { org: null as ApolloOrg | null, error: null as string | null };
   if (resolved.error) {
     console.warn(`[apollo] org resolve warning for "${cleanOrg}": ${resolved.error}`);
   }
@@ -247,24 +259,34 @@ export async function searchPeople(
     page: 1,
     per_page: APOLLO_SEARCH_PAGE_SIZE
   };
-  // Prefer organization_ids (most precise). Fall back to domain. Last
-  // resort: q_keywords with the company name — broader but not silently
-  // ignored like organization_names was.
-  if (targetOrgId) {
-    body.organization_ids = [targetOrgId];
-  } else if (targetDomain) {
-    body.q_organization_domains_list = [targetDomain];
+  // v1.19.6: filter shape depends on mode.
+  //   strict — Apollo org_id (most precise). Domain fallback. Keywords
+  //            only if both unavailable. person_titles included.
+  //   loose  — drop org_id entirely; q_keywords carries the company
+  //            name stem. person_titles dropped to widen the candidate
+  //            pool; person_seniorities retained.
+  if (mode === 'strict') {
+    if (targetOrgId) {
+      body.organization_ids = [targetOrgId];
+    } else if (targetDomain) {
+      body.q_organization_domains_list = [targetDomain];
+    } else {
+      body.q_keywords = stripLegalSuffixes(cleanOrg);
+    }
+    if (archetype.target_titles.length > 0) {
+      body.person_titles = archetype.target_titles;
+    }
   } else {
+    // loose mode — broader candidate pool, relies on post-filter to
+    // catch cross-org noise + on ranking to surface the best fits.
     body.q_keywords = stripLegalSuffixes(cleanOrg);
+    // Intentionally NO person_titles in loose mode. Sonnet-generated
+    // titles can be too narrow; drop them so Apollo returns anyone at
+    // the company who matches the seniority filter, then archetype
+    // ranking sorts by title fit.
   }
   if (archetype.target_seniorities.length > 0) {
     body.person_seniorities = archetype.target_seniorities;
-  }
-  if (archetype.target_titles.length > 0) {
-    // Apollo accepts multiple title patterns via q_keywords or
-    // person_titles; person_titles is the stricter filter, q_keywords
-    // is broader. Use person_titles for precision.
-    body.person_titles = archetype.target_titles;
   }
 
   let r;

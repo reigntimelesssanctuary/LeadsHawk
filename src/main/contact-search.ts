@@ -76,11 +76,11 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
   );
   const searchId = Number(insAudit.lastInsertRowid);
 
-  // ─── Stage 2 — Apollo search ────────────────────────────────────
+  // ─── Stage 2 — Apollo search (strict) ───────────────────────────
   let apolloPeople: ApolloPerson[] = [];
   let apolloCredits = 0;
   try {
-    const r = await searchPeople(opp.company, arch.archetype);
+    const r = await searchPeople(opp.company, arch.archetype, 'strict');
     apolloPeople = r.people;
     apolloCredits = r.creditsUsed;
   } catch (e: any) {
@@ -92,6 +92,29 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
     `).run(searchId);
     setHuntStatus(oppId, 'search_failed');
     return zero(oppId, 'search_failed', 0, err);
+  }
+
+  // ─── Stage 2b — v1.19.6 loose-mode retry ─────────────────────────
+  // When the strict org_id-scoped search returns thin (< HUNT_MIN_CONTACTS
+  // before ranking), retry once with broader filters: drop the strict
+  // org filter (use q_keywords with company stem), drop person_titles
+  // (Sonnet archetype titles can be too narrow), keep person_seniorities.
+  // Post-filter (orgNamesMatch) still drops genuinely-wrong companies.
+  // Caps the additional credit spend to one extra search call.
+  if (apolloPeople.length < HUNT_MIN_CONTACTS) {
+    console.warn(`[contact-search] strict pass returned ${apolloPeople.length} people for "${opp.company}"; trying loose retry`);
+    try {
+      const looseR = await searchPeople(opp.company, arch.archetype, 'loose');
+      // Merge loose results into the candidate pool, dedup by apollo_id.
+      const existing = new Set(apolloPeople.map((p) => p.id).filter(Boolean) as string[]);
+      const fresh = looseR.people.filter((p) => p.id && !existing.has(p.id));
+      apolloPeople = [...apolloPeople, ...fresh];
+      apolloCredits += looseR.creditsUsed;
+      console.warn(`[contact-search] loose retry added ${fresh.length} candidates (${looseR.creditsUsed} credits)`);
+    } catch (e: any) {
+      console.warn(`[contact-search] loose retry failed (non-fatal): ${String(e?.message || e).slice(0, 200)}`);
+      // Fall through with whatever strict gave us.
+    }
   }
 
   // ─── Stage 3 — Pass-1 rank (title-only) → Enrich top N → Re-rank ───
