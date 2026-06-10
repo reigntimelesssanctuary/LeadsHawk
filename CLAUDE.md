@@ -613,6 +613,35 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.19.5 (2026-06-09):** Apollo org targeting — irrelevant companies (Pfizer/Yum) leaking into Nvidia search.
+
+User searched contacts for "Nvidia Graphics Private Limited" and got results from Pfizer, Yum, and other unrelated companies. Investigation revealed the contact search wasn't actually scoped to the target company at all.
+
+**Root cause:** v1.19.0 → v1.19.4 passed `organization_names: ["..."]` to Apollo's `mixed_people/api_search`. **That parameter is not supported by this endpoint.** Apollo silently ignored it. The remaining filters (`person_seniorities`, `person_titles`) returned the global top matches across all of Apollo's database — Pfizer and Yum are big companies with many people matching standard B2B titles, so they bubbled up.
+
+Confirmed against Apollo's docs at https://docs.apollo.io/reference/people-api-search:
+- `mixed_people/api_search` accepts: `organization_ids[]`, `q_organization_domains_list[]`, `organization_locations[]`
+- It does NOT accept: `organization_names` or any name-based filter
+- Recommended scoping: resolve company → org_id, then filter by `organization_ids[]`
+
+**Fix in `src/main/apollo.ts`:**
+
+Two new functions + a rewritten `searchPeople`:
+
+1. **`stripLegalSuffixes(name)`** — pure helper that trims generic legal-entity tokens (`Private Limited`, `Pvt Ltd`, `Inc`, `LLC`, `Corp`, `GmbH`, `Pte Ltd`, etc.) off the trailing position. "Nvidia Graphics Private Limited" → "Nvidia Graphics". Gives Apollo's fuzzy matcher a cleaner stem. 11 smoke tests.
+2. **`resolveOrganization(companyName)`** — new step that hits `POST /v1/mixed_companies/search` with `q_organization_name` to find Apollo's canonical org record (id + name + primary_domain). Caps at 1 result for cost control (1 Apollo credit per opp).
+3. **`orgNamesMatch(a, b)`** — pure helper for the post-filter defense. Fuzzy compare with substring-either-direction, so parent ↔ subsidiary still match ("Nvidia" ↔ "Nvidia Graphics") but disjoint companies don't ("Nvidia Graphics" ↔ "Pfizer"). 7 smoke tests.
+4. **`searchPeople` rewrite** — now a two-step flow:
+   - **Step 1**: `resolveOrganization(name)` → get org_id + canonical name + domain (1 credit).
+   - **Step 2**: `mixed_people/api_search` with `organization_ids: [resolved.id]` (or `q_organization_domains_list: [domain]` as fallback, or `q_keywords` as last resort if both fail). Now properly scoped.
+   - **Post-filter defense**: every returned person's `organization.name` is fuzzy-compared against the canonical target name. Cross-org leakage gets dropped + logged. Belt-and-suspenders even when Apollo's resolver picks a wrong-but-similar company.
+
+**Cost impact:** +1 Apollo credit per opportunity for the org resolve step. Per-opp total now ~9-11 credits (was ~8-10). On Basic ($59/mo, 2,500 credits): ~220 opps/mo at full enrichment quality — still plenty of headroom.
+
+**Why this wasn't caught before v1.19.5:** my Apollo client used the parameter name that felt intuitive (`organization_names`) without verifying against the actual endpoint reference. Apollo's API silently accepted the unknown param without erroring, which is why no 400/422 surfaced. Lesson: when integrating a third-party API, validate filter behaviour with at least one real search before declaring it done.
+
+Smoke tests: 234 → 252 (+18) covering both helpers comprehensively.
+
 **v1.19.4 (2026-06-09):** Enrichment refresh on re-search — kept rows now receive updated email/seniority/department data.
 
 User upgraded Apollo from Free → Basic ($59/mo) expecting emails to populate on re-search. They didn't. Bug isolated to the smart-replace path.

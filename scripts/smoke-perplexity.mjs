@@ -2697,5 +2697,105 @@ test('planSmartReplace — handles rows without apollo_id gracefully', () => {
   eq(stats.insertedNew, 1);
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.19.5 — Apollo org-name helpers (src/main/apollo.ts).
+//
+// Pure functions: stripLegalSuffixes (clean noise off company names) and
+// orgNamesMatch (fuzzy compare for the post-filter defense). MUST stay
+// byte-identical with production.
+// ════════════════════════════════════════════════════════════════════════
+
+function stripLegalSuffixes(name) {
+  if (!name) return '';
+  const SUFFIX_RE = /\b(private\s+limited|pvt\s+ltd|pvt\.\s+ltd|p\s+ltd|pte\s+ltd|inc|incorporated|llc|ltd|limited|llp|corp|corporation|gmbh|sa|sas|sarl|nv|bv|ag|kg|kk|co|company|plc|holdings|group)\.?$/gi;
+  let s = name.trim();
+  for (let i = 0; i < 3; i++) {
+    const stripped = s.replace(SUFFIX_RE, '').replace(/[,\s]+$/, '').trim();
+    if (stripped === s || stripped.length === 0) break;
+    s = stripped;
+  }
+  return s;
+}
+
+function orgNamesMatch(a, b) {
+  if (!a || !b) return false;
+  const ca = stripLegalSuffixes(a).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cb = stripLegalSuffixes(b).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!ca || !cb) return false;
+  if (ca === cb) return true;
+  return ca.includes(cb) || cb.includes(ca);
+}
+
+test('stripLegalSuffixes — strips "Private Limited"', () => {
+  // The exact case that triggered v1.19.5: Indian subsidiary naming.
+  eq(stripLegalSuffixes('Nvidia Graphics Private Limited'), 'Nvidia Graphics');
+});
+test('stripLegalSuffixes — strips "Pvt Ltd"', () => {
+  eq(stripLegalSuffixes('Acme Pvt Ltd'), 'Acme');
+});
+test('stripLegalSuffixes — strips "Inc."', () => {
+  eq(stripLegalSuffixes('Foo Inc.'), 'Foo');
+});
+test('stripLegalSuffixes — strips "Inc" without period', () => {
+  eq(stripLegalSuffixes('Foo Inc'), 'Foo');
+});
+test('stripLegalSuffixes — strips "LLC"', () => {
+  eq(stripLegalSuffixes('Bar LLC'), 'Bar');
+});
+test('stripLegalSuffixes — strips "Corporation"', () => {
+  eq(stripLegalSuffixes('Big Corporation'), 'Big');
+});
+test('stripLegalSuffixes — strips "GmbH"', () => {
+  eq(stripLegalSuffixes('Schmidt GmbH'), 'Schmidt');
+});
+test('stripLegalSuffixes — strips trailing comma after suffix', () => {
+  eq(stripLegalSuffixes('Acme, Inc'), 'Acme');
+});
+test('stripLegalSuffixes — leaves clean names alone', () => {
+  eq(stripLegalSuffixes('Nvidia'), 'Nvidia');
+  eq(stripLegalSuffixes('Apple'), 'Apple');
+});
+test('stripLegalSuffixes — only strips at trailing position', () => {
+  // "Private Limited Partners Group" — "Private Limited" is part of the
+  // company name, not a suffix. Trailing "Group" gets stripped though.
+  // Conservative behavior: keep mid-string occurrences.
+  const result = stripLegalSuffixes('Private Limited Partners Group');
+  truthy(result.includes('Private Limited Partners'), `got "${result}"`);
+});
+test('stripLegalSuffixes — empty input safe', () => {
+  eq(stripLegalSuffixes(''), '');
+  eq(stripLegalSuffixes(null), '');
+});
+
+test('orgNamesMatch — exact match', () => {
+  truthy(orgNamesMatch('Nvidia', 'Nvidia'));
+});
+test('orgNamesMatch — case-insensitive', () => {
+  truthy(orgNamesMatch('NVIDIA', 'nvidia'));
+});
+test('orgNamesMatch — strips legal suffixes both sides', () => {
+  truthy(orgNamesMatch('Nvidia Graphics Private Limited', 'Nvidia Graphics'));
+  truthy(orgNamesMatch('Nvidia Inc', 'Nvidia Pvt Ltd'));
+});
+test('orgNamesMatch — substring either direction (parent ↔ subsidiary)', () => {
+  // Resolver may pick parent for a subsidiary query or vice versa;
+  // both should still match.
+  truthy(orgNamesMatch('Nvidia', 'Nvidia Graphics'));
+  truthy(orgNamesMatch('Nvidia Graphics', 'Nvidia'));
+});
+test('orgNamesMatch — disjoint companies → false', () => {
+  // The bug fix this protects: Pfizer/Yum leakage when querying for Nvidia.
+  falsy(orgNamesMatch('Nvidia Graphics', 'Pfizer'));
+  falsy(orgNamesMatch('Nvidia Graphics', 'Yum Brands'));
+});
+test('orgNamesMatch — punctuation normalised', () => {
+  truthy(orgNamesMatch('Foo & Bar', 'Foo  Bar'));
+});
+test('orgNamesMatch — empty inputs → false (safe default)', () => {
+  falsy(orgNamesMatch('', 'Nvidia'));
+  falsy(orgNamesMatch('Nvidia', null));
+  falsy(orgNamesMatch(null, null));
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

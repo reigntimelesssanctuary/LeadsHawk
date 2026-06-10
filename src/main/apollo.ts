@@ -97,9 +97,123 @@ export async function validateApolloKey(
 }
 
 /**
+ * v1.19.5 — strip generic legal-entity suffixes from a company name so
+ * Apollo's fuzzy matcher has a better stem to work with.
+ * "Nvidia Graphics Private Limited" → "Nvidia Graphics"
+ * "Acme Corp." → "Acme"
+ * "Foo Inc" → "Foo"
+ * Conservative: only strips at the trailing position. Exported for smoke
+ * testing.
+ */
+export function stripLegalSuffixes(name: string): string {
+  if (!name) return '';
+  const SUFFIX_RE = /\b(private\s+limited|pvt\s+ltd|pvt\.\s+ltd|p\s+ltd|pte\s+ltd|inc|incorporated|llc|ltd|limited|llp|corp|corporation|gmbh|sa|sas|sarl|nv|bv|ag|kg|kk|co|company|plc|holdings|group)\.?$/gi;
+  let s = name.trim();
+  // Iterate — handles "Foo Inc." then trailing comma "Foo,"
+  for (let i = 0; i < 3; i++) {
+    const stripped = s.replace(SUFFIX_RE, '').replace(/[,\s]+$/, '').trim();
+    if (stripped === s || stripped.length === 0) break;
+    s = stripped;
+  }
+  return s;
+}
+
+/**
+ * v1.19.5 — resolve a free-text company name to an Apollo organization
+ * via /mixed_companies/search with q_organization_name. Returns the top
+ * match (Apollo's fuzzy matcher is fairly good when given a clean stem).
+ * Returns null if nothing matched. Costs 1 Apollo credit per result
+ * (we cap at 1 result for cost control).
+ */
+export type ApolloOrg = {
+  id: string;
+  name: string;
+  primary_domain?: string | null;
+  website_url?: string | null;
+};
+export async function resolveOrganization(
+  companyName: string
+): Promise<{ org: ApolloOrg | null; error: string | null }> {
+  const { apolloApiKey } = getSettings();
+  if (!apolloApiKey) return { org: null, error: 'No API key configured' };
+  const cleanName = stripLegalSuffixes(companyName);
+  if (!cleanName) return { org: null, error: 'Empty company name after cleanup' };
+  const body = {
+    api_key: apolloApiKey,
+    q_organization_name: cleanName,
+    page: 1,
+    per_page: 1
+  };
+  let r;
+  try {
+    r = await undiciFetch(`${APOLLO_BASE}/mixed_companies/search`, {
+      method: 'POST',
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Content-Type': 'application/json',
+        'X-Api-Key': apolloApiKey
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (e: any) {
+    return { org: null, error: `Apollo network error: ${String(e?.message || e).slice(0, 200)}` };
+  }
+  if (r.status === 401 || r.status === 403) {
+    const text = await r.text().catch(() => '');
+    return { org: null, error: `Apollo rejected org resolve (HTTP ${r.status}): ${text.slice(0, 200)}` };
+  }
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    return { org: null, error: `Apollo org resolve HTTP ${r.status}: ${text.slice(0, 200)}` };
+  }
+  const raw: any = await r.json().catch(() => null);
+  if (!raw) return { org: null, error: 'Apollo returned unparseable org response' };
+  // Response shape: { organizations: [...] } per Apollo docs.
+  const orgs: any[] = Array.isArray(raw.organizations)
+    ? raw.organizations
+    : (Array.isArray(raw.accounts) ? raw.accounts : []);
+  if (orgs.length === 0) return { org: null, error: null };
+  const top = orgs[0];
+  // Record the credit spend (1 credit for the 1 result returned).
+  recordApolloSpend('contact_lookup', 1, null);
+  return {
+    org: {
+      id: String(top.id || ''),
+      name: String(top.name || cleanName),
+      primary_domain: top.primary_domain || top.website_url || null,
+      website_url: top.website_url || null
+    },
+    error: null
+  };
+}
+
+/**
+ * Pure helper exported for smoke testing — fuzzy comparison of two company
+ * names for the post-filter step. Lowercases, strips legal suffixes, then
+ * checks substring-either-way. Allows "Nvidia" to match "Nvidia Graphics"
+ * and vice versa.
+ */
+export function orgNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const ca = stripLegalSuffixes(a).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cb = stripLegalSuffixes(b).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!ca || !cb) return false;
+  if (ca === cb) return true;
+  // Substring match either way — guards against fuzzy resolve picking a
+  // subsidiary vs parent (e.g. "Nvidia Graphics" vs "Nvidia").
+  return ca.includes(cb) || cb.includes(ca);
+}
+
+/**
  * Search for contacts at a named organization using filters derived from
  * a Sonnet-produced archetype. Returns Apollo's raw person list (caller
  * runs them through the ranker).
+ *
+ * v1.19.5 — two-step flow: resolve company name to org_id first, then
+ * scope the people search via organization_ids (Apollo's people-search
+ * endpoint does NOT support organization_names as a strict filter; passing
+ * it silently returned a globally-mixed result set — see release notes).
+ * Falls back to a name-keyword search if org resolution fails.
  */
 export async function searchPeople(
   organizationName: string,
@@ -113,18 +227,36 @@ export async function searchPeople(
   const cleanOrg = (organizationName || '').trim();
   if (!cleanOrg) throw new Error('Apollo search requires a company name.');
 
+  // v1.19.5: STEP 1 — resolve the company name to an Apollo org_id.
+  // Without this, mixed_people/api_search returns a global mix because
+  // it doesn't honour organization_names as a strict filter (silent ignore).
+  const resolved = await resolveOrganization(cleanOrg);
+  if (resolved.error) {
+    console.warn(`[apollo] org resolve warning for "${cleanOrg}": ${resolved.error}`);
+  }
+  const targetOrgId = resolved.org?.id || null;
+  const targetDomain = resolved.org?.primary_domain || null;
+
   // v1.19.1: Apollo's POST search endpoints are inconsistent about WHERE
   // the API key is expected. /auth/health works with the X-Api-Key header
   // alone, but /mixed_people/search has historically required the key as
   // `api_key` in the request body (their older convention) AND/OR in the
-  // header. Sending both is defensive — Apollo accepts either, and we
-  // avoid the "works in Test connection but fails on real call" trap.
+  // header. Sending both is defensive.
   const body: Record<string, any> = {
-    api_key: apolloApiKey,        // body-level auth (legacy POST convention)
-    organization_names: [cleanOrg],
+    api_key: apolloApiKey,
     page: 1,
     per_page: APOLLO_SEARCH_PAGE_SIZE
   };
+  // Prefer organization_ids (most precise). Fall back to domain. Last
+  // resort: q_keywords with the company name — broader but not silently
+  // ignored like organization_names was.
+  if (targetOrgId) {
+    body.organization_ids = [targetOrgId];
+  } else if (targetDomain) {
+    body.q_organization_domains_list = [targetDomain];
+  } else {
+    body.q_keywords = stripLegalSuffixes(cleanOrg);
+  }
   if (archetype.target_seniorities.length > 0) {
     body.person_seniorities = archetype.target_seniorities;
   }
@@ -182,14 +314,31 @@ export async function searchPeople(
   const raw: any = await r.json().catch(() => null);
   if (!raw) throw new Error('Apollo returned an unparseable response.');
 
-  const people: ApolloPerson[] = Array.isArray(raw.people) ? raw.people : [];
+  const rawPeople: ApolloPerson[] = Array.isArray(raw.people) ? raw.people : [];
 
   // Each returned person counts as 1 Apollo credit on the Starter plan.
   // Free tier uses the same counting model — we just don't have a direct
   // way to assert how Apollo's free-tier metering works, so we log credits
   // optimistically and the user's Apollo dashboard is the source of truth.
-  const creditsUsed = people.length;
+  const creditsUsed = rawPeople.length;
   recordApolloSpend('contact_lookup', creditsUsed, null);
+
+  // v1.19.5: post-filter defense. Even with org_id-scoped search, defend
+  // against any leakage (Apollo's resolver matched a wrong company, or
+  // the people search returned cross-org results). Drop any person whose
+  // organization.name doesn't match the target — using fuzzy comparison
+  // so subsidiary↔parent (e.g. "Nvidia" vs "Nvidia Graphics") still
+  // passes. Resolved canonical name is the comparison target when
+  // available; otherwise fall back to the cleaned input name.
+  const compareTarget = resolved.org?.name || cleanOrg;
+  const people = rawPeople.filter((p) => {
+    const orgName = p.organization?.name;
+    if (!orgName) return true; // can't filter what we can't see; keep
+    return orgNamesMatch(orgName, compareTarget);
+  });
+  if (people.length < rawPeople.length) {
+    console.warn(`[apollo] post-filter dropped ${rawPeople.length - people.length}/${rawPeople.length} cross-org results (target="${compareTarget}")`);
+  }
 
   return { people, creditsUsed, raw };
 }
