@@ -36,6 +36,7 @@ const STAGE_LABELS: Record<string, string> = {
   contact_archetype: 'Contact outreach — archetype (Sonnet)',
   contact_draft: 'Contact outreach — draft (Opus + extended thinking)',
   contact_lookup: 'Contact outreach — Apollo lookup',
+  hunter_lookup: 'Contact outreach — Hunter email finder (secondary)',
   unknown: 'Other / untagged'
 };
 

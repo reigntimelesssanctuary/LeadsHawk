@@ -38,6 +38,7 @@ export type LlmStage =
   | 'contact_archetype'  // v1.19: Anthropic Sonnet, who-to-reach reasoning
   | 'contact_draft'      // v1.19: Anthropic Opus + extended thinking, cold-email draft
   | 'contact_lookup'     // v1.19: Apollo (not an LLM), people search by company + filters
+  | 'hunter_lookup'      // v1.20: Hunter.io email-finder (secondary)
   | 'unknown';
 
 type Rate = {

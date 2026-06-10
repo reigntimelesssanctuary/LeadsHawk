@@ -21,6 +21,8 @@
 import { getDb } from './db.js';
 import { deriveArchetype } from './contact-archetype.js';
 import { searchPeople, enrichPersonByApolloId, normaliseSeniority, type ApolloPerson } from './apollo.js';
+import { findEmailViaHunter } from './hunter.js';
+import { getSettings } from './settings.js';
 import { rankContacts, HUNT_MIN_CONTACTS, HUNT_MAX_CONTACTS } from '@shared/hunt.js';
 import { planSmartReplace, type MergeContactRow } from '@shared/contacts-merge.js';
 import type {
@@ -79,10 +81,14 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
   // ─── Stage 2 — Apollo search (strict) ───────────────────────────
   let apolloPeople: ApolloPerson[] = [];
   let apolloCredits = 0;
+  // v1.20.0: capture the resolved domain so the Hunter fallback can reuse
+  // it without burning a fresh Apollo credit on re-resolution.
+  let resolvedDomain: string | null = null;
   try {
     const r = await searchPeople(opp.company, arch.archetype, 'strict');
     apolloPeople = r.people;
     apolloCredits = r.creditsUsed;
+    resolvedDomain = r.resolvedDomain;
   } catch (e: any) {
     const err = String(e?.message || e).slice(0, 300);
     db.prepare(`
@@ -168,6 +174,56 @@ export async function searchContactsForOpportunity(oppId: number): Promise<Searc
       linkedin_url: enriched.linkedin_url ?? c.linkedin_url
     };
   });
+
+  // ─── v1.20.0 — Hunter secondary email finder ────────────────────
+  // For any contact still missing an email after Apollo enrichment,
+  // try Hunter's Email Finder (name + domain). Only runs when:
+  //   - Hunter API key configured
+  //   - We have a domain (from Apollo's resolved org or extracted from
+  //     the opp's source_url)
+  //   - The contact has first_name + last_name (Hunter requires both)
+  // Hunter only bills on success (verified), so misses are free credits.
+  const settings = getSettings();
+  // Hunter needs a real company domain — the opportunity's source_url is
+  // usually a news-article URL, not the target company's domain, so we
+  // can't fall back to it safely. Use Apollo's resolved primary_domain
+  // only; if Apollo couldn't resolve the org's domain, Hunter has nothing
+  // useful to query and we skip.
+  const hunterDomain = resolvedDomain;
+  if (settings.hunterApiKey && hunterDomain) {
+    const needsHunter = enrichedRankable
+      .map((c, i) => ({ c, i }))
+      .filter((x) => !x.c.email && x.c.first_name && x.c.last_name);
+    if (needsHunter.length > 0) {
+      console.warn(`[contact-search] Apollo left ${needsHunter.length}/${enrichedRankable.length} without email; trying Hunter`);
+      const hunterResults = await Promise.all(
+        needsHunter.map((x) =>
+          findEmailViaHunter(x.c.first_name as string, x.c.last_name as string, hunterDomain, null)
+        )
+      );
+      let hunterFound = 0;
+      for (let k = 0; k < needsHunter.length; k++) {
+        const result = hunterResults[k].result;
+        if (result?.email) {
+          const target = needsHunter[k];
+          enrichedRankable[target.i] = {
+            ...enrichedRankable[target.i],
+            email: result.email,
+            email_status: (result.email_status as any) ?? 'unverified'
+          };
+          hunterFound++;
+        }
+      }
+      console.warn(`[contact-search] Hunter found ${hunterFound}/${needsHunter.length} additional emails`);
+    }
+  } else if (!settings.hunterApiKey) {
+    // Helpful signal in dev console — operator may not have configured
+    // Hunter yet, in which case Apollo-only behaviour applies.
+    const stillNull = enrichedRankable.filter((c) => !c.email).length;
+    if (stillNull > 0) {
+      console.warn(`[contact-search] ${stillNull} contact(s) without email; add Hunter API key in Settings to enable secondary email finder`);
+    }
+  }
 
   // Pass-2 rank on enriched data so the persisted order reflects what
   // the operator will see.

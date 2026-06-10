@@ -121,6 +121,12 @@ export function Settings() {
         onChange={(v) => setS({ ...s, apolloApiKey: v })}
       />
 
+      {/* v1.20.0 — Hunter.io as secondary email finder. */}
+      <HunterCard
+        apiKey={s.hunterApiKey}
+        onChange={(v) => setS({ ...s, hunterApiKey: v })}
+      />
+
       <div className="card" style={{ padding: 20, marginBottom: 16 }}>
         <div className="h-card" style={{ marginBottom: 6 }}>Live Monitor</div>
         <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
@@ -449,6 +455,89 @@ function ApolloCard({
         Save the key (button at the bottom) after pasting. The key is stored
         locally in <code>settings.json</code> under your user-data folder; it
         never leaves your machine except in API calls to Apollo.
+      </div>
+    </div>
+  );
+}
+
+// v1.20.0 — Hunter.io as secondary email finder. Optional. When Apollo
+// returns a contact but no email, Hunter takes a swing using
+// (name, company-domain). Free tier (50 finds/mo, 1 credit per successful
+// find, 0 on miss) really delivers emails — verified.
+function HunterCard({
+  apiKey, onChange
+}: {
+  apiKey: string;
+  onChange: (v: string) => void;
+}) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<
+    | { ok: true; planName: string | null; creditsLeft: number | null }
+    | { ok: false; error: string }
+    | null
+  >(null);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await window.lh.settings.validateHunterKey(apiKey);
+      if (r.ok) {
+        setResult({ ok: true, planName: r.planName ?? null, creditsLeft: r.creditsLeft ?? null });
+      } else {
+        setResult({ ok: false, error: r.error || 'Unknown error.' });
+      }
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="h-card" style={{ marginBottom: 6 }}>Email finder (Hunter.io) — optional secondary</div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+        When Apollo finds a contact but their email comes back null, Hunter
+        takes a swing using (name, company-domain). Different database, so it
+        catches 10-30% of Apollo's misses. Sign up at{' '}
+        <a onClick={() => window.lh.openExternal('https://hunter.io')} style={{ cursor: 'pointer' }}>
+          hunter.io
+        </a>
+        {' '}— free tier = 50 finds/mo (1 credit per successful find,
+        0 on miss); Starter = $34/mo annual for 2,000 credits.
+      </div>
+      <label className="label">API key</label>
+      <input
+        className="input"
+        type="password"
+        value={apiKey}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="paste your Hunter.io API key (leave blank to skip)"
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+        <button
+          className="btn-ghost"
+          onClick={test}
+          disabled={testing || !apiKey.trim()}
+        >
+          {testing ? 'Testing…' : 'Test connection'}
+        </button>
+        {result?.ok === true && (
+          <span style={{ fontSize: 13, color: '#065f46' }}>
+            ✓ Key works
+            {result.planName ? ` · plan: ${result.planName}` : ''}
+            {typeof result.creditsLeft === 'number' ? ` · ${result.creditsLeft} credits left` : ''}
+          </span>
+        )}
+        {result?.ok === false && (
+          <span style={{ fontSize: 13, color: '#991b1b' }}>
+            ✗ {result.error}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+        Leaving this blank disables the Hunter fallback; LeadsHawk uses Apollo only.
       </div>
     </div>
   );

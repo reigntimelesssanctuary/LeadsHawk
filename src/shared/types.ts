@@ -356,6 +356,8 @@ export type Settings = {
   factCheckMaxSources: number;
   // v1.19.0 — Apollo API key for contact search (Phase 1 of outbound).
   apolloApiKey: string;
+  // v1.20.0 — Hunter.io secondary email-finder API key (optional).
+  hunterApiKey: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────

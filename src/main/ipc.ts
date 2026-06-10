@@ -15,6 +15,7 @@ import { getSpendSummary, getCostSummary } from './spend.js';
 import { searchContactsForOpportunity, searchContactsBatch } from './contact-search.js';
 import { draftEmailForContact, setActiveDraftVersion } from './contact-draft.js';
 import { validateApolloKey } from './apollo.js';
+import { validateHunterKey } from './hunter.js';
 import type { Contact, ContactDraft, ContactWithDraft } from '@shared/types';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning,
@@ -756,6 +757,11 @@ export function registerIpc() {
   // Apollo API key validation (used by Settings → Contact API "Test connection").
   ipcMain.handle('settings:validateApolloKey', async (_e, key?: string) => {
     return await validateApolloKey(key);
+  });
+
+  // v1.20.0 — Hunter API key validation (Settings → Hunter "Test connection").
+  ipcMain.handle('settings:validateHunterKey', async (_e, key?: string) => {
+    return await validateHunterKey(key);
   });
 
   // Single-opp contact search. Orchestrator handles archetype → Apollo →

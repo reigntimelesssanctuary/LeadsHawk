@@ -613,6 +613,43 @@ Later same day, user asked to make signals fully autonomous — the app derives 
 
 **v1.1.3 (2026-05-23):** Sidebar now shows the LeadsHawk logo (256×256 PNG at `src/renderer/src/assets/logo.png`, rendered at 48×48 with 12px radius) above the "LeadsHawk" text. Dashboard "Open Opportunities" table now scrolls horizontally instead of clipping — table has `minWidth: 1080` and the wrapping `.card` uses `overflowX: 'auto'`.
 
+**v1.20.0 (2026-06-11):** Hunter.io as secondary email finder when Apollo returns null email.
+
+User feedback: Apollo enrichment sometimes returns a contact (name + title + LinkedIn) but no email — typically because Apollo's database doesn't have that specific person's email even on paid tiers, OR because the contact is in a low-coverage segment. Without an email the contact is unactionable for outbound.
+
+**Fix:** integrate Hunter.io as a fallback email finder. Hunter has a different database than Apollo and uses a name+domain → email pattern, so it catches 10-30% of Apollo's null-email cases. Free tier (50 finds/month, 1 credit per success, 0 on miss) really delivers — verified against Hunter's docs.
+
+**New module `src/main/hunter.ts`:**
+
+- `validateHunterKey(key)` — hits `GET /v2/account` to confirm the key + surface plan name + remaining credits. Same Test-connection pattern as Apollo.
+- `findEmailViaHunter(firstName, lastName, domain, relatedContactId)` — hits `GET /v2/email-finder`. Returns `{ email, email_status, confidence, raw }` on hit; `{ email: null, ... }` on miss. Hunter's 404 = not-found is handled as a normal miss (free), not an error. Records spend only on successful finds (per Hunter's billing model — verified).
+- `cleanDomain(raw)` — pure helper for URL/domain normalisation. Strips protocol, `www.`, path, query, trailing dots; lowercases. 11 smoke tests.
+
+**Wired into the contact-search orchestrator:**
+
+After Apollo enrichment fills email for some contacts but not others, the orchestrator (in `searchContactsForOpportunity`) checks for any rows still missing `email` and runs Hunter in parallel for each that has both `first_name` + `last_name`. Domain comes from Apollo's resolved primary_domain — the orchestrator captures it from `ApolloSearchResult.resolvedDomain` (new field; v1.20.0 extends `ApolloSearchResult`).
+
+If Apollo couldn't resolve a domain, Hunter is skipped — `opportunity.source_url` is typically a news-article URL, not the target company's, so using it as a domain fallback would query the wrong site.
+
+**Failure modes handled:**
+- No Hunter key configured → silently skip; log a one-line console hint when contacts still lack emails.
+- Hunter returns 404 (no match) → no error, no credit charged, contact stays email-less.
+- Hunter network error / 5xx → logged, non-fatal — Apollo's data still persists.
+- Hunter rate limit (429) → returned as error per contact; other contacts unaffected.
+
+**Settings UI:** new "Email finder (Hunter.io) — optional secondary" card after Apollo. Same masked-input + Test-connection pattern. Help text explicitly labels it OPTIONAL — leaving blank disables the fallback. Test button surfaces plan name + credits-left when Hunter's API returns them.
+
+**Spend tracking:**
+- New `LlmStage` value `'hunter_lookup'` in `pricing.ts`.
+- Bucketed into `contact_outreach` operation type (alongside `contact_lookup` for Apollo).
+- Cost computed at $0.017/credit (Starter rate $34/2000 annual); free-tier users can mentally discount the displayed cost.
+- New row in Cost Management → By stage breakdown: "Contact outreach — Hunter email finder (secondary)".
+- New provider entry in Cost Management → By provider: "hunter" alongside "apollo", "anthropic", "perplexity".
+
+**Architecture note:** Hunter is positioned as a STRICT SECONDARY — never used for contact discovery (Apollo's search-by-company is the right tool for that), only for email reveals on contacts Apollo already identified. This keeps the operator's mental model simple: Apollo finds the right people; Hunter helps reach them when Apollo can't.
+
+Smoke tests: 252 → 262 (+10) — all on the `cleanDomain` helper (the only new pure-function logic). The Hunter API wrapper is I/O glue; its behaviour is validated by the Test-connection button on Settings.
+
 **v1.19.6 (2026-06-11):** Apollo loose-mode retry when strict org search returns thin.
 
 After v1.19.5's strict org_id-scoped search shipped, the user hit Nvidia Graphics Pvt Ltd (Indian subsidiary) where Apollo's coverage of the specific legal entity is thin — strict pass returned <3 qualifying people, the Hunt list panel showed the legacy 5-contact data with a confusing "Apollo did not surface ≥3 usable contacts" banner. Architecturally that was working-as-designed, but the operator workflow needs a recovery path before declaring failure.

@@ -33,7 +33,11 @@ const defaults: Settings = {
   crossMatchEnabled: true,
   // v1.19.0 — Apollo contact-search API key. Empty by default; user pastes
   // their key in Settings → Contact API card.
-  apolloApiKey: ''
+  apolloApiKey: '',
+  // v1.20.0 — Hunter.io secondary email-finder API key. Optional. When
+  // present, used as a fallback for Apollo contacts whose email came back
+  // null. Free tier (50 finds/mo) really delivers — verified.
+  hunterApiKey: ''
 };
 
 const store = new Store<Settings>({ name: 'settings', defaults });
@@ -58,7 +62,8 @@ export function getSettings(): Settings {
     notifyOnNewOpportunity: (store as any).get('notifyOnNewOpportunity') as boolean,
     openAtLogin: (store as any).get('openAtLogin') as boolean,
     crossMatchEnabled: (store as any).get('crossMatchEnabled') as boolean,
-    apolloApiKey: ((store as any).get('apolloApiKey') as string) ?? ''
+    apolloApiKey: ((store as any).get('apolloApiKey') as string) ?? '',
+    hunterApiKey: ((store as any).get('hunterApiKey') as string) ?? ''
   };
 }
 

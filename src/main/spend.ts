@@ -123,6 +123,7 @@ export function operationForStage(stage: string): OperationType {
     case 'contact_archetype':
     case 'contact_draft':
     case 'contact_lookup':           // v1.19.0
+    case 'hunter_lookup':            // v1.20.0 — Hunter as secondary email finder
       return 'contact_outreach';
     default:
       return 'other';

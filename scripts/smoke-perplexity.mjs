@@ -2797,5 +2797,57 @@ test('orgNamesMatch — empty inputs → false (safe default)', () => {
   falsy(orgNamesMatch(null, null));
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// v1.20.0 — Hunter cleanDomain helper (src/main/hunter.ts).
+//
+// Pure helper that normalises URLs / domain strings so Hunter receives a
+// clean domain in its email-finder query. MUST stay byte-identical with
+// production.
+// ════════════════════════════════════════════════════════════════════════
+
+function cleanDomain(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim().toLowerCase();
+  s = s.replace(/^[a-z]+:\/\//, '');
+  s = s.replace(/^www\./, '');
+  const slash = s.indexOf('/');
+  if (slash !== -1) s = s.slice(0, slash);
+  s = s.replace(/\.+$/, '');
+  return s;
+}
+
+test('cleanDomain — bare domain unchanged', () => {
+  eq(cleanDomain('nvidia.com'), 'nvidia.com');
+});
+test('cleanDomain — strips https:// protocol', () => {
+  eq(cleanDomain('https://nvidia.com'), 'nvidia.com');
+});
+test('cleanDomain — strips http:// protocol', () => {
+  eq(cleanDomain('http://example.com'), 'example.com');
+});
+test('cleanDomain — strips www.', () => {
+  eq(cleanDomain('www.nvidia.com'), 'nvidia.com');
+});
+test('cleanDomain — strips protocol AND www.', () => {
+  eq(cleanDomain('https://www.nvidia.com'), 'nvidia.com');
+});
+test('cleanDomain — strips path', () => {
+  eq(cleanDomain('https://www.nvidia.com/news/article'), 'nvidia.com');
+});
+test('cleanDomain — strips query string', () => {
+  eq(cleanDomain('https://nvidia.com/page?foo=bar'), 'nvidia.com');
+});
+test('cleanDomain — lowercases', () => {
+  eq(cleanDomain('NVIDIA.COM'), 'nvidia.com');
+});
+test('cleanDomain — strips trailing dot', () => {
+  eq(cleanDomain('nvidia.com.'), 'nvidia.com');
+});
+test('cleanDomain — empty / null safe', () => {
+  eq(cleanDomain(''), '');
+  eq(cleanDomain(null), '');
+  eq(cleanDomain(undefined), '');
+});
+
 console.log(`\nResult: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

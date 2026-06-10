@@ -5,7 +5,9 @@ const api = {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (patch: any) => ipcRenderer.invoke('settings:update', patch),
     // v1.19.0 — Apollo API key validation (Settings → Contact API "Test" button).
-    validateApolloKey: (key?: string) => ipcRenderer.invoke('settings:validateApolloKey', key)
+    validateApolloKey: (key?: string) => ipcRenderer.invoke('settings:validateApolloKey', key),
+    // v1.20.0 — Hunter.io API key validation.
+    validateHunterKey: (key?: string) => ipcRenderer.invoke('settings:validateHunterKey', key)
   },
   dashboard: {
     stats: () => ipcRenderer.invoke('dashboard:stats')

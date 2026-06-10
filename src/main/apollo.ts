@@ -49,6 +49,11 @@ export type ApolloSearchResult = {
   people: ApolloPerson[];
   creditsUsed: number;
   raw: any;
+  // v1.20.0: surface the resolved org (when strict mode resolved one) so
+  // downstream callers (Hunter fallback) can reuse the domain without
+  // burning another Apollo credit.
+  resolvedDomain: string | null;
+  resolvedOrgName: string | null;
 };
 
 /**
@@ -362,7 +367,13 @@ export async function searchPeople(
     console.warn(`[apollo] post-filter dropped ${rawPeople.length - people.length}/${rawPeople.length} cross-org results (target="${compareTarget}")`);
   }
 
-  return { people, creditsUsed, raw };
+  return {
+    people,
+    creditsUsed,
+    raw,
+    resolvedDomain: resolved.org?.primary_domain ?? null,
+    resolvedOrgName: resolved.org?.name ?? null
+  };
 }
 
 /**
