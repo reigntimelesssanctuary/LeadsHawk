@@ -4,6 +4,10 @@ export type Brand = {
   description: string | null;
   positioning: string | null;
   competitive_summary: string | null;
+  // Brand website / primary domain. Surfaced through the HTTP bridge so
+  // external agents (Hermes BDM) can resolve a brand to its canonical
+  // domain. Stored normalized via cleanDomain() in src/main/hunter.ts.
+  domain: string | null;
   // v1.6 brand-research fields
   research_status: 'pending' | 'researching' | 'ready' | 'error';
   research_summary: string | null;

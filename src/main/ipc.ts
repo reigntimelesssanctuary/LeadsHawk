@@ -15,7 +15,7 @@ import { getSpendSummary, getCostSummary } from './spend.js';
 import { searchContactsForOpportunity, searchContactsBatch } from './contact-search.js';
 import { draftEmailForContact, setActiveDraftVersion } from './contact-draft.js';
 import { validateApolloKey } from './apollo.js';
-import { validateHunterKey } from './hunter.js';
+import { validateHunterKey, cleanDomain } from './hunter.js';
 import type { Contact, ContactDraft, ContactWithDraft } from '@shared/types';
 import {
   startMonitor, stopMonitor, getMonitorStatus, getMonitorLog, isRunning as monitorRunning,
@@ -118,6 +118,15 @@ export function registerIpc() {
     if ('scan_recency_override' in payload) {
       db.prepare("UPDATE brands SET scan_recency_override = ?, updated_at = datetime('now') WHERE id = ?")
         .run(payload.scan_recency_override ?? null, id);
+    }
+    // Brand domain: set explicitly when present in payload (null/empty
+    // clears it). Normalized through cleanDomain so callers can paste a
+    // full URL and we store the bare host.
+    if ('domain' in payload) {
+      const raw = payload.domain ?? null;
+      const normalized = raw ? (cleanDomain(raw) || null) : null;
+      db.prepare("UPDATE brands SET domain = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(normalized, id);
     }
     return db.prepare('SELECT * FROM brands WHERE id = ?').get(id);
   });
