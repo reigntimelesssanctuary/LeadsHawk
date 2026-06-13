@@ -243,6 +243,12 @@ function migrate(db: Database.Database) {
   addColumnIfMissing(db, 'brands', 'category', 'TEXT');
   addColumnIfMissing(db, 'brands', 'signals', 'TEXT');
   addColumnIfMissing(db, 'brands', 'last_researched_at', 'TEXT');
+  // Brand website / primary domain. Surfaced by the HTTP bridge at
+  // src/main/bridge.ts so external agents (Hermes BDM) can resolve a
+  // brand to its canonical domain without re-scraping. Stored normalized
+  // (lowercased, protocol/www/path stripped) — see cleanDomain() in
+  // src/main/hunter.ts.
+  addColumnIfMissing(db, 'brands', 'domain', 'TEXT');
   addColumnIfMissing(db, 'products', 'last_researched_at', 'TEXT');
   // Track when each knowledge_item finished being chunked + embedded.
   addColumnIfMissing(db, 'knowledge_items', 'indexed_at', 'TEXT');

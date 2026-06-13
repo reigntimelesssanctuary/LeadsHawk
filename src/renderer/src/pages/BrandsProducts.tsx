@@ -1201,6 +1201,7 @@ function ReResearchBadge({
 function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) {
   const [name, setName] = useState(brand.name);
   const [description, setDescription] = useState(brand.description || '');
+  const [domain, setDomain] = useState(brand.domain || '');
   const [positioning, setPositioning] = useState(brand.positioning || '');
   const [competitive, setCompetitive] = useState(brand.competitive_summary || '');
   const [recencyOverride, setRecencyOverride] = useState<string>(brand.scan_recency_override || '');
@@ -1212,6 +1213,14 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
       <div style={{ height: 12 }} />
       <label className="label">Short description</label>
       <textarea className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <div style={{ height: 12 }} />
+      <label className="label">Website / domain (optional)</label>
+      <input
+        className="input"
+        value={domain}
+        onChange={(e) => setDomain(e.target.value)}
+        placeholder="e.g. nvidia.com — protocol, www, and path are stripped on save"
+      />
       <div style={{ height: 12 }} />
       <label className="label">Positioning (optional)</label>
       <textarea className="textarea" value={positioning} onChange={(e) => setPositioning(e.target.value)} placeholder="How this brand positions itself in the market" />
@@ -1249,6 +1258,7 @@ function EditBrandForm({ brand, onDone }: { brand: Brand; onDone: () => void }) 
             await window.lh.brands.update(brand.id, {
               name: name.trim(),
               description: description.trim() || null as any,
+              domain: (domain.trim() || null) as any,
               positioning: positioning.trim() || null as any,
               competitive_summary: competitive.trim() || null as any,
               scan_recency_override: (recencyOverride || null) as any

@@ -5,6 +5,7 @@ import { dirname } from 'path';
 import { registerIpc, seedDefaults } from './ipc.js';
 import { startScheduler } from './scheduler.js';
 import { startMonitor, stopMonitor } from './monitor/index.js';
+import { startBridge, stopBridge } from './bridge.js';
 import { getSettings } from './settings.js';
 import { getDb } from './db.js';
 import { backfillKnowledgeIndex } from './knowledge-index.js';
@@ -176,6 +177,13 @@ app.whenReady().then(() => {
     console.warn('[v1.17] learning rebuild failed:', e?.message || e);
   }
   startScheduler();
+  // Read-only HTTP bridge for external agents (Hermes BDM Step 0). Bound to
+  // 127.0.0.1:8772 — see src/main/bridge.ts for the endpoint contract.
+  try {
+    startBridge();
+  } catch (e: any) {
+    console.warn('bridge start failed:', e?.message || e);
+  }
   // Resume live monitor if the user had it on
   if (getSettings().liveMonitoringEnabled) {
     startMonitor().catch((e) => console.warn('monitor autostart failed:', e?.message || e));
@@ -204,4 +212,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopMonitor();
+  stopBridge();
 });
